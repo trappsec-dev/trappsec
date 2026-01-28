@@ -3,6 +3,8 @@
 #   "flask",
 #   "requests",
 #   "opentelemetry-api",
+#   "opentelemetry-sdk",
+#   "opentelemetry-instrumentation-flask",
 # ]
 # ///
 
@@ -18,7 +20,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../.
 
 import trappsec
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
+logging.basicConfig(level=logging.INFO)
 
 app = Flask(__name__)
 app.secret_key = "super-secret-key"
@@ -118,6 +120,19 @@ ts.watch("/auth/register") \
 ts.watch("/api/v2/profile") \
     .body("is_admin", intent="Privilege Escalation") \
 
+def setup_opentelemetry(app):
+    from opentelemetry import trace
+    from opentelemetry.sdk.trace import TracerProvider
+    from opentelemetry.sdk.trace.export import BatchSpanProcessor, ConsoleSpanExporter
+    from opentelemetry.instrumentation.flask import FlaskInstrumentor
+
+    provider = TracerProvider()
+    processor = BatchSpanProcessor(ConsoleSpanExporter())
+    provider.add_span_processor(processor)
+    trace.set_tracer_provider(provider)
+
+    FlaskInstrumentor().instrument_app(app)
+
 if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser()
@@ -131,7 +146,8 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     if args.otel:
-        ts.add_otel(tracer_name="trappsec")
+        setup_opentelemetry(app)
+        ts.add_otel()
     
     if args.webhook:
         ts.add_webhook(url=args.webhook)

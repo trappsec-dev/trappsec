@@ -23,7 +23,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../.
 
 import trappsec
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
+logging.basicConfig(level=logging.INFO)
 
 app = FastAPI()
 
@@ -132,7 +132,7 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     if args.otel:
-        ts.add_otel(tracer_name="trappsec")
+        ts.add_otel()
     
     if args.webhook:
         ts.add_webhook(url=args.webhook)
