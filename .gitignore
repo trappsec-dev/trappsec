@@ -206,30 +206,10 @@ marimo/_static/
 marimo/_lsp/
 __marimo__/
 
-
-# Node.js
 node_modules/
 
-# Python
-.venv/
-venv/
+artifacts/
 
-# Logs
-logs/
-*.log
-
-# Environment variables
-.env
-.env.local
-
-# Build outputs
-dist/
-build/
-
-# IDE
-.vscode/
-.idea/
-
-# OS
-.DS_Store
-Thumbs.db
+# temporary
+uv.lock
+package-lock.json
