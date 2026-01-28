@@ -48,7 +48,6 @@ class FlaskIntegration:
             if matched_rule not in watch_map:
                 return
 
-            self.ts.logger.info(f"matched rule: {watch_map[matched_rule]}")
             query_fields = watch_map[matched_rule]["query_fields"]
             body_fields = watch_map[matched_rule]["body_fields"]
                 

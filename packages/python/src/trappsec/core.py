@@ -102,9 +102,9 @@ class Sentry:
         self._handlers.append(handler)
         return self
 
-    def add_otel(self, tracer_name: str = "trappsec"):
+    def add_otel(self):
         from .handlers import OTELHandler
-        self._handlers.append(OTELHandler(tracer_name))
+        self._handlers.append(OTELHandler())
         return self
 
     def identify_user(self, callback: typing.Callable):

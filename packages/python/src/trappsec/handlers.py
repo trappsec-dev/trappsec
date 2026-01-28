@@ -81,11 +81,41 @@ except ImportError:
     trace = None
 
 class OTELHandler(BaseHandler):
-    def __init__(self, tracer_name="trappsec"):
+    def __init__(self):
         if trace is None: 
             raise ImportError("opentelemetry-api library required for OTELHandler")
-        self.tracer = trace.get_tracer(tracer_name)
 
     def emit(self, event: dict):
-        with self.tracer.start_as_current_span(event["event"]) as span:
-            span.set_attributes(event)
+        current_span = trace.get_current_span()
+        if current_span.is_recording():
+            current_span.set_attribute("trappsec.threat_detected", True)
+            current_span.set_attribute("trappsec.event", event["event"])
+            current_span.set_attribute("trappsec.type", event["type"])
+            
+            if event.get("user"):
+                current_span.set_attribute("trappsec.user", event["user"])
+            if event.get("role"):
+                current_span.set_attribute("trappsec.role", event["role"])
+            
+            if event.get("ip"):
+                current_span.set_attribute("trappsec.ip", event["ip"])
+            
+            if event["event"] == "trappsec.watch_hit":
+                for field_info in event["found_fields"]:
+                    current_span.add_event("watch_hit", field_info)
+            
+            if event["event"] == "trappsec.trap_hit":
+                if event.get("intent"):
+                    current_span.set_attribute("trappsec.intent", event["intent"])
+            
+            if event["event"] == "trappsec.rule_hit":
+                if event.get("intent"):
+                    current_span.set_attribute("trappsec.intent", event["intent"])
+                if event.get("reason"):
+                    current_span.set_attribute("trappsec.reason", event["reason"])
+            
+            if event.get("metadata"):
+                metadata = event["metadata"]
+                if isinstance(metadata, dict):
+                    attrs = {f"metadata.{k}": v for k, v in metadata.items()}
+                    current_span.set_attributes(attrs)
