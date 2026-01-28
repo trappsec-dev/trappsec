@@ -88,7 +88,7 @@ class OTELHandler(BaseHandler):
     def emit(self, event: dict):
         current_span = trace.get_current_span()
         if current_span.is_recording():
-            current_span.set_attribute("trappsec.threat_detected", True)
+            current_span.set_attribute("trappsec.detected", True)
             current_span.set_attribute("trappsec.event", event["event"])
             current_span.set_attribute("trappsec.type", event["type"])
             
