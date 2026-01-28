@@ -209,3 +209,7 @@ __marimo__/
 node_modules/
 
 artifacts/
+
+# temporary
+uv.lock
+package-lock.json
