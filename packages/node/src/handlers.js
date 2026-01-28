@@ -71,41 +71,42 @@ class WebhookHandler {
 class OTELHandler {
     constructor() {
         try {
-            this.trace = require('@opentelemetry/api').trace;
+            this.otel = require('@opentelemetry/api');
         } catch (e) {
             throw new Error("opentelemetry-api library required for OTELHandler");
         }
     }
 
     emit(event) {
-        const current_span = this.trace.getSpan(require('@opentelemetry/api').context.active());
-        if (current_span && current_span.isRecording()) {
-            current_span.setAttribute("trappsec.detected", true);
-            current_span.setAttribute("trappsec.event", event.event);
-            current_span.setAttribute("trappsec.type", event.type);
+        const currentSpan = this.otel.trace.getSpan(this.otel.context.active());
 
-            if (event.user) current_span.setAttribute("trappsec.user", event.user);
-            if (event.role) current_span.setAttribute("trappsec.role", event.role);
-            if (event.ip) current_span.setAttribute("trappsec.ip", event.ip);
+        if (currentSpan && currentSpan.isRecording()) {
+            currentSpan.setAttribute("trappsec.detected", true);
+            currentSpan.setAttribute("trappsec.event", event.event);
+            currentSpan.setAttribute("trappsec.type", event.type);
+
+            if (event.user) currentSpan.setAttribute("trappsec.user", event.user);
+            if (event.role) currentSpan.setAttribute("trappsec.role", event.role);
+            if (event.ip) currentSpan.setAttribute("trappsec.ip", event.ip);
 
             if (event.event === "trappsec.watch_hit") {
                 for (const field_info of event.found_fields) {
-                    current_span.addEvent("watch_hit", field_info);
+                    currentSpan.addEvent("watch_hit", field_info);
                 }
             }
 
             if (event.event === "trappsec.trap_hit") {
-                if (event.intent) current_span.setAttribute("trappsec.intent", event.intent);
+                if (event.intent) currentSpan.setAttribute("trappsec.intent", event.intent);
             }
 
             if (event.event === "trappsec.rule_hit") {
-                if (event.intent) current_span.setAttribute("trappsec.intent", event.intent);
-                if (event.reason) current_span.setAttribute("trappsec.reason", event.reason);
+                if (event.intent) currentSpan.setAttribute("trappsec.intent", event.intent);
+                if (event.reason) currentSpan.setAttribute("trappsec.reason", event.reason);
             }
 
             if (event.metadata && typeof event.metadata === 'object' && !Array.isArray(event.metadata)) {
                 for (const [k, v] of Object.entries(event.metadata)) {
-                    current_span.setAttribute(`metadata.${k}`, v);
+                    currentSpan.setAttribute(`metadata.${k}`, v);
                 }
             }
         }

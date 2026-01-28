@@ -1,3 +1,9 @@
+const otelEnabled = process.argv.includes('--otel');
+
+if (otelEnabled) {
+    require('./otel').setupOpentelemetry();
+}
+
 const express = require('express');
 const trappsec = require('../../packages/node/src/index'); // Importing local package
 
@@ -84,22 +90,7 @@ ts.watch("/auth/register")
 ts.watch("/api/v2/profile")
     .body("is_admin", { intent: "Privilege Escalation" });
 
-function setupOpentelemetry() {
-    const { NodeSDK } = require('@opentelemetry/sdk-node');
-    const { ConsoleSpanExporter } = require('@opentelemetry/sdk-node');
-    const { ExpressInstrumentation } = require('@opentelemetry/instrumentation-express');
-    const { HttpInstrumentation } = require('@opentelemetry/instrumentation-http');
 
-    const sdk = new NodeSDK({
-        traceExporter: new ConsoleSpanExporter(),
-        instrumentations: [
-            new HttpInstrumentation(),
-            new ExpressInstrumentation(),
-        ],
-    });
-
-    sdk.start();
-}
 
 const { parseArgs } = require('node:util');
 
@@ -111,7 +102,6 @@ const options = {
 const { values } = parseArgs({ options, tokens: false, strict: false });
 
 if (values.otel) {
-    setupOpentelemetry();
     ts.add_otel();
 }
 
