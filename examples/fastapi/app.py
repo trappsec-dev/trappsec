@@ -5,6 +5,8 @@
 #   "requests",
 #   "python-multipart",
 #   "opentelemetry-api",
+#   "opentelemetry-sdk",
+#   "opentelemetry-instrumentation-fastapi",
 # ]
 # ///
 
@@ -119,6 +121,20 @@ ts.watch("/api/v2/profile") \
     .body("is_admin", intent="Privilege Escalation")
 
 
+def setup_opentelemetry(app):
+    from opentelemetry import trace
+    from opentelemetry.sdk.trace import TracerProvider
+    from opentelemetry.sdk.trace.export import BatchSpanProcessor, ConsoleSpanExporter
+    from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
+
+    provider = TracerProvider()
+    processor = BatchSpanProcessor(ConsoleSpanExporter())
+    provider.add_span_processor(processor)
+    trace.set_tracer_provider(provider)
+
+    FastAPIInstrumentor.instrument_app(app)
+
+
 if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser()
@@ -132,6 +148,7 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     if args.otel:
+        setup_opentelemetry(app)
         ts.add_otel()
     
     if args.webhook:
