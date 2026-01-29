@@ -18,6 +18,7 @@ import uvicorn
 
 from fastapi import FastAPI, Request, Header, Body, Form
 from fastapi.responses import JSONResponse
+from fastapi.staticfiles import StaticFiles
 from typing import Optional
 
 # Ensure we can import trappsec from git repository
@@ -28,6 +29,8 @@ import trappsec
 logging.basicConfig(level=logging.INFO)
 
 app = FastAPI()
+
+
 
 ts = trappsec.Sentry(app, service="FastAPIApp", environment="Development")
 
@@ -71,12 +74,12 @@ async def get_profile(x_user_id: Optional[str] = Header(None)):
 async def update_profile(x_user_id: Optional[str] = Header(None)):
     return JSONResponse(content={"name": x_user_id, "status": "updated"})
 
-@app.get("/api/v2/users")
-async def get_users():
+@app.get("/api/v2/orders")
+async def get_orders():
     return JSONResponse(content={
-        "users": [
-            {"id": 1, "username": "alice", "role": "admin"},
-            {"id": 2, "username": "bob", "role": "user"}
+        "orders": [
+            {"id": "ord-123", "item": "Laptop", "amount": 1200},
+            {"id": "ord-124", "item": "Mouse", "amount": 45}
         ]
     })
 
@@ -98,7 +101,7 @@ ts.template(name="fake_deprecated_api_response", status_code=410,
     response_body={"error": "Gone", "message": "API v1 has been deprecated"},
     mime_type="application/json")
 
-ts.trap("/api/v1/users") \
+ts.trap("/api/v1/orders") \
     .methods("GET", "POST") \
     .intent("Legacy API Probing") \
     .respond(template="fake_deprecated_api_response")
@@ -119,6 +122,11 @@ ts.watch("/auth/register") \
 
 ts.watch("/api/v2/profile") \
     .body("is_admin", intent="Privilege Escalation")
+
+
+# Mount the frontend static files (placed last to avoid shadowing API routes)
+FRONTEND_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'lure-frontend')
+app.mount("/", StaticFiles(directory=FRONTEND_DIR, html=True), name="frontend")
 
 
 def setup_opentelemetry(app):

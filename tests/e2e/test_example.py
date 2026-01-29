@@ -24,14 +24,14 @@ def test_trap_deployment_config(api, base_url):
     assert r.status_code == 401
     assert r.json().get("error") == "authentication required"
 
-def test_trap_legacy_users(api, base_url):
-    """Verify Trap: /api/v1/users (Template)"""
-    r = api.get(f"{base_url}/api/v1/users", headers={"x-user-id": "alice"})
+def test_trap_legacy_orders(api, base_url):
+    """Verify Trap: /api/v1/orders (Template)"""
+    r = api.get(f"{base_url}/api/v1/orders", headers={"x-user-id": "alice"})
     assert r.status_code == 410
     assert r.json().get("error") == "Gone"
 
     # verify unauthenticated response
-    r = api.get(f"{base_url}/api/v1/users")
+    r = api.get(f"{base_url}/api/v1/orders")
     assert r.status_code == 401
     assert r.json().get("error") == "authentication required"
 
@@ -65,9 +65,10 @@ def test_app_routes_happy_path(api, base_url):
     assert r.json().get("status") == "updated"
 
     # 4. List Users
-    r = api.get(f"{base_url}/api/v2/users")
+    r = api.get(f"{base_url}/api/v2/orders")
     assert r.status_code == 200
-    assert "users" in r.json()
+    assert "orders" in r.json()
+    assert len(r.json()["orders"]) > 0
 
 def test_watch_registration(api, base_url):
     """Verify Watch: /auth/register"""
