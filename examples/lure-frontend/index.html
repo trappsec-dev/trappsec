@@ -1,0 +1,143 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Sample App</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="css/style.css">
+</head>
+
+<body>
+    <div id="app">
+        <!-- Auth Container -->
+        <div id="auth-container" class="container active">
+            <div class="card auth-card">
+                <div class="logo">
+                    <svg width="40" height="40" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                        <path d="M12 2L2 7L12 12L22 7L12 2Z" stroke="currentColor" stroke-width="2"
+                            stroke-linecap="round" stroke-linejoin="round" />
+                        <path d="M2 17L12 22L22 17" stroke="currentColor" stroke-width="2" stroke-linecap="round"
+                            stroke-linejoin="round" />
+                        <path d="M2 12L12 17L22 12" stroke="currentColor" stroke-width="2" stroke-linecap="round"
+                            stroke-linejoin="round" />
+                    </svg>
+                    <h1>Sample App</h1>
+                </div>
+
+                <!-- Login Form -->
+                <form id="login-form" class="auth-form active">
+                    <div class="form-group">
+                        <label for="login-username">Username</label>
+                        <input type="text" id="login-username" placeholder="Enter your username" required>
+                    </div>
+                    <div class="form-group">
+                        <label for="login-password">Password</label>
+                        <input type="password" id="login-password" placeholder="••••••••" required>
+                    </div>
+                    <button type="submit" class="btn btn-primary">Sign In</button>
+                    <p class="auth-switch">Don't have an account? <a href="#" id="switch-to-register">Register</a></p>
+                </form>
+
+                <!-- Register Form -->
+                <form id="register-form" class="auth-form">
+                    <div class="form-group">
+                        <label for="register-email">Email Address</label>
+                        <input type="email" id="register-email" placeholder="name@example.com" required>
+                    </div>
+                    <button type="submit" class="btn btn-primary">Create Account</button>
+                    <p class="auth-switch">Already have an account? <a href="#" id="switch-to-login">Sign In</a></p>
+                </form>
+            </div>
+        </div>
+
+        <!-- Dashboard Container -->
+        <div id="dashboard-container" class="container">
+            <header class="app-header">
+                <div class="logo-small">
+                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                        <path d="M12 2L2 7L12 12L22 7L12 2Z" stroke="currentColor" stroke-width="2"
+                            stroke-linecap="round" stroke-linejoin="round" />
+                        <path d="M2 17L12 22L22 17" stroke="currentColor" stroke-width="2" stroke-linecap="round"
+                            stroke-linejoin="round" />
+                        <path d="M2 12L12 17L22 12" stroke="currentColor" stroke-width="2" stroke-linecap="round"
+                            stroke-linejoin="round" />
+                    </svg>
+                    <span>Sample App</span>
+                </div>
+                <div class="user-menu">
+                    <span id="header-username">User</span>
+                    <button id="logout-btn" class="btn btn-sm btn-outline">Logout</button>
+                </div>
+            </header>
+
+            <main class="dashboard-content">
+                <section class="profile-section">
+                    <div class="card">
+                        <div class="card-header">
+                            <h2>Profile</h2>
+                        </div>
+                        <div class="profile-details">
+                            <div class="detail-row">
+                                <span class="label">Username</span>
+                                <input type="text" id="profile-name" class="form-input-minimal" value="...">
+                            </div>
+                            <div class="detail-row">
+                                <span class="label">Role</span>
+                                <span class="value" id="profile-admin">...</span>
+                            </div>
+                        </div>
+                        <div class="card-actions">
+                            <button id="update-profile-btn" class="btn btn-secondary">Update Profile</button>
+                        </div>
+                    </div>
+                </section>
+
+                <section class="orders-section">
+                    <div class="card">
+                        <div class="card-header">
+                            <h2>Recent Orders</h2>
+                            <button id="refresh-orders-btn" class="btn btn-icon" aria-label="Refresh"
+                                style="width: 50px;">
+                                <svg width="18" height="18" viewBox="0 0 24 24" fill="none"
+                                    xmlns="http://www.w3.org/2000/svg">
+                                    <path d="M23 4V10H17" stroke="currentColor" stroke-width="2" stroke-linecap="round"
+                                        stroke-linejoin="round" />
+                                    <path d="M1 20V14H7" stroke="currentColor" stroke-width="2" stroke-linecap="round"
+                                        stroke-linejoin="round" />
+                                    <path
+                                        d="M3.51 9.00001C4.01717 7.56678 4.87913 6.2854 6.01547 5.27542C7.1518 4.26544 8.52547 3.55977 10.0083 3.22486C11.4911 2.88996 13.0337 2.93678 14.4939 3.36073C15.954 3.78468 17.2839 4.57233 18.36 5.64001L23 10M1 14L5.64 18.36C6.71609 19.4277 8.046 20.2153 9.50614 20.6393C10.9663 21.0632 12.5089 21.1101 13.9917 20.7752C15.4745 20.4402 16.8482 19.7346 17.9845 18.7246C19.1209 17.7146 19.9828 16.4332 20.49 15"
+                                        stroke="currentColor" stroke-width="2" stroke-linecap="round"
+                                        stroke-linejoin="round" />
+                                </svg>
+                            </button>
+                        </div>
+                        <div class="table-container">
+                            <table id="orders-table">
+                                <thead>
+                                    <tr>
+                                        <th>Order ID</th>
+                                        <th>Item</th>
+                                        <th>Amount</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    <!-- Populated by JS -->
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </section>
+            </main>
+        </div>
+
+        <div id="toast-container"></div>
+    </div>
+
+    <script type="module" src="js/app.js"></script>
+</body>
+
+</html>
