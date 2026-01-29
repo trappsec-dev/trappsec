@@ -5,11 +5,13 @@ if (otelEnabled) {
 }
 
 const express = require('express');
+const path = require('path');
 const trappsec = require('../../packages/node/src/index'); // Importing local package
 
 const app = express();
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
+app.use(express.static(path.join(__dirname, '../lure-frontend')));
 
 const ts = new trappsec.Sentry(app, "ExpressApp", "Development");
 
@@ -43,11 +45,11 @@ app.post("/api/v2/profile", (req, res) => {
     res.json({ "name": name, "status": "updated" });
 });
 
-app.get("/api/v2/users", (req, res) => {
+app.get("/api/v2/orders", (req, res) => {
     res.json({
-        "users": [
-            { "id": 1, "username": "alice", "role": "admin" },
-            { "id": 2, "username": "bob", "role": "user" }
+        "orders": [
+            { "id": "ord-123", "item": "Laptop", "amount": 1200 },
+            { "id": "ord-124", "item": "Mouse", "amount": 45 }
         ]
     });
 });
@@ -71,7 +73,7 @@ ts.trap("/deployment/metrics")
 
 ts.template("fake_deprecated_api_response", 410, { "error": "Gone", "message": "API v1 has been deprecated" });
 
-ts.trap("/api/v1/users")
+ts.trap("/api/v1/orders")
     .methods("GET", "POST")
     .intent("Legacy API Probing")
     .respond({ template: "fake_deprecated_api_response" });

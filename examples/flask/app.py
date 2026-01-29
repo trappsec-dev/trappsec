@@ -13,7 +13,7 @@ import os
 import logging
 import random
 
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, send_from_directory
 
 # Ensure we can import trappsec from git repository
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../packages/python/src")))
@@ -21,6 +21,9 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../.
 import trappsec
 
 logging.basicConfig(level=logging.INFO)
+
+# Define static folder path (lure-frontend is parallel to flask folder)
+FRONTEND_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'lure-frontend')
 
 app = Flask(__name__)
 app.secret_key = "super-secret-key"
@@ -47,6 +50,14 @@ ts.override_source_ip(lambda r: r.headers.get("x-real-ip", r.remote_addr))
 ##  APPLICATION ROUTES 
 #############################
 
+@app.route("/")
+def serve_index():
+    return send_from_directory(FRONTEND_DIR, 'index.html')
+
+@app.route("/<path:path>")
+def serve_static(path):
+    return send_from_directory(FRONTEND_DIR, path)
+
 @app.route("/auth/register", methods=["POST"])
 def register():
     email = request.form.get("email") or (request.json and request.json.get("email"))
@@ -62,12 +73,12 @@ def update_profile():
     name = request.headers.get("x-user-id")
     return jsonify({"name": name, "status": "updated"})
 
-@app.route("/api/v2/users", methods=["GET"])
-def get_users():
+@app.route("/api/v2/orders", methods=["GET"])
+def get_orders():
     return jsonify({
-        "users": [
-            {"id": 1, "username": "alice", "role": "admin"},
-            {"id": 2, "username": "bob", "role": "user"}
+        "orders": [
+            {"id": "ord-123", "item": "Laptop", "amount": 1200},
+            {"id": "ord-124", "item": "Mouse", "amount": 45}
         ]
     })
 
@@ -93,7 +104,7 @@ ts.template(name="fake_deprecated_api_response", status_code=410,
     mime_type="application/json")
 
 # a decoy route using above defined template 
-ts.trap("/api/v1/users") \
+ts.trap("/api/v1/orders") \
     .methods("GET", "POST") \
     .intent("Legacy API Probing") \
     .respond(template="fake_deprecated_api_response")
