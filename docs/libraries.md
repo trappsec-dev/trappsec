@@ -10,5 +10,3 @@ permalink: /libraries/
 
 Trappsec supports multiple languages and frameworks. 
 
-*   [Python (Flask / FastAPI)](./python.md)
-*   [Node.js (Express)](./node.md)

@@ -10,5 +10,3 @@ permalink: /api/
 
 Complete reference for the Trappsec SDK.
 
-*   [Python Reference](./ref-python.md)
-*   [Node.js Reference](./ref-node.md)

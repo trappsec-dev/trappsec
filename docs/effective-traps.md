@@ -24,17 +24,7 @@ Don't try to be clever with responses.
 ## 2. Strategic Placement
 Where you place your traps determines who you catch.
 
-### The "Obvious" Targets (Low Hanging Fruit)
-Place traps in locations that automated scanners and script kiddies always check. This helps identify broad scanning campaigns.
-*   `/admin`
-*   `/config`
-*   `/metrics`
-*   `/health`
-*   `/.git`
-*   `/.env`
-
-### The "Shadow" Targets (Sophisticated)
-Shadowing involves placing traps near or "under" real resources to catch privilege escalation or lateral movement attempts.
+Place traps near or "under" real resources to catch privilege escalation or lateral movement attempts.
 *   **Shadow Decoys**: If you have `/api/v1/users`, create `/api/v1/users/admin` or `/api/v1/users/export`.
 *   **Legacy Shadows**: Revive old endpoints that have been deprecated. If you moved from `/v1/` to `/v2/`, trap the old `/v1/` routes. Legitimate clients should have migrated; attackers often rely on outdated docs or old exploits.
 
@@ -42,15 +32,7 @@ Shadowing involves placing traps near or "under" real resources to catch privile
 A trap is useless if no one finds it. You need lures—breadcrumbs that lead attackers to your traps.
 
 ### Passive Lures
-*   **robots.txt**: explicitely "disallow" a decoy path. Attackers treat `robots.txt` as a target list.
-    ```text
-    User-agent: *
-    Disallow: /api/internal/config  # <--- Decoy Route
-    ```
-*   **HTML Comments**: Leave comments in your frontend code hinting at admin endpoints or debug modes.
-    ```html
-    <!-- TODO: Remove debug endpoint /api/debug/users before prod -->
-    ```
+
 
 ### Active Lures (Honey Fields)
 Embed honey fields (fake parameters) in the responses of legitimate API calls.
