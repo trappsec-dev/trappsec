@@ -1,8 +1,8 @@
 ---
 layout: default
-title: Python Guide
+title: Python
 nav_order: 1
-parent: Integrations
+parent: Libraries
 language: python
 permalink: /python/
 ---

@@ -1,8 +1,8 @@
 ---
 layout: default
-title: Node.js Guide
+title: Node.js
 nav_order: 2
-parent: Integrations
+parent: Libraries
 language: node
 permalink: /node/
 ---
