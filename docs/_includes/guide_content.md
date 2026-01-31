@@ -29,6 +29,34 @@ const ts = new Sentry(app, "PaymentService", "Production");
 ```
 {% endif %}
 
+
+## configuration
+
+You can globally configure how Trappsec responds to events.
+
+### Default Responses
+Trappsec uses default responses when you don't explicitly define one for a trap. You can override these to match your application's error schema.
+
+{% if page.language == 'python' %}
+```python
+# Override default unauthenticated response (default is 401)
+ts.default_responses["unauthenticated"] = {
+    "status_code": 403,
+    "response_body": {"error": "Access Denied", "code": 1001},
+    "mime_type": "application/json"
+}
+```
+{% elsif page.language == 'node' %}
+```javascript
+// Override default unauthenticated response (default is 401)
+ts.default_responses["unauthenticated"] = {
+    "status_code": 403,
+    "response_body": { "error": "Access Denied", "code": 1001 },
+    "mime_type": "application/json"
+};
+```
+{% endif %}
+
 ## deception primitives
 
 We currently support two core primitives: **Decoy Routes** and **Honey Fields**. Each primitive should be paired with a lure strategy (bait, breadcrumbs, etc.) to effectively attract attackers.
@@ -162,11 +190,7 @@ ts.add_otel();
 ```
 {% endif %}
 
-## wiring effective traps
 
-*   **Don't Overplay**: Deception is most effective when it is boring. A generic `401 Unauthorized` is often more convincing than a flashy "Access Denied" page.
-*   **Be Consistent**: Ensure response headers, error formats, and schema conventions match your real API.
-*   **Silent Interception**: When using Honey Fields, let the request succeed (200 OK) after silently stripping the malicious field. This keeps the attacker unaware they've been caught.
 
 ## support
 

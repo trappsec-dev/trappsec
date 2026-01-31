@@ -1,8 +1,9 @@
 ---
 layout: default
 title: Node.js Guide
-nav_order: 3
+nav_order: 2
+parent: Integrations
 language: node
 permalink: /node/
 ---
-{% include home_content.md %}
+{% include guide_content.md %}
