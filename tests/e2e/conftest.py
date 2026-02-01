@@ -1,5 +1,6 @@
 import pytest
 import requests
+import threading
 
 def pytest_addoption(parser):
     parser.addoption(
@@ -15,4 +16,19 @@ def base_url(request):
 
 @pytest.fixture(scope="session")
 def api(base_url):
-    return requests.Session()
+    import requests
+    with requests.Session() as session:
+        yield session
+
+from utils import AlertServer, AlertHandler
+
+@pytest.fixture(scope="session")
+def alert_server():
+    server = AlertServer(('localhost', 5050), AlertHandler)
+    thread = threading.Thread(target=server.serve_forever)
+    thread.daemon = True
+    thread.start()
+    
+    yield server
+    
+    server.shutdown()
