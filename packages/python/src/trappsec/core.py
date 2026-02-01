@@ -194,6 +194,7 @@ class Sentry:
             "method": request_ctx["method"],
             "user_agent": request_ctx["user_agent"],
             "ip": identity_ctx["ip"],
+            "intent": trap.get("intent"),
         }
 
         response_key = "response.unauthenticated"

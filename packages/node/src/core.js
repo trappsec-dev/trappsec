@@ -139,6 +139,7 @@ class Sentry {
             method: request_ctx.method,
             user_agent: request_ctx.userAgent,
             ip: identity_ctx.ip,
+            intent: trap.intent
         };
 
         let response_key = "response.unauthenticated";
