@@ -154,6 +154,10 @@ code {
   .mobile-only {
     display: inline-block !important;
   }
+
+  footer {
+    display: none !important;
+  }
 }
 
 .site-footer {
