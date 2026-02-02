@@ -1,51 +1,14 @@
---- ---
-/* Trappsec Modern Theme Overrides - Light Mode */
-
-:root {
-  /* Color Palette - Modern Light (Clean & Crisp) */
-  --ts-bg-main: #ffffff;
-  /* Pure White */
-  --ts-bg-panel: #f8fafc;
-  /* Slate 50 */
-  --ts-bg-hover: #f1f5f9;
-  /* Slate 100 */
-  --ts-border: #e2e8f0;
-  /* Slate 200 */
-
-  --ts-text-primary: #0f172a;
-  /* Slate 900 */
-  --ts-text-secondary: #475569;
-  /* Slate 600 */
-  --ts-text-muted: #94a3b8;
-  /* Slate 400 */
-
-  --ts-accent: #2563eb;
-  /* Blue 600 */
-  --ts-accent-hover: #1d4ed8;
-  /* Blue 700 */
-  --ts-accent-light: #eff6ff;
-  /* Blue 50 */
-
-  --ts-code-bg: #f8fafc;
-  /* Slate 50 */
-  --ts-code-text: #334155;
-  /* Slate 700 */
-
-  /* Typography */
+--- ---:root {
   --ts-font-sans: 'Inter', system-ui, -apple-system, sans-serif;
   --ts-font-mono: 'JetBrains Mono', monospace;
 }
 
-/* Base Appearance */
 body {
-  background-color: var(--ts-bg-main) !important;
-  color: var(--ts-text-primary) !important;
   font-family: var(--ts-font-sans) !important;
   font-feature-settings: "cv11", "ss01";
   -webkit-font-smoothing: antialiased;
 }
 
-/* Typography Overrides */
 h1,
 h2,
 h3,
@@ -53,7 +16,6 @@ h4,
 h5,
 h6 {
   font-family: var(--ts-font-sans);
-  color: var(--ts-text-primary) !important;
   font-weight: 600;
   letter-spacing: -0.025em;
 }
@@ -68,117 +30,12 @@ h2 {
   padding-bottom: 0.5rem;
 }
 
-a {
-  color: var(--ts-accent) !important;
-  text-decoration: none;
-}
 
-a:hover {
-  color: var(--ts-accent-hover) !important;
-  text-decoration: underline;
-}
-
-/* Code Blocks */
 code {
   font-family: var(--ts-font-mono) !important;
-  background-color: var(--ts-code-bg);
-  color: #0f172a;
-  /* Darker for inline code readability */
-  border: 1px solid var(--ts-border);
-  border-radius: 4px;
-  padding: 0.2em 0.4em;
-  font-size: 0.85em;
-}
-
-pre {
-  background-color: #0f172a !important;
-  /* Keep code blocks dark for contrast */
-  color: #f8fafc !important;
-  border-radius: 8px !important;
-  border: 1px solid var(--ts-border);
-}
-
-pre code {
-  color: inherit;
-  background-color: transparent;
-  border: none;
-}
-
-/* Sidebar Styling */
-.site-nav,
-.site-header {
-  background-color: var(--ts-bg-panel) !important;
-  border-right: 1px solid var(--ts-border);
 }
 
 .site-title {
-  color: var(--ts-text-primary) !important;
   font-weight: 700;
   letter-spacing: -0.05em;
-}
-
-.nav-list .nav-list-item .nav-list-link {
-  color: var(--ts-text-secondary);
-}
-
-.nav-list .nav-list-item .nav-list-link:hover,
-.nav-list .nav-list-item .nav-list-link.active {
-  color: var(--ts-accent);
-  background-color: var(--ts-accent-light);
-}
-
-/* Buttons and UI Elements */
-.btn {
-  background-color: var(--ts-accent) !important;
-  color: white !important;
-  border-radius: 6px;
-  font-weight: 500;
-  transition: background-color 0.2s;
-}
-
-.btn:hover {
-  background-color: var(--ts-accent-hover) !important;
-}
-
-/* Search Box */
-.search-input {
-  background-color: white !important;
-  border: 1px solid var(--ts-border) !important;
-  color: var(--ts-text-primary) !important;
-  border-radius: 6px;
-  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
-}
-
-.search-input:focus {
-  border-color: var(--ts-accent) !important;
-  box-shadow: 0 0 0 2px var(--ts-accent-light);
-}
-
-/* Table styling */
-table {
-  border-collapse: separate;
-  border-spacing: 0;
-  border: 1px solid var(--ts-border);
-  border-radius: 8px;
-  overflow: hidden;
-}
-
-th,
-td {
-  border-color: var(--ts-border) !important;
-}
-
-th {
-  background-color: var(--ts-bg-panel) !important;
-  color: var(--ts-text-primary);
-  font-weight: 600;
-}
-
-/* Callouts / Blockquotes */
-blockquote {
-  border-left: 4px solid var(--ts-accent);
-  background-color: var(--ts-accent-light);
-  color: var(--ts-text-secondary);
-  padding: 1rem;
-  border-radius: 0 4px 4px 0;
 }
