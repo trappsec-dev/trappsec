@@ -1,7 +1,7 @@
 remote_theme: just-the-docs/just-the-docs
 
 title: trappsec
-description: application-layer deception framework
+description: deception as a developer tool
 url: "https://trappsec.dev"
 
 search_enabled: true
