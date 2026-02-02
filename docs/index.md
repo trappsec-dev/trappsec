@@ -4,7 +4,7 @@ title: Introduction
 nav_order: 1
 ---
 
-<img src="./assets/images/trappsec-flow.webp" width="70%" alt="trappsec flow">
+<img id="ts-flow-diagram" src="./assets/images/trappsec-flow.webp" width="70%" alt="trappsec flow">
 
 ![Version 0.1](https://img.shields.io/badge/version-0.1-blue)
 ## **Your code is now a security sensor** 
