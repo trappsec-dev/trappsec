@@ -1,7 +1,7 @@
 {
   "name": "trappsec",
   "version": "0.1.0",
-  "description": "trappsec for Node.js",
+  "description": "deception as a developer tool",
   "main": "src/index.js",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1"
@@ -12,6 +12,6 @@
   "peerDependencies": {
     "@opentelemetry/api": "^1.0.0"
   },
-  "author": "",
-  "license": "ISC"
+  "author": "Nikhil Salgaonkar <nikhil@ftfy.co>",
+  "license": "MIT"
 }

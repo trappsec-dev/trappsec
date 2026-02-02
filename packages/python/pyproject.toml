@@ -1,0 +1,23 @@
+[project]
+name = "trappsec"
+version = "0.1.0"
+authors = [
+  { name="Nikhil Salgaonkar", email="nikhil@ftfy.co" },
+]
+description = "deception as a developer tool"
+readme = "README.md"
+requires-python = ">=3.7"
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+]
+
+[project.urls]
+"Homepage" = "https://trappsec.dev"
+"Repository" = "https://github.com/trappsec-dev/trappsec"
+"Bug Tracker" = "https://github.com/trappsec-dev/trappsec/issues"
+
+[project.optional-dependencies]
+webhooks = ["requests"]
+otel = ["opentelemetry-api"]
