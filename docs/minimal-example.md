@@ -12,10 +12,10 @@ permalink: /minimal-example/
 
 # Minimal Example
 
-> [!WARNING]
+{: .warning }
 > This example is designed for **quick copy-paste local testing only**. 
 > It contains hardcoded configurations and does not represent a production-ready setup. 
-> For proper integration, please consult the [Getting Started](/guide/) guide.
+> For proper integration, please consult the [Getting Started](/getting-started/) guide.
 
 Copy-paste this into a file to see trappsec in action immediately.
 

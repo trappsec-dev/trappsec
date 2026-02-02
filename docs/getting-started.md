@@ -2,7 +2,7 @@
 layout: default
 title: Getting Started
 nav_order: 2
-permalink: /guide/
+permalink: /getting-started/
 ---
 
 <div class="lang-switcher">

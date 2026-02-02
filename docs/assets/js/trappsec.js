@@ -24,11 +24,13 @@ function switchLang(lang) {
     // Persist preference
     localStorage.setItem('trappsec_lang', lang);
 
-    // Update URL state (without reloading)
-    // This allows deep-linking to specific languages
-    const url = new URL(window.location);
-    url.searchParams.set('lang', lang);
-    window.history.replaceState({}, '', url);
+    // Update URL state (without reloading) if language content exists on page
+    // This allows deep-linking to specific languages where relevant
+    if (document.querySelector('.lang-switcher')) {
+        const url = new URL(window.location);
+        url.searchParams.set('lang', lang);
+        window.history.replaceState({}, '', url);
+    }
 }
 
 // Initialize

@@ -17,5 +17,8 @@ callouts:
   note:
     title: Note
     color: purple
+  warning:
+    title: Warning
+    color: red
 
 footer_content: "Copyright &copy; 2026 trappsec"
