@@ -9,6 +9,3 @@ heading_anchors: true
 
 aux_links:
   "GitHub": "https://github.com/trappsec-dev/trappsec"
-
-head_custom: |
-  {% include head_custom.html %}
