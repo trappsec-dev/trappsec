@@ -136,21 +136,18 @@ code {
   display: none !important;
 }
 
+#ts-flow-diagram {
+  width: 70%;
+}
+
 /* Force Aux Nav to be visible on mobile */
 @media (max-width: 50rem) {
   .aux-nav {
-    display: block !important;
-    position: absolute;
-    right: 1rem;
-    top: 0.75rem;
+    display: none !important;
   }
 
-  /* Adjust button size for mobile if needed */
-  .aux-nav .site-button {
-    padding: 6px 12px 6px 36px;
-    font-size: 0.9em;
-    background-position: 10px center;
-    background-size: 16px;
+  #ts-flow-diagram {
+    width: 90%;
   }
 
   /* Show mobile-only elements on small screens */
