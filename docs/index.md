@@ -18,19 +18,4 @@ nav_order: 1
   <a href="https://github.com/trappsec-dev/trappsec" class="btn btn-outline-primary fs-5 mb-2 mobile-only">View on GitHub</a>
 </div>
 
----
-
-### Framework Overview
-
-#### **Decoy Routes**:
-"Ghost" endpoints that look authentic but trigger high-fidelity alerts when accessed.
-
-#### **Honey Fields**:
-Hidden or "read-only" parameters in legitimate endpoints that trigger alerts when tampered with.
-
-#### **Identity Attribution**:
-Link attacks to user identities, not just IP addresses.
-
-#### **Alerting**
-Logs to console but can also integrate with OpenTelemetry and Webhooks.
 
