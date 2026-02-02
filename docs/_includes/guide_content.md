@@ -11,6 +11,87 @@ npm install trappsec
 ```
 {% endif %}
 
+## minimal example
+ 
+Copy-paste this into a file to see Trappsec in action immediately.
+
+{% if page.language == 'python' %}
+1. **Save as `app.py`**:
+```python
+from flask import Flask, request
+import trappsec
+
+app = Flask(__name__)
+ts = trappsec.Sentry(app, "DemoApp", "Dev")
+ts.identify_user(lambda r: {"user_id": "guest"})
+
+# 1. Decoy Route (Trap)
+ts.trap("/admin/config").methods("GET").respond(200, {"debug": True})
+
+# 2. Honey Field (Watch)
+ts.watch("/profile").body("is_admin", intent="PrivEsc")
+
+@app.route("/profile", methods=["POST"])
+def update_profile():
+    return {"status": "updated"}
+
+if __name__ == "__main__":
+    app.run(port=5000)
+```
+
+2. **Run**:
+```bash
+pip install flask trappsec
+python app.py
+```
+
+3. **Attack**:
+```bash
+# Trigger Trap
+curl http://localhost:5000/admin/config
+
+# Trigger Watch
+curl -X POST http://localhost:5000/profile -H "Content-Type: application/json" -d '{"is_admin": true}'
+```
+{% elsif page.language == 'node' %}
+1. **Save as `app.js`**:
+```javascript
+const express = require('express');
+const { Sentry } = require('trappsec');
+
+const app = express();
+app.use(express.json());
+
+const ts = new Sentry(app, "DemoApp", "Dev");
+ts.identify_user((req) => ({ user_id: "guest" }));
+
+// 1. Decoy Route (Trap)
+ts.trap("/admin/config").methods("GET").respond({ status: 200, body: { debug: true } });
+
+// 2. Honey Field (Watch)
+ts.watch("/profile").body("is_admin", { intent: "PrivEsc" });
+
+app.post("/profile", (req, res) => res.json({ status: "updated" }));
+
+app.listen(3000, () => console.log("Running on port 3000"));
+```
+
+2. **Run**:
+```bash
+npm install express trappsec
+node app.js
+```
+
+3. **Attack**:
+```bash
+# Trigger Trap
+curl http://localhost:3000/admin/config
+
+# Trigger Watch
+curl -X POST http://localhost:3000/profile -H "Content-Type: application/json" -d '{"is_admin": true}'
+```
+{% endif %}
+
 ## quick start
 
 Initialize the Sentry in your application. This is the main entry point for defining your traps.
