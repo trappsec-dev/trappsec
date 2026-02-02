@@ -220,14 +220,22 @@ Registers a callback to extract user identity from the request.
 <div class="lang-content" data-lang="python" markdown="1">
 
 ```python
-ts.identify_user(lambda r: {"id": r.headers.get("x-user-id")})
+# Extract user info from your authentication middleware (e.g. Flask-Login, JWT)
+ts.identify_user(lambda r: {
+    "id": getattr(r.user, "id", None), 
+    "role": getattr(r.user, "role", "guest")
+})
 ```
 
 </div>
 <div class="lang-content" data-lang="node" markdown="1">
 
 ```javascript
-ts.identify_user((req) => ({ "id": req.headers["x-user-id"] }));
+// Extract user info from your authentication middleware (e.g. Passport, Clerk)
+ts.identify_user((req) => ({ 
+    "id": req.user?.id,
+    "role": req.user?.role || "guest"
+}));
 ```
 
 </div>

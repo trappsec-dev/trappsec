@@ -171,10 +171,10 @@ To make alerts actionable, trappsec needs to know *who* is attacking.
 <div class="lang-content" data-lang="python" markdown="1">
 
 ```python
-# Extract user info from headers, session, etc.
+# Extract user info from your authentication middleware (e.g. Flask-Login, JWT)
 ts.identify_user(lambda r: {
-    "user_id": r.headers.get("x-user-id"),
-    "role": r.headers.get("x-user-role")
+    "user_id": getattr(r.user, "id", None), # assuming request.user is set
+    "role": getattr(r.user, "role", "guest")
 })
 
 # Handle proxies / load balancers
@@ -185,9 +185,10 @@ ts.override_source_ip(lambda r: r.headers.get("x-real-ip", r.remote_addr))
 <div class="lang-content" data-lang="node" markdown="1">
 
 ```javascript
+// Extract user info from your authentication middleware (e.g. Passport, Clerk)
 ts.identify_user((req) => ({
-    "user_id": req.headers["x-user-id"],
-    "role": req.headers["x-user-role"]
+    "user_id": req.user?.id,
+    "role": req.user?.role || "guest"
 }));
 
 ts.override_source_ip((req) => req.headers["x-real-ip"] || req.ip);
