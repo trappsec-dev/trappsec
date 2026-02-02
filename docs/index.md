@@ -15,8 +15,7 @@ nav_order: 1
 
 <div style="text-align: left; margin: 2rem 0;">
   <a href="./guide/" class="btn btn-primary fs-5 mb-2 mr-2">Get Started</a>
-  <a href="./api/" class="btn btn-outline-primary fs-5 mb-2 mr-2">API Reference</a>
-  <a href="./minimal-example/" class="btn btn-outline-primary fs-5 mb-2">Minimal Example</a>
+  <a href="https://github.com/trappsec-dev/trappsec" class="btn btn-outline-primary fs-5 mb-2 mobile-only">View on GitHub</a>
 </div>
 
 ---

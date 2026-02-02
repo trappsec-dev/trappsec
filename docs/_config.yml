@@ -12,3 +12,8 @@ aux_links:
 
 head_custom: |
   {% include head_custom.html %}
+
+callouts:
+  note:
+    title: Note
+    color: purple

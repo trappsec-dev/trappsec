@@ -12,6 +12,9 @@ permalink: /guide/
 
 # Getting Started
 
+{: .note }
+> **Just want to run code?** Check out the [Minimal Example](./minimal-example.md) to copy-paste and run locally.
+
 ## installation
 
 <div class="lang-content" data-lang="python" markdown="1">
@@ -149,6 +152,13 @@ ts.watch("/auth/register")
 
 </div>
 
+## baiting & lures
+
+{: .note }
+> **How do attackers find these traps?** 
+> 
+> Simply defining a trap isn't enough; you need to make sure attackers stumble upon them. Check out the [Baiting & Lures](./baiting-and-lures.md) guide to learn how to plant effective clues (like hidden frontend comments or legacy API mirrors) that lead attackers into your traps.
+
 ## attribution
 To make alerts actionable, trappsec needs to know *who* is attacking.
 
@@ -221,7 +231,7 @@ ts.add_otel();
 
 </div>
 
-## default responses (advanced)
+## default responses
 You can globally configure how trappsec responds to events. trappsec uses default responses when you don't explicitly define one for a trap. You can override these to match your application's error schema.
 
 <div class="lang-content" data-lang="python" markdown="1">

@@ -87,14 +87,14 @@ Configures the response sent to authenticated requests (or all requests if `if_u
 <div class="lang-content" data-lang="python" markdown="1">
 
 ```python
-trap.respond(status: int, body: dict | Callable, mime_type: str = None, template: str = None)
+trap.respond(status: int, body: dict | str | Callable, mime_type: str = None, template: str = None)
 ```
 
 </div>
 <div class="lang-content" data-lang="node" markdown="1">
 
 ```javascript
-trap.respond({ status: number, body: object | Function, mime_type: string, template: string })
+trap.respond({ status: number, body: object | string | Function, mime_type: string, template: string })
 ```
 
 </div>
@@ -105,6 +105,7 @@ trap.respond({ status: number, body: object | Function, mime_type: string, templ
 
 ```python
 trap.respond(200, {"status": "ok"})
+trap.respond(403, "Access Denied", mime_type="text/plain")
 trap.respond(template="deprecated_api")
 ```
 
@@ -113,14 +114,15 @@ trap.respond(template="deprecated_api")
 
 ```javascript
 trap.respond({ status: 200, body: { "status": "ok" } });
+trap.respond({ status: 403, body: "Access Denied", mime_type: "text/plain" });
 trap.respond({ template: "deprecated_api" });
 ```
 
 </div>
 
 *   **status**: HTTP status code.
-*   **body**: JSON body or a function returning a JSON body.
-*   **mime_type**: Content-Type header (defaults to "application/json").
+*   **body**: JSON object, string, or a function returning one of those.
+*   **mime_type**: Content-Type header (defaults to "application/json"). You must explicitly set this to "text/plain" (or others) if returning a non-JSON body.
 *   **template**: Name of a registered response template.
 
 ### `if_unauthenticated`
