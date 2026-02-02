@@ -69,16 +69,18 @@ Fake endpoints that are not part of your real API but are designed to blend in. 
 
 ```python
 # Static response
-ts.trap("/admin/config") \
+ts.trap("/deployment/config") \
     .methods("GET") \
-    .intent("Admin Panel Probing") \
-    .respond(200, {"allow_signup": True, "debug_mode": True})
+    .intent("Reconnaissance") \
+    .respond(200, {"region": "us-east-1", "deployment_type": "production"})
 
 # Dynamic response
 import random
-ts.trap("/metrics") \
+ts.trap("/deployment/metrics") \
     .methods("GET") \
-    .respond(200, lambda r: {"cpu": f"{random.randint(10, 50)}%"})
+    .intent("Reconnaissance") \
+    .respond(200, lambda r: {"cpu": f"{random.randint(5, 95)}%", "memory": f"{random.randint(20, 90)}%"})
+
 ```
 
 </div>
@@ -86,17 +88,21 @@ ts.trap("/metrics") \
 
 ```javascript
 // Static response
-ts.trap("/admin/config")
+ts.trap("/deployment/config")
     .methods("GET")
-    .intent("Admin Panel Probing")
-    .respond({ status: 200, body: { "allow_signup": true, "debug_mode": true } });
+    .intent("Reconnaissance")
+    .respond({ status: 200, body: { "region": "us-east-1", "deployment_type": "production" } });
 
 // Dynamic response
-ts.trap("/metrics")
+ts.trap("/deployment/metrics")
     .methods("GET")
-    .respond({ 
-        status: 200, 
-        body: (req) => ({ "cpu": `${Math.floor(Math.random() * 40) + 10}%` }) 
+    .intent("Reconnaissance")
+    .respond({
+        status: 200,
+        body: (req) => ({
+            "cpu": `${Math.floor(Math.random() * 90) + 5}%`,
+            "memory": `${Math.floor(Math.random() * 70) + 20}%`
+        })
     });
 ```
 
@@ -130,8 +136,8 @@ Fake fields or parameters that appear contextually relevant. trappsec monitors t
 <div class="lang-content" data-lang="python" markdown="1">
 
 ```python
-# Alert if 'is_admin' is present (regardless of value)
-ts.watch("/api/profile/update").body("is_admin", intent="Privilege Escalation")
+# Alert if 'role' is present (regardless of value)
+ts.watch("/api/profile/update").body("role", intent="Privilege Escalation")
 
 # Alert if 'role' is present AND not equal to 'user'
 ts.watch("/auth/register") \
@@ -142,8 +148,8 @@ ts.watch("/auth/register") \
 <div class="lang-content" data-lang="node" markdown="1">
 
 ```javascript
-// Alert if 'is_admin' is present
-ts.watch("/api/profile/update").body("is_admin", { intent: "Privilege Escalation" });
+// Alert if 'role' is present
+ts.watch("/api/profile/update").body("role", { intent: "Privilege Escalation" });
 
 // Alert if 'role' is present AND not equal to 'user'
 ts.watch("/auth/register")
