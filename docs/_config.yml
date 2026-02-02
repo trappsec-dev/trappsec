@@ -1,1 +1,15 @@
 remote_theme: just-the-docs/just-the-docs
+
+title: trappsec
+description: Application-layer deception framework.
+url: "https://trappsec.io"
+
+search_enabled: true
+heading_anchors: true
+
+aux_links:
+  "GitHub": "https://github.com/trappsec/trappsec"
+
+# Enable customized head to load our modern CSS
+head_custom: |
+  {% include head_custom.html %}

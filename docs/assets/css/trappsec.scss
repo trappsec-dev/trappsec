@@ -1,0 +1,123 @@
+---
+---
+
+/* Trappsec Modern Theme Overrides */
+
+:root {
+  /* Color Palette - Cyber/Modern Dark */
+  --ts-bg-dark: #0f172a;       /* Slate 900 */
+  --ts-bg-darker: #020617;     /* Slate 950 */
+  --ts-bg-panel: #1e293b;      /* Slate 800 */
+  --ts-text-primary: #f8fafc;  /* Slate 50 */
+  --ts-text-secondary: #94a3b8;/* Slate 400 */
+  --ts-accent: #3b82f6;        /* Blue 500 */
+  --ts-accent-glow: rgba(59, 130, 246, 0.5);
+  --ts-danger: #ef4444;        /* Red 500 */
+  --ts-success: #22c55e;       /* Green 500 */
+  
+  /* Typography */
+  --ts-font-sans: 'Inter', system-ui, -apple-system, sans-serif;
+  --ts-font-mono: 'JetBrains Mono', monospace;
+}
+
+/* Force Dark Mode Appearance */
+body {
+  background-color: var(--ts-bg-dark) !important;
+  color: var(--ts-text-primary) !important;
+  font-family: var(--ts-font-sans) !important;
+  font-feature-settings: "cv11", "ss01";
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Typography Overrides */
+h1, h2, h3, h4, h5, h6 {
+  font-family: var(--ts-font-sans);
+  color: var(--ts-text-primary) !important;
+  font-weight: 600;
+  letter-spacing: -0.025em;
+}
+
+h1 { font-size: 2.5rem; }
+h2 { font-size: 1.75rem; border-bottom: 1px solid var(--ts-bg-panel); padding-bottom: 0.5rem; }
+
+a { color: var(--ts-accent) !important; text-decoration: none; }
+a:hover { text-decoration: underline; text-shadow: 0 0 10px var(--ts-accent-glow); }
+
+code {
+  font-family: var(--ts-font-mono) !important;
+  background-color: var(--ts-bg-panel);
+  color: #e2e8f0;
+  border-radius: 4px;
+  padding: 0.2em 0.4em;
+  font-size: 0.85em;
+}
+
+pre {
+  background-color: var(--ts-bg-darker) !important;
+  border: 1px solid var(--ts-bg-panel);
+  border-radius: 8px !important;
+}
+
+/* Sidebar Styling */
+.site-nav, .site-header {
+  background-color: var(--ts-bg-darker) !important;
+  border-right: 1px solid var(--ts-bg-panel);
+}
+
+.site-title {
+  color: var(--ts-text-primary) !important;
+  font-weight: 700;
+  letter-spacing: -0.05em;
+}
+
+/* Buttons and UI Elements */
+.btn {
+  background-color: var(--ts-accent) !important;
+  color: white !important;
+  border-radius: 6px;
+  font-weight: 500;
+}
+
+/* Search Box */
+.search-input {
+  background-color: var(--ts-bg-panel) !important;
+  border: 1px solid var(--ts-bg-panel) !important;
+  color: var(--ts-text-primary) !important;
+  border-radius: 6px;
+}
+.search-input:focus {
+  border-color: var(--ts-accent) !important;
+  box-shadow: 0 0 0 2px var(--ts-accent-glow);
+}
+
+/* Table styling */
+table {
+  border-collapse: separate;
+  border-spacing: 0;
+  border: 1px solid var(--ts-bg-panel);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+th, td {
+  border-color: var(--ts-bg-panel) !important;
+}
+
+th {
+  background-color: var(--ts-bg-panel) !important;
+  color: var(--ts-text-primary);
+}
+
+/* API Signature Styling */
+/* Use specificity to target the blocks we likely created */
+pre.highlight {
+  position: relative;
+}
+
+blockquote {
+  border-left: 4px solid var(--ts-accent);
+  background-color: rgba(59, 130, 246, 0.1);
+  color: var(--ts-text-primary);
+  padding: 1rem;
+  border-radius: 4px;
+}
