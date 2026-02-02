@@ -17,6 +17,7 @@ Copy-paste this into a file to see Trappsec in action immediately.
 
 {% if page.language == 'python' %}
 1. **Save as `app.py`**:
+
 ```python
 from flask import Flask, request
 import trappsec
@@ -40,12 +41,14 @@ if __name__ == "__main__":
 ```
 
 2. **Run**:
+
 ```bash
 pip install flask trappsec
 python app.py
 ```
 
 3. **Attack**:
+
 ```bash
 # Trigger Trap
 curl http://localhost:5000/admin/config
@@ -53,8 +56,10 @@ curl http://localhost:5000/admin/config
 # Trigger Watch
 curl -X POST http://localhost:5000/profile -H "Content-Type: application/json" -d '{"is_admin": true}'
 ```
+
 {% elsif page.language == 'node' %}
 1. **Save as `app.js`**:
+
 ```javascript
 const express = require('express');
 const { Sentry } = require('trappsec');
@@ -77,12 +82,14 @@ app.listen(3000, () => console.log("Running on port 3000"));
 ```
 
 2. **Run**:
+
 ```bash
 npm install express trappsec
 node app.js
 ```
 
 3. **Attack**:
+
 ```bash
 # Trigger Trap
 curl http://localhost:3000/admin/config
