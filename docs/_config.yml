@@ -1,0 +1,21 @@
+remote_theme: just-the-docs/just-the-docs
+
+title: trappsec
+description: application-layer deception framework
+url: "https://trappsec.dev"
+
+search_enabled: true
+heading_anchors: true
+
+aux_links:
+  "GitHub": "https://github.com/trappsec-dev/trappsec"
+
+head_custom: |
+  {% include head_custom.html %}
+
+callouts:
+  note:
+    title: Note
+    color: purple
+
+footer_content: "Copyright &copy; 2026 trappsec"
