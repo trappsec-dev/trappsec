@@ -13,74 +13,25 @@ nav_order: 1
 
 > Built for the 1% of people who actually look at their security alerts, **and** the 99% who just like the idea of having them — based on the radical idea that if you can’t reduce your attack surface, expand it.
 
+<div style="text-align: left; margin: 2rem 0;">
+  <a href="./guide/" class="btn btn-primary fs-5 mb-2 mr-2">Get Started</a>
+  <a href="./api/" class="btn btn-outline-primary fs-5 mb-2 mr-2">API Reference</a>
+  <a href="./minimal-example/" class="btn btn-outline-primary fs-5 mb-2">Minimal Example</a>
+</div>
 
 ---
 
-### Core Concepts
+### Framework Overview
 
-* **Decoy Routes:** These are "ghost" endpoints that sit outside your real logic but look authentic. By planting dummy references in your client-side code, you can bait attackers into hitting these traps, allowing you to monitor their behavior via custom static or dynamic responses.
+#### **Decoy Routes**:
+"Ghost" endpoints that look authentic but trigger high-fidelity alerts when accessed.
 
-* **Honey Fields:** Non-functional parameters embedded within legitimate API endpoints that act as invisible tripwires. You can bait attackers by including them as hidden form fields with static values or leveraging existing "read-only" attributes that appear in GET responses as honey fields that trigger alerts if an attacker attempts to modify them via POST or PUT requests.
+#### **Honey Fields**:
+Hidden or "read-only" parameters in legitimate endpoints that trigger alerts when tampered with.
 
-* **Identity Attribution:** Framework hooks allow you to link a request to an authenticated user identity. You can also map traps to a specific **intent** (Privilege Escalation, Reconnaissance etc). Put together, you get high-fidelity alerts that security teams can respond to quickly and more effectively.
+#### **Identity Attribution**:
+Link attacks to user identities, not just IP addresses.
 
----
+#### **Alerting**
+Logs to console but can also integrate with OpenTelemetry and Webhooks.
 
-### Best Practices
-
-*  **Require Authentication:** In an internet that is mostly harmless but increasingly full of people and scanners (mostly scanners) poking things they shouldn't, you don’t want to get buried with noise. Use unauthenticated template responses like (401, Unauthorized) to guide them to probe with authentication.
-
-*  **Blend In:** A trap should look exactly like a normal part of your API. A good trap should look like a mundane, standard - perhaps even tedious part of your API. If it looks "too good to be true", attackers will ignore it. Design traps to catch people trying to understand or manipulate your business logic.
-
----
-
-### Alerting
-
-trappsec can integrate directly into your existing workflows. Events are written to your standard logging handlers by default, but can be configured to also integrate into **OpenTelemetry** for observability or **Webhooks** to trigger automated responses or notify security teams.
-
----
-
-### Supported Frameworks
-
-<table>
-  <thead>
-    <tr>
-      <th>Language</th>
-      <th>Framework</th>
-      <th>Status</th>
-    </tr>
-  </thead>
-  <tbody>
-    <tr>
-      <td rowspan="2"><b>Python</b></td>
-      <td>Flask</td>
-      <td>✅ Stable</td>
-    </tr>
-    <tr>
-      <td>FastAPI</td>
-      <td>✅ Stable</td>
-    </tr>
-    <tr>
-      <td><b>Node.js</b></td>
-      <td>Express</td>
-      <td>✅ Stable</td>
-    </tr>
-    <tr>
-      <td rowspan="2"><b>Go</b></td>
-      <td>net/http</td>
-      <td>🚧 Planned</td>
-    </tr>
-    <tr>
-      <td>Gin</td>
-      <td>🚧 Planned</td>
-    </tr>
-  </tbody>
-</table>
-
-> Missing your favorite framework? [Raise a request here](https://github.com/trappsec-dev/trappsec/discussions/new?category=feature-requests).
-
----
-
-### Support
-Community support is available via GitHub issues and discussions.  
-For commercial support or services, email **nikhil@ftfy.co**.

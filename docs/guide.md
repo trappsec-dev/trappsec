@@ -10,6 +10,7 @@ permalink: /guide/
   <button class="lang-btn" onclick="switchLang('node')">Node.js</button>
 </div>
 
+# Getting Started
 
 ## installation
 
@@ -29,7 +30,7 @@ npm install trappsec
 </div>
 
 
-## quick start
+## initialization
 
 Initialize the Sentry in your application. This is the main entry point for defining your traps.
 
@@ -53,44 +54,13 @@ const ts = new Sentry(app, "PaymentService", "Production");
 </div>
 
 
-## configuration
-
-You can globally configure how Trappsec responds to events.
-
-### Default Responses
-Trappsec uses default responses when you don't explicitly define one for a trap. You can override these to match your application's error schema.
-
-<div class="lang-content" data-lang="python" markdown="1">
-
-```python
-# Override default unauthenticated response (default is 401)
-ts.default_responses["unauthenticated"] = {
-    "status_code": 403,
-    "response_body": {"error": "Access Denied", "code": 1001},
-    "mime_type": "application/json"
-}
-```
-
-</div>
-<div class="lang-content" data-lang="node" markdown="1">
-
-```javascript
-// Override default unauthenticated response (default is 401)
-ts.default_responses["unauthenticated"] = {
-    "status_code": 403,
-    "response_body": { "error": "Access Denied", "code": 1001 },
-    "mime_type": "application/json"
-};
-```
-
-</div>
 
 ## deception primitives
 
 We currently support two core primitives: **Decoy Routes** and **Honey Fields**. Each primitive should be paired with a lure strategy (bait, breadcrumbs, etc.) to effectively attract attackers.
 
 ### 1. Decoy Routes
-Fake endpoints that are not part of your real API but are designed to blend in. When a request hits a decoy route, Trappsec intercepts it, sends a realistic dummy response, and generates a high-fidelity alert.
+Fake endpoints that are not part of your real API but are designed to blend in. When a request hits a decoy route, trappsec intercepts it, sends a realistic dummy response, and generates a high-fidelity alert.
 
 <div class="lang-content" data-lang="python" markdown="1">
 
@@ -151,8 +121,8 @@ ts.trap("/api/v1/users").methods("GET").respond({ template: "deprecated_api" });
 
 </div>
 
-### 2. Honey Fields (Watches)
-Fake fields or parameters that appear contextually relevant. Trappsec monitors these fields on legitimate routes. It can alert on the specific *presence* of a field or if its value *deviates* from a default.
+### 2. Honey Fields
+Fake fields or parameters that appear contextually relevant. trappsec monitors these fields on legitimate routes. It can alert on the specific *presence* of a field or if its value *deviates* from a default.
 
 <div class="lang-content" data-lang="python" markdown="1">
 
@@ -180,7 +150,7 @@ ts.watch("/auth/register")
 </div>
 
 ## attribution
-To make alerts actionable, Trappsec needs to know *who* is attacking.
+To make alerts actionable, trappsec needs to know *who* is attacking.
 
 <div class="lang-content" data-lang="python" markdown="1">
 
@@ -209,7 +179,10 @@ ts.override_source_ip((req) => req.headers["x-real-ip"] || req.ip);
 
 </div>
 
+---
+
 ## alerts & integrations
+trappsec can integrate directly into your existing workflows. Events are written to your standard logging handlers by default, but can be configured to also integrate into **OpenTelemetry** for observability or **Webhooks** to trigger automated responses or notify security teams.
 
 ### Webhooks
 Send alerts to Slack, Discord, or custom incident response tools.
@@ -248,8 +221,30 @@ ts.add_otel();
 
 </div>
 
+## default responses (advanced)
+You can globally configure how trappsec responds to events. trappsec uses default responses when you don't explicitly define one for a trap. You can override these to match your application's error schema.
 
+<div class="lang-content" data-lang="python" markdown="1">
 
-## support
+```python
+# Override default unauthenticated response (default is 401)
+ts.default_responses["unauthenticated"] = {
+    "status_code": 403,
+    "response_body": {"error": "Access Denied", "code": 1001},
+    "mime_type": "application/json"
+}
+```
 
-Contact us at [nikhil@ftfy.co](mailto:nikhil@ftfy.co) or open an issue on GitHub.
+</div>
+<div class="lang-content" data-lang="node" markdown="1">
+
+```javascript
+// Override default unauthenticated response (default is 401)
+ts.default_responses["unauthenticated"] = {
+    "status_code": 403,
+    "response_body": { "error": "Access Denied", "code": 1001 },
+    "mime_type": "application/json"
+};
+```
+
+</div>

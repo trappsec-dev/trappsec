@@ -6,9 +6,6 @@ nav_order: 3
 permalink: /api/
 ---
 
-# API Reference
-
-
 <div class="lang-switcher">
   <button class="lang-btn active" onclick="switchLang('python')">Python</button>
   <button class="lang-btn" onclick="switchLang('node')">Node.js</button>
@@ -16,7 +13,7 @@ permalink: /api/
 
 # API Reference
 
-This reference documents the core classes and methods available in the Trappsec SDK.
+This reference documents the core classes and methods available in the trappsec SDK.
 
 ## Sentry
 
@@ -33,7 +30,7 @@ The main entry point for the library.
 
 </div>
 
-Initializes the Trappsec Sentry.
+Initializes the trappsec Sentry.
 
 *   **app**: The application instance (Flask/FastAPI/Express).
 *   **service**: Name of your service (e.g., "PaymentService").

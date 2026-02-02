@@ -1,7 +1,7 @@
 ---
 layout: default
 title: Minimal Example
-nav_order: 10
+nav_order: 5
 permalink: /minimal-example/
 ---
 
@@ -17,7 +17,7 @@ permalink: /minimal-example/
 > It contains hardcoded configurations and does not represent a production-ready setup. 
 > For proper integration, please consult the [Getting Started](/guide/) guide.
 
-Copy-paste this into a file to see Trappsec in action immediately.
+Copy-paste this into a file to see trappsec in action immediately.
 
 <div class="lang-content" data-lang="python" markdown="1">
 
