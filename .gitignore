@@ -213,3 +213,4 @@ artifacts/
 # temporary
 uv.lock
 package-lock.json
+GemFile.lock
