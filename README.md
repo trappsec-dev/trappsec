@@ -1,3 +1,4 @@
+![Version 0.1](https://img.shields.io/badge/version-0.1-blue)
 ## **trappsec** 
 
 trappsec is an open-source library that helps developers catch attackers probing their APIs. By adding decoy APIs and parameters into your codebase, we can turn attacker reconnaissance into actionable security telemetry.
