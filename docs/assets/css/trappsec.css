@@ -1,6 +1,12 @@
 :root {
   --ts-font-sans: 'Inter', system-ui, -apple-system, sans-serif;
   --ts-font-mono: 'JetBrains Mono', monospace;
+  --ts-bg-panel: #f8fafc;
+  --ts-border: #e2e8f0;
+  --ts-text-primary: #0f172a;
+  --ts-text-secondary: #64748b;
+  --ts-accent: #2563eb;
+  --ts-bg-dark: #0f172a;
 }
 
 body {
@@ -38,4 +44,62 @@ code {
 .site-title {
   font-weight: 700;
   letter-spacing: -0.05em;
+}
+
+/* Language Switcher Styling */
+.lang-switcher {
+  display: flex;
+  background-color: var(--ts-bg-panel);
+  border-radius: 6px;
+  padding: 4px;
+  margin-bottom: 2rem;
+  width: fit-content;
+  border: 1px solid var(--ts-border);
+}
+
+.lang-btn {
+  background-color: transparent;
+  border: none;
+  padding: 6px 16px;
+  border-radius: 4px;
+  color: var(--ts-text-secondary);
+  font-family: var(--ts-font-sans);
+  font-weight: 500;
+  font-size: 0.9em;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.lang-btn:hover {
+  color: var(--ts-text-primary);
+  background-color: rgba(0, 0, 0, 0.05);
+}
+
+.lang-btn.active {
+  background-color: white;
+  color: var(--ts-accent);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.1);
+  font-weight: 600;
+}
+
+/* Language Content Visibility */
+.lang-content {
+  display: none;
+}
+
+.lang-content.active {
+  display: block;
+  animation: fadeIn 0.3s ease;
+}
+
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
 }

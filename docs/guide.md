@@ -1,3 +1,15 @@
+---
+layout: default
+title: Getting Started
+nav_order: 2
+permalink: /guide/
+---
+
+<div class="lang-switcher">
+  <button class="lang-btn active" onclick="switchLang('python')">Python</button>
+  <button class="lang-btn" onclick="switchLang('node')">Node.js</button>
+</div>
+
 
 ## installation
 
@@ -15,7 +27,6 @@ npm install trappsec
 ```
 
 </div>
-
 
 
 ## quick start
@@ -242,4 +253,3 @@ ts.add_otel();
 ## support
 
 Contact us at [nikhil@ftfy.co](mailto:nikhil@ftfy.co) or open an issue on GitHub.
-
