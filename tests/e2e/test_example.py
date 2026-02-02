@@ -157,7 +157,7 @@ def test_watch_registration(api, base_url, alert_server):
     r = api.post(endpoint, data={
         "email": "hacker@example.com", 
         "password": "pass", 
-        "is_admin": "true"
+        "role": "admin"
     }, headers={"User-Agent": ua})
     assert r.status_code == 200
     assert r.json().get("status") == "registered"
@@ -169,8 +169,8 @@ def test_watch_registration(api, base_url, alert_server):
     assert alert["event"] == "trappsec.watch_hit"
     
     assert len(alert["found_fields"]) == 1
-    assert alert["found_fields"][0]["field"] == "is_admin"
-    assert alert["found_fields"][0]["intent"] == "Privilege Escalation (is_admin)"
+    assert alert["found_fields"][0]["field"] == "role"
+    assert alert["found_fields"][0]["intent"] == "Privilege Escalation (role)"
 
 def test_watch_profile_update(api, base_url, alert_server):
     """Verify Watch: /api/v2/profile"""

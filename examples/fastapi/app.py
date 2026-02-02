@@ -116,7 +116,6 @@ ts.trap("/api/v1/profile") \
 #############################
 
 ts.watch("/auth/register") \
-    .body("is_admin", default=False, intent="Privilege Escalation (is_admin)") \
     .body("role", default="user", intent="Privilege Escalation (role)") \
     .body("credits", default=0, intent="Credit Manipulation")
 

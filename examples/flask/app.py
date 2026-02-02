@@ -122,7 +122,6 @@ ts.trap("/api/v1/profile") \
 # watch if any of the fields specified exist and deviate from the default value.
 # useful when lures are hardcoded keys in frontend requests or html forms.
 ts.watch("/auth/register") \
-    .body("is_admin", default=False, intent="Privilege Escalation (is_admin)") \
     .body("role", default="user", intent="Privilege Escalation (role)") \
     .body("credits", default=0, intent="Credit Manipulation")
 

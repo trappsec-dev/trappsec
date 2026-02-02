@@ -85,7 +85,6 @@ ts.trap("/api/v1/profile")
 
 // Watches
 ts.watch("/auth/register")
-    .body("is_admin", { defaultValue: false, intent: "Privilege Escalation (is_admin)" })
     .body("role", { defaultValue: "user", intent: "Privilege Escalation (role)" })
     .body("credits", { defaultValue: 0, intent: "Credit Manipulation" });
 

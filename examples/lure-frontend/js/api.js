@@ -34,7 +34,6 @@ export const api = {
                 email,
                 role: 'user',
                 credits: 0,
-                is_admin: false
             })
         });
         return handleResponse(response);
