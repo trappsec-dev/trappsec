@@ -31,7 +31,7 @@ trappsec can integrate directly into your existing workflows. Events are written
 
 ---
 
-### Support Matrix
+### Supported Frameworks
 
 <table>
   <thead>
@@ -68,5 +68,10 @@ trappsec can integrate directly into your existing workflows. Events are written
   </tbody>
 </table>
 
-> Missing your favorite framework? [Request support here](https://github.com/trappsec-dev/trappsec/discussions/new?category=feature-requests).
+> Missing your favorite framework? [Raise a request here](https://github.com/trappsec-dev/trappsec/discussions/new?category=feature-requests).
 
+---
+
+### Support
+Community support is available via GitHub issues and discussions.  
+For commercial support or services, email **nikhil@ftfy.co**.
