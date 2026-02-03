@@ -6,9 +6,7 @@ trappsec is an open-source library that helps developers catch attackers probing
 > Built for the 1% of people who actually look at their security alerts, **and** the 99% who just like the idea of having them — based on the radical idea that if you can’t reduce your attack surface, expand it.
 
 
-<div style="text-align: left; margin: 2rem 0;">
-  <a href="https://trappsec.dev/getting-started/" style="background-color: #2563eb; color: white; padding: 8px 16px; text-decoration: none; border-radius: 4px; font-size: 1rem; font-weight: 600; display: inline-block; margin-bottom: 8px; margin-right: 8px;">Read the Docs</a>
-</div>
+[Read the Docs](https://trappsec.dev/getting-started/) • [Ultra Quickstart](https://trappsec.dev/ultra-quickstart/)
 
 ---
 

@@ -13,7 +13,7 @@ permalink: /getting-started/
 # Getting Started
 
 {: .note }
-> **Just want to run code?** Check out the [Minimal Example](./minimal-example.md) to copy-paste and run locally.
+> **Just want to run code?** Check out the [Ultra Quickstart](/ultra-quickstart/) to copy-paste and run locally.
 
 ## installation
 
