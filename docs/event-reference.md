@@ -7,7 +7,7 @@ permalink: /events/
 
 # Event Reference
 
-This page details the schema for the events emitted by TrappSec. These events are sent to all configured handlers (Log, Webhook, OpenTelemetry).
+This page details the schema for the events emitted by trappsec. These events are sent to all configured handlers (Log, Webhook, OpenTelemetry).
 
 All events share a common set of fields, with specific details added depending on the event type (`trap_hit`, `watch_hit`, or `rule_hit`).
 

@@ -165,7 +165,7 @@ ts.watch("/auth/register")
 > Simply defining a trap isn't enough; you need to make sure attackers stumble upon them. Check out the [Baiting & Lures](./baiting-and-lures.md) guide to learn how to plant effective clues (like hidden frontend comments or legacy API mirrors) that lead attackers into your traps.
 
 ## attribution
-To make alerts actionable, trappsec needs to know *who* is attacking.
+To make alerts actionable, we need to know *who* is attacking.
 
 <div class="lang-content" data-lang="python" markdown="1">
 
@@ -214,17 +214,13 @@ ts.add_webhook("https://hooks.slack.com/services/...")
 
 ```javascript
 ts.add_webhook("https://hooks.slack.com/services/...");
-```
 
 </div>
 
 ### OpenTelemetry
-Emit alerts as OTEL spans to visualize attacks in your existing observability platform (Jaeger, Honeycomb, Datadog).
+Enrich your OTEL spans with trappsec metadata to track attacks in your existing observability platform (Jaeger, Honeycomb, Datadog).
 
 <div class="lang-content" data-lang="python" markdown="1">
-
-```python
-# Ensure OTEL is instrumented first
 ts.add_otel()
 ```
 
