@@ -27,7 +27,7 @@ import trappsec
 
 app = Flask(__name__)
 ts = trappsec.Sentry(app, "DemoApp", "Dev")
-ts.identify_user(lambda r: {"user_id": "guest"})
+ts.identify_user(lambda r: {"user": "guest"})
 
 # 1. Decoy Route (Trap)
 ts.trap("/admin/config").methods("GET").respond(200, {"debug": True})
@@ -73,7 +73,7 @@ const app = express();
 app.use(express.json());
 
 const ts = new Sentry(app, "DemoApp", "Dev");
-ts.identify_user((req) => ({ user_id: "guest" }));
+ts.identify_user((req) => ({ user: "guest" }));
 
 // 1. Decoy Route (Trap)
 ts.trap("/admin/config").methods("GET").respond({ status: 200, body: { debug: true } });
