@@ -163,3 +163,7 @@ code {
 .site-footer {
   display: none !important;
 }
+
+.table-wrapper {
+  width: fit-content;
+}

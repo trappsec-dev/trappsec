@@ -10,7 +10,24 @@ permalink: /baiting-and-lures/
 Traps are only effective if attackers find them. You need to plant "lures" — hints and crumbs that lead attackers to your decoy routes and honey fields.
 
 ### Decoy Routes
-*   **Frontend Code**: Leave references to decoy routes in your Javascript or mobile app source code (e.g., `const ADMIN_API = "/api/admin/v1";`), but ensure they are never invoked by legitimate user flows.
+*   **Frontend Code**: Attackers often reverse-engineer your client-side code (JavaScript bundles, mobile apps) to map your API surface. By including "ghost methods" in your service layer that are never called by the UI but reference trap endpoints, you can trigger alerts when attackers try to invoke them.
+
+```typescript
+// services/UserService.ts
+
+class UserService {
+    // ... legitimate methods ...
+    async getProfile() { /* ... */ }
+    async updateAvatar() { /* ... */ }
+
+    // 🪤 LURE: This method is never called by the UI. 
+    // It exists solely to trap attackers inspecting the code.
+    async updateUserPermissions() { 
+        return this.http.post('/api/v1/admin/user', {..}); // Trap Endpoint
+    }
+}
+```
+
 *   **Documentation Artifacts**: Include references to decoy routes in fake API documentation, unused Swagger/OpenAPI files, or comments.
 *   **Legacy Versions**: If your app uses `/api/v2/...`, deploy traps at `/api/v1/...` mirroring the structure. Attackers often check for older, potentially vulnerable versions.
 
