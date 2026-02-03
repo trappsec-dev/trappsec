@@ -140,3 +140,10 @@ curl http://localhost:5000/admin/config
 ```
 
 </div>
+
+<br>
+
+{: .note }
+> **Windows Users:** The `curl` command syntax differs for Windows Command Prompt (cmd.exe). Use double quotes for JSON and escape inner quotes:
+> `curl -X POST http://localhost:5000/profile -H "Content-Type: application/json" -d "{\"username\": \"hacker\", \"is_admin\": true}"`
+
