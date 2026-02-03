@@ -32,7 +32,6 @@ npm install trappsec
 
 </div>
 
-
 ## initialization
 
 Initialize the Sentry in your application. This is the main entry point for defining your traps.
