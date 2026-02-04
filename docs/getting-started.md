@@ -64,7 +64,8 @@ We currently support two core primitives: **Decoy Routes** and **Honey Fields**.
 ### 1. Decoy Routes
 Fake endpoints that are not part of your real API but are designed to blend in. When a request hits a decoy route, trappsec intercepts it, sends a realistic dummy response, and generates a high-fidelity alert.
 
-Traps can also adapt to the attacker's context. Real APIs protect sensitive endpoints, so your traps should too. You can configure traps to reject unauthenticated requests (just like a real server) while serving convincing fake data to attackers using stolen credentials.
+#### Adaptive Responses
+Traps can adapt to the attacker's authentication status. Real APIs protect sensitive endpoints, so your traps should too. you can configure what responses to send for authentication and unauthenticated scenarios so that it mirrors a real API and nudges attackers to use credentials to identify themselves. The framework uses a default response template for unauthenticated requests that must be overridden to match your application behavior.
 
 <div class="lang-content" data-lang="python" markdown="1">
 
@@ -250,7 +251,7 @@ There are two default profiles you can override:
 <div class="lang-content" data-lang="python" markdown="1">
 
 ```python
-# Override default unauthenticated response (default is 401)
+# Override default unauthenticated response
 ts.default_responses["unauthenticated"] = {
     "status_code": 403,
     "response_body": {"error": "Access Denied", "code": 1001},
@@ -269,7 +270,7 @@ ts.default_responses["authenticated"] = {
 <div class="lang-content" data-lang="node" markdown="1">
 
 ```javascript
-// Override default unauthenticated response (default is 401)
+// Override default unauthenticated response
 ts.default_responses["unauthenticated"] = {
     "status_code": 403,
     "response_body": { "error": "Access Denied", "code": 1001 },
