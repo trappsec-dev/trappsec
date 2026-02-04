@@ -64,6 +64,8 @@ We currently support two core primitives: **Decoy Routes** and **Honey Fields**.
 ### 1. Decoy Routes
 Fake endpoints that are not part of your real API but are designed to blend in. When a request hits a decoy route, trappsec intercepts it, sends a realistic dummy response, and generates a high-fidelity alert.
 
+Traps can also adapt to the attacker's context. Real APIs protect sensitive endpoints, so your traps should too. You can configure traps to reject unauthenticated requests (just like a real server) while serving convincing fake data to attackers using stolen credentials.
+
 <div class="lang-content" data-lang="python" markdown="1">
 
 ```python
@@ -71,7 +73,8 @@ Fake endpoints that are not part of your real API but are designed to blend in. 
 ts.trap("/deployment/config") \
     .methods("GET") \
     .intent("Reconnaissance") \
-    .respond(200, {"region": "us-east-1", "deployment_type": "production"})
+    .respond(200, {"region": "us-east-1", "deployment_type": "production"}) \
+    .if_unauthenticated(401, {"error": "Login Required"})
 
 # Dynamic response
 import random
@@ -90,7 +93,8 @@ ts.trap("/deployment/metrics") \
 ts.trap("/deployment/config")
     .methods("GET")
     .intent("Reconnaissance")
-    .respond({ status: 200, body: { "region": "us-east-1", "deployment_type": "production" } });
+    .respond({ status: 200, body: { "region": "us-east-1", "deployment_type": "production" } })
+    .if_unauthenticated({ status: 401, body: { "error": "Login Required" } });
 
 // Dynamic response
 ts.trap("/deployment/metrics")
@@ -131,6 +135,9 @@ ts.trap("/api/v1/users").methods("GET").respond({ template: "deprecated_api" });
 
 ### 2. Honey Fields
 Fake fields or parameters that appear contextually relevant. trappsec monitors these fields on legitimate routes. It can alert on the specific *presence* of a field or if its value *deviates* from a default.
+
+{: .note }
+> Unlike traps, watches do **not** tamper with the response. The request proceeds to your application logic normally. Only the alert is triggered.
 
 <div class="lang-content" data-lang="python" markdown="1">
 
@@ -234,7 +241,11 @@ ts.add_otel();
 </div>
 
 ## default responses
-You can globally configure how trappsec responds to events. trappsec uses default responses when you don't explicitly define one for a trap. You can override these to match your application's error schema.
+You can globally configure how trappsec responds to events. This is useful for maintaining consistency across all your traps without repeating configuration.
+
+There are two default profiles you can override:
+1.  **authenticated**: Used when `respond()` is not configured (defaults to `200 OK` with empty JSON).
+2.  **unauthenticated**: Used when `if_unauthenticated()` is not configured (defaults to `401 Unauthorized` with empty JSON).
 
 <div class="lang-content" data-lang="python" markdown="1">
 
@@ -243,6 +254,13 @@ You can globally configure how trappsec responds to events. trappsec uses defaul
 ts.default_responses["unauthenticated"] = {
     "status_code": 403,
     "response_body": {"error": "Access Denied", "code": 1001},
+    "mime_type": "application/json"
+}
+
+# Override default authenticated response
+ts.default_responses["authenticated"] = {
+    "status_code": 200,
+    "response_body": {"status": "ok"},
     "mime_type": "application/json"
 }
 ```
@@ -255,6 +273,13 @@ ts.default_responses["unauthenticated"] = {
 ts.default_responses["unauthenticated"] = {
     "status_code": 403,
     "response_body": { "error": "Access Denied", "code": 1001 },
+    "mime_type": "application/json"
+};
+
+// Override default authenticated response
+ts.default_responses["authenticated"] = {
+    "status_code": 200,
+    "response_body": { "status": "ok" },
     "mime_type": "application/json"
 };
 ```
