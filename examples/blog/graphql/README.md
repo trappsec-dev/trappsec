@@ -24,3 +24,21 @@ OR
 pip install flask pyjwt trappsec graphql-core
 python main.py
 ```
+
+---
+
+## Verify
+to login and grab an access token
+```bash
+curl -X POST http://127.0.0.1:8000/login \
+  -H "Content-Type: application/json" \
+  -d '{"username":"alice","password":"password"}'
+```
+
+to trigger a decoy using graphql introspection. replace token from above
+```bash
+curl -X POST http://127.0.0.1:8000/graphql \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer <TOKEN>" \
+  -d '{"query":"{ __schema { types { name } } }"}'
+```
