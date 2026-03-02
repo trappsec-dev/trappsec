@@ -23,13 +23,16 @@ class StarletteIntegration:
         from starlette.responses import Response
         from starlette.routing import Route
 
-        async def endpoint(req, trap):
-            response_body, response_config = self.ts._trigger_trap_event(req, trap)
-            return Response(
-                response_body,
-                status_code=response_config["status_code"],
-                media_type=response_config["mime_type"],
-            )
+        def make_endpoint(trap):
+            async def endpoint(req):
+                response_body, response_config = self.ts._trigger_trap_event(req, trap)
+                return Response(
+                    response_body,
+                    status_code=response_config["status_code"],
+                    media_type=response_config["mime_type"],
+                )
+
+            return endpoint
 
         routes = []
         for idx, trap in enumerate(self.ts.traps):
@@ -37,7 +40,7 @@ class StarletteIntegration:
             routes.append(
                 Route(
                     trap["path"],
-                    endpoint=lambda req, d=trap: endpoint(req, d),
+                    endpoint=make_endpoint(trap),
                     methods=methods,
                     name=f"trappsec_{idx}",
                 )
