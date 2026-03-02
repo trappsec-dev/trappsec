@@ -59,6 +59,8 @@ class KoaIntegration {
                 return;
             }
 
+            await next();
+
             const watch = watchMap[path];
             if (watch) {
                 try {
@@ -67,8 +69,6 @@ class KoaIntegration {
                     this.ts.logger.error("Trappsec error in Koa watch handler:", e);
                 }
             }
-
-            await next();
         });
     }
 
