@@ -48,25 +48,29 @@ trappsec can integrate directly into your existing workflows. Events are written
     <tr>
       <td rowspan="2"><b>Python</b></td>
       <td>Flask</td>
-      <td>✅ Stable</td>
+      <td>Stable</td>
     </tr>
     <tr>
       <td>FastAPI</td>
-      <td>✅ Stable</td>
+      <td>Stable</td>
     </tr>
     <tr>
-      <td><b>Node.js</b></td>
+      <td rowspan="2"><b>Node.js</b></td>
       <td>Express</td>
-      <td>✅ Stable</td>
+      <td>Stable</td>
+    </tr>
+    <tr>
+      <td>NestJS (Express/Fastify)</td>
+      <td>Stable</td>
     </tr>
     <tr>
       <td rowspan="2"><b>Go</b></td>
       <td>net/http</td>
-      <td>🚧 Planned</td>
+      <td>Planned</td>
     </tr>
     <tr>
       <td>Gin</td>
-      <td>🚧 Planned</td>
+      <td>Planned</td>
     </tr>
   </tbody>
 </table>
@@ -78,3 +82,5 @@ trappsec can integrate directly into your existing workflows. Events are written
 ### Support
 Community support is available via GitHub issues and discussions.  
 For commercial support or services, email **nikhil@ftfy.co**.
+
+
