@@ -4,7 +4,6 @@
 #   "requests",
 #   "opentelemetry-api",
 #   "opentelemetry-sdk",
-#   "opentelemetry-instrumentation-sanic",
 # ]
 # ///
 
@@ -116,14 +115,11 @@ def setup_opentelemetry(application):
     from opentelemetry import trace
     from opentelemetry.sdk.trace import TracerProvider
     from opentelemetry.sdk.trace.export import BatchSpanProcessor, ConsoleSpanExporter
-    from opentelemetry.instrumentation.sanic import SanicInstrumentor
 
     provider = TracerProvider()
     processor = BatchSpanProcessor(ConsoleSpanExporter())
     provider.add_span_processor(processor)
     trace.set_tracer_provider(provider)
-
-    SanicInstrumentor().instrument_app(application)
 
 
 if __name__ == "__main__":
