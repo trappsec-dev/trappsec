@@ -60,7 +60,7 @@ trappsec can integrate directly into your existing workflows. Events are written
       <td>Stable</td>
     </tr>
     <tr>
-      <td>NestJS (Express/Fastify)</td>
+      <td>NestJS</td>
       <td>Stable</td>
     </tr>
     <tr>
