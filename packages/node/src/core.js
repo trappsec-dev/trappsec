@@ -228,7 +228,10 @@ class Sentry {
 
     _register(app) {
         // Simple heuristic for now, can be improved
-        if (app.use && app.get && app.post) {
+        if (app.getHttpAdapter && app.useGlobalInterceptors) {
+            const NestIntegration = require('./integrations/nestjs');
+            this.integration = new NestIntegration(this, app);
+        } else if (app.use && app.get && app.post) {
             const ExpressIntegration = require('./integrations/express');
             this.integration = new ExpressIntegration(this, app);
         } else {

@@ -32,7 +32,7 @@ The main entry point for the library.
 
 Initializes the trappsec Sentry.
 
-*   **app**: The application instance (Flask/FastAPI/Express).
+*   **app**: The application instance (Flask/FastAPI/Express/NestJS).
 *   **service**: Name of your service (e.g., "PaymentService").
 *   **environment**: Deployment environment (e.g., "Production", "Staging").
 

@@ -19,25 +19,29 @@ permalink: /supported-frameworks/
     <tr>
       <td rowspan="2"><b>Python</b></td>
       <td>Flask</td>
-      <td>✅ Stable</td>
+      <td>Stable</td>
     </tr>
     <tr>
       <td>FastAPI</td>
-      <td>✅ Stable</td>
+      <td>Stable</td>
     </tr>
     <tr>
-      <td><b>Node.js</b></td>
+      <td rowspan="2"><b>Node.js</b></td>
       <td>Express</td>
-      <td>✅ Stable</td>
+      <td>Stable</td>
+    </tr>
+    <tr>
+      <td>NestJS</td>
+      <td>Stable</td>
     </tr>
     <tr>
       <td rowspan="2"><b>Go</b></td>
       <td>net/http</td>
-      <td>🚧 Planned</td>
+      <td>Planned</td>
     </tr>
     <tr>
       <td>Gin</td>
-      <td>🚧 Planned</td>
+      <td>Planned</td>
     </tr>
   </tbody>
 </table>
