@@ -250,6 +250,9 @@ class Sentry:
         if name == "FastAPI" or module.startswith("fastapi"):
             from .integrations.fastapi import FastAPIIntegration
             self.integration = FastAPIIntegration(self, app)
+        elif name == "Starlette" or module.startswith("starlette"):
+            from .integrations.starlette import StarletteIntegration
+            self.integration = StarletteIntegration(self, app)
         elif name == "Flask" or module.startswith("flask"):
             from .integrations.flask import FlaskIntegration
             self.integration = FlaskIntegration(self, app)
