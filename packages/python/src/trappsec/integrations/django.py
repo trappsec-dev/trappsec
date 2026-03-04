@@ -41,8 +41,6 @@ class DjangoIntegration:
                 self.setup_watches()
                 self._initialized = True
 
-            self._normalize_request(request)
-
             trap = self.trap_map.get(request.path)
             if trap and request.method in trap.get("methods", []):
                 response_body, response_config = self.ts._trigger_trap_event(request, trap)
@@ -120,11 +118,6 @@ class DjangoIntegration:
 
         if found_fields:
             self.ts._trigger_watch_event(request, found_fields)
-
-    def _normalize_request(self, request):
-        # Keep callback compatibility with integrations that expose `remote_addr`.
-        if not hasattr(request, "remote_addr"):
-            request.remote_addr = request.META.get("REMOTE_ADDR", "0.0.0.0")
 
     def _to_querydict(self, data):
         query_dict = QueryDict("", mutable=True)

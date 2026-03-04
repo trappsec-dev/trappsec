@@ -117,7 +117,7 @@ ts.identify_user(lambda r: {
     "user": r.headers.get("x-user-id"),
     "role": r.headers.get("x-user-role")
 })
-ts.override_source_ip(lambda r: r.headers.get("x-real-ip", r.remote_addr))
+ts.override_source_ip(lambda r: r.headers.get("x-real-ip", r.META.get("REMOTE_ADDR", "0.0.0.0")))
 
 # Traps
 ts.trap("/deployment/config") \
