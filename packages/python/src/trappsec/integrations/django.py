@@ -11,6 +11,7 @@ class DjangoIntegration:
         self.app = app
         self.trap_map = {}
         self.watch_map = {}
+        self._initialized = False
 
         if not self.ts.identity.ip:
             self.ts.identity.ip = lambda r: r.headers.get("x-real-ip", r.META.get("REMOTE_ADDR", "0.0.0.0"))
@@ -19,8 +20,6 @@ class DjangoIntegration:
         self.ts.request.user_agent = lambda r: r.headers.get("user-agent", "unknown")
         self.ts.request.method = lambda r: r.method
 
-        self.setup_traps()
-        self.setup_watches()
         self._patch_middleware_chain()
 
     def setup_traps(self):
@@ -30,9 +29,6 @@ class DjangoIntegration:
         self.watch_map = {w["path"]: w for w in self.ts.watches}
 
     def _patch_middleware_chain(self):
-        if not self.watch_map and not self.trap_map:
-            return
-
         # Django builds the request middleware chain lazily.
         if getattr(self.app, "_middleware_chain", None) is None:
             self.app.load_middleware()
@@ -40,6 +36,11 @@ class DjangoIntegration:
         original_chain = self.app._middleware_chain
 
         def wrapped_chain(request):
+            if not self._initialized:
+                self.setup_traps()
+                self.setup_watches()
+                self._initialized = True
+
             trap = self.trap_map.get(request.path)
             if trap and request.method in trap.get("methods", []):
                 response_body, response_config = self.ts._trigger_trap_event(request, trap)
