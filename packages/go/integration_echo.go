@@ -51,7 +51,10 @@ func newEchoIntegration(ts *Sentry, app *echo.Echo) *echoIntegration {
 func (in *echoIntegration) middleware() echo.MiddlewareFunc {
 	return func(next echo.HandlerFunc) echo.HandlerFunc {
 		return func(c echo.Context) error {
-			path := c.Request().URL.Path
+			path := c.Path()
+			if path == "" {
+				path = c.Request().URL.Path
+			}
 			method := c.Request().Method
 
 			for _, trap := range in.ts.trapsForPath(path) {

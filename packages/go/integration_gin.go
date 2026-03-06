@@ -50,7 +50,10 @@ func newGinIntegration(ts *Sentry, app *gin.Engine) *ginIntegration {
 
 func (in *ginIntegration) middleware() gin.HandlerFunc {
 	return func(c *gin.Context) {
-		path := c.Request.URL.Path
+		path := c.FullPath()
+		if path == "" {
+			path = c.Request.URL.Path
+		}
 		method := c.Request.Method
 
 		for _, trap := range in.ts.trapsForPath(path) {

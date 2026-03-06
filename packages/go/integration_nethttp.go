@@ -64,7 +64,13 @@ func newNetHTTPServerIntegration(ts *Sentry, server *http.Server) *netHTTPServer
 
 func (in *netHTTPServerIntegration) wrap(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		path := r.URL.Path
+		// r.Pattern is set by http.ServeMux (Go 1.22+) when used via WrapHTTPHandler.
+		// When wrapping at the server level, routing hasn't occurred yet so r.Pattern
+		// is empty; fall back to the raw URL path in that case.
+		path := r.Pattern
+		if path == "" {
+			path = r.URL.Path
+		}
 		method := strings.ToUpper(r.Method)
 
 		for _, trap := range in.ts.trapsForPath(path) {
