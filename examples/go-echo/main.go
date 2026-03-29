@@ -11,7 +11,7 @@ import (
 	"strings"
 
 	"github.com/labstack/echo/v4"
-	trappsec "github.com/trappsec-dev/trappsec/packages/go"
+	trappsec "github.com/trappsec-dev/trappsec/packages/go/echo"
 )
 
 type registerPayload struct {

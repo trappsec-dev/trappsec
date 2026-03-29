@@ -12,7 +12,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	trappsec "github.com/trappsec-dev/trappsec/packages/go"
+	trappsec "github.com/trappsec-dev/trappsec/packages/go/nethttp"
 )
 
 func main() {

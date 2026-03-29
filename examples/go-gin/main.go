@@ -10,7 +10,7 @@ import (
 	"path/filepath"
 
 	"github.com/gin-gonic/gin"
-	trappsec "github.com/trappsec-dev/trappsec/packages/go"
+	trappsec "github.com/trappsec-dev/trappsec/packages/go/gin"
 )
 
 type registerPayload struct {
@@ -78,8 +78,8 @@ func main() {
 	r.GET("/", func(c *gin.Context) {
 		c.File(filepath.Join(frontendDir, "index.html"))
 	})
-	r.GET("/*path", func(c *gin.Context) {
-		path := c.Param("path")
+	r.NoRoute(func(c *gin.Context) {
+		path := c.Request.URL.Path
 		if len(path) > 0 && path[0] == '/' {
 			path = path[1:]
 		}

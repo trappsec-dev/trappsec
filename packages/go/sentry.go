@@ -2,17 +2,12 @@ package trappsec
 
 import (
 	"encoding/json"
-	"fmt"
 	"log"
-	"net/http"
 	"os"
 	"reflect"
 	"strings"
 	"sync"
 	"time"
-
-	"github.com/gin-gonic/gin"
-	"github.com/labstack/echo/v4"
 )
 
 var NoDefault = struct{}{}
@@ -65,19 +60,17 @@ type Sentry struct {
 	Identity IdentityContext
 	Request  RequestContext
 
+	bodyResolver     func(body any, req any) any
 	defaultResponses map[string]ResponseTemplate
 	traps            []*TrapBuilder
 	watches          []*WatchBuilder
 	templates        map[string]ResponseTemplate
 	handlers         []EventHandler
 
-	integration integration
-	mu          sync.RWMutex
+	mu sync.RWMutex
 }
 
-type integration interface{}
-
-func NewSentry(app any, service, environment string) *Sentry {
+func NewSentry(service, environment string) *Sentry {
 	hostname, _ := os.Hostname()
 	s := &Sentry{
 		logger:      log.New(os.Stdout, "", 0),
@@ -112,8 +105,14 @@ func NewSentry(app any, service, environment string) *Sentry {
 	}
 
 	s.handlers = append(s.handlers, &LogHandler{logger: s.logger})
-	s.register(app)
 	return s
+}
+
+// SetBodyResolver registers a framework-specific body resolver. Integration
+// packages call this during setup to handle framework-typed body callbacks
+// (e.g. func(*gin.Context) any) before core's generic resolver runs.
+func (s *Sentry) SetBodyResolver(fn func(body any, req any) any) {
+	s.bodyResolver = fn
 }
 
 func (s *Sentry) Service() string { return s.service }
@@ -249,7 +248,9 @@ func (s *Sentry) Trigger(req any, reason, intent string, metadata any) {
 	s.emit(ctx)
 }
 
-func (s *Sentry) triggerTrapEvent(req any, trap TrapConfig) ([]byte, ResponseTemplate) {
+// TriggerTrapEvent emits a trap_hit event and returns the response body and config.
+// Called by framework integration packages.
+func (s *Sentry) TriggerTrapEvent(req any, trap TrapConfig) ([]byte, ResponseTemplate) {
 	identity := s.getIdentity(req)
 	request := s.getRequest(req)
 	ctx := TriggerContext{
@@ -277,12 +278,13 @@ func (s *Sentry) triggerTrapEvent(req any, trap TrapConfig) ([]byte, ResponseTem
 		cfg = trap.ResponseAuthenticated
 	}
 
-	bodyVal := resolveDynamicBody(cfg.Body, req)
+	bodyVal := s.resolveDynamicBody(cfg.Body, req)
 	payload := normalizePayload(cfg.MIMEType, bodyVal)
 	return payload, cfg
 }
 
-func (s *Sentry) triggerWatchEvent(req any, found []FoundField) {
+// TriggerWatchEvent emits a watch_hit event. Called by framework integration packages.
+func (s *Sentry) TriggerWatchEvent(req any, found []FoundField) {
 	identity := s.getIdentity(req)
 	request := s.getRequest(req)
 	ctx := TriggerContext{
@@ -303,8 +305,10 @@ func (s *Sentry) triggerWatchEvent(req any, found []FoundField) {
 	s.emit(ctx)
 }
 
-func (s *Sentry) detectHoneyFields(data map[string]any, rules map[string]WatchFieldRule, requestObj any) (map[string]any, []FoundField) {
-	if data == nil || len(data) == 0 {
+// DetectHoneyFields scans data for fields matching the watch rules and returns
+// the sanitized map and any triggered fields. Called by framework integration packages.
+func (s *Sentry) DetectHoneyFields(data map[string]any, rules map[string]WatchFieldRule, requestObj any) (map[string]any, []FoundField) {
+	if len(data) == 0 {
 		return data, nil
 	}
 	found := make([]FoundField, 0)
@@ -380,33 +384,6 @@ func (s *Sentry) emit(ctx TriggerContext) {
 	}
 }
 
-func (s *Sentry) register(app any) {
-	switch a := app.(type) {
-	case *http.Server:
-		s.integration = newNetHTTPServerIntegration(s, a)
-	case *gin.Engine:
-		s.integration = newGinIntegration(s, a)
-	case *echo.Echo:
-		s.integration = newEchoIntegration(s, a)
-	default:
-		t := reflect.TypeOf(app)
-		if t == nil {
-			panic("trappsec error: nil app instance")
-		}
-		panic(fmt.Sprintf("trappsec error: unknown framework type %s", runtimeTypeName(t)))
-	}
-}
-
-func runtimeTypeName(t reflect.Type) string {
-	if t == nil {
-		return "<nil>"
-	}
-	if t.PkgPath() == "" {
-		return t.String()
-	}
-	return strings.TrimSpace(t.PkgPath() + "." + t.Name())
-}
-
 func cloneTemplate(t ResponseTemplate) ResponseTemplate {
 	out := t
 	out.Body = deepCopyValue(t.Body)
@@ -470,22 +447,17 @@ func normalizePayload(mimeType string, body any) []byte {
 	}
 }
 
-func resolveDynamicBody(body any, req any) any {
-	switch fn := body.(type) {
-	case func(any) any:
+func (s *Sentry) resolveDynamicBody(body any, req any) any {
+	// Framework-specific resolver runs first (e.g. func(*gin.Context) any).
+	// If the resolver does not recognise the body type it returns body unchanged,
+	// and the generic func(any) any case below handles it.
+	// NOTE: never compare the returned value to body — function types are
+	// uncomparable in Go and will panic at runtime.
+	if s.bodyResolver != nil {
+		body = s.bodyResolver(body, req)
+	}
+	if fn, ok := body.(func(any) any); ok {
 		return fn(req)
-	case func(*http.Request) any:
-		if r, ok := req.(*http.Request); ok {
-			return fn(r)
-		}
-	case func(*gin.Context) any:
-		if c, ok := req.(*gin.Context); ok {
-			return fn(c)
-		}
-	case func(echo.Context) any:
-		if c, ok := req.(echo.Context); ok {
-			return fn(c)
-		}
 	}
 	return body
 }

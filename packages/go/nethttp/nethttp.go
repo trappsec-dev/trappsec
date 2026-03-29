@@ -1,25 +1,62 @@
-package trappsec
+// Package trappsecnethttp integrates trappsec with the standard net/http server.
+//
+// Usage:
+//
+//	server := &http.Server{Addr: ":8080", Handler: mux}
+//	ts := trappsecnethttp.NewSentry(server, "my-service", "production")
+package trappsecnethttp
 
 import (
-	"bytes"
 	"encoding/json"
-	"fmt"
-	"io"
 	"net"
 	"net/http"
 	"net/url"
 	"strings"
 	"sync"
+
+	core "github.com/trappsec-dev/trappsec/packages/go"
 )
 
-type netHTTPServerIntegration struct {
-	ts       *Sentry
-	once     sync.Once
-	trapIdx  map[string]TrapConfig
-	watchIdx map[string]WatchConfig
+// Re-export core types as aliases so callers need only one import.
+type (
+	Sentry        = core.Sentry
+	AuthContext    = core.AuthContext
+	ResponseConfig = core.ResponseConfig
+	TrapConfig     = core.TrapConfig
+	WatchConfig    = core.WatchConfig
+	WatchFieldRule = core.WatchFieldRule
+	FoundField     = core.FoundField
+	TriggerContext = core.TriggerContext
+	AppInfo        = core.AppInfo
+	WebhookOptions = core.WebhookOptions
+	EventHandler   = core.EventHandler
+)
+
+// NoDefault is re-exported from core so callers need only one import.
+var NoDefault = core.NoDefault
+
+// NewSentry creates a Sentry and wires trappsec middleware onto the given http.Server.
+func NewSentry(server *http.Server, service, environment string) *Sentry {
+	s := core.NewSentry(service, environment)
+	newNetHTTPServerIntegration(s, server)
+	return s
 }
 
-func newNetHTTPServerIntegration(ts *Sentry, server *http.Server) *netHTTPServerIntegration {
+// WrapHTTPHandler wraps an existing http.Handler with trappsec middleware.
+// Use this when you manage the handler yourself rather than using http.Server.
+func WrapHTTPHandler(s *Sentry, next http.Handler) http.Handler {
+	in := &netHTTPServerIntegration{ts: s}
+	return in.wrap(next)
+}
+
+type netHTTPServerIntegration struct {
+	ts       *core.Sentry
+	once     sync.Once
+	trapIdx  map[string]core.TrapConfig
+	watchIdx map[string]core.WatchConfig
+}
+
+func newNetHTTPServerIntegration(ts *core.Sentry, server *http.Server) *netHTTPServerIntegration {
 	in := &netHTTPServerIntegration{ts: ts}
 
 	if ts.Identity.IP == nil {
@@ -68,11 +105,11 @@ func newNetHTTPServerIntegration(ts *Sentry, server *http.Server) *netHTTPServer
 
 func (in *netHTTPServerIntegration) buildIndexes() {
 	in.once.Do(func() {
-		in.trapIdx = make(map[string]TrapConfig)
+		in.trapIdx = make(map[string]core.TrapConfig)
 		for _, t := range in.ts.Traps() {
 			in.trapIdx[t.Path] = t
 		}
-		in.watchIdx = make(map[string]WatchConfig)
+		in.watchIdx = make(map[string]core.WatchConfig)
 		for _, w := range in.ts.Watches() {
 			in.watchIdx[w.Path] = w
 		}
@@ -86,8 +123,8 @@ func (in *netHTTPServerIntegration) wrap(next http.Handler) http.Handler {
 		path := r.URL.Path
 		method := strings.ToUpper(r.Method)
 
-		if trap, ok := in.trapIdx[path]; ok && methodAllowed(method, trap.Methods) {
-			body, cfg := in.ts.triggerTrapEvent(r, trap)
+		if trap, ok := in.trapIdx[path]; ok && core.MethodAllowed(method, trap.Methods) {
+			body, cfg := in.ts.TriggerTrapEvent(r, trap)
 			if cfg.MIMEType != "" {
 				w.Header().Set("Content-Type", cfg.MIMEType)
 			}
@@ -102,49 +139,48 @@ func (in *netHTTPServerIntegration) wrap(next http.Handler) http.Handler {
 		}
 
 		if watch, ok := in.watchIdx[watchPath]; ok {
-			found := make([]FoundField, 0)
+			found := make([]core.FoundField, 0)
 
 			if len(watch.QueryFields) > 0 {
-				qData := queryToMap(r.URL.Query())
-				sanitized, f := in.ts.detectHoneyFields(qData, watch.QueryFields, r)
+				qData := core.QueryToMap(r.URL.Query())
+				sanitized, f := in.ts.DetectHoneyFields(qData, watch.QueryFields, r)
 				if len(f) > 0 {
 					for i := range f {
 						f[i].Type = "query"
 					}
 					found = append(found, f...)
-					r.URL.RawQuery = mapToQuery(sanitized)
+					r.URL.RawQuery = core.MapToQuery(sanitized)
 				}
 			}
 
 			if len(watch.BodyFields) > 0 {
 				contentType := r.Header.Get("Content-Type")
-				bodyBytes := readBody(r)
+				bodyBytes := core.ReadBody(r)
 				if len(bodyBytes) > 0 {
 					if strings.Contains(contentType, "application/json") {
 						var data map[string]any
 						if err := json.Unmarshal(bodyBytes, &data); err == nil {
-							sanitized, f := in.ts.detectHoneyFields(data, watch.BodyFields, r)
+							sanitized, f := in.ts.DetectHoneyFields(data, watch.BodyFields, r)
 							if len(f) > 0 {
 								for i := range f {
 									f[i].Type = "body"
 								}
 								found = append(found, f...)
 								newBody, _ := json.Marshal(sanitized)
-								resetBody(r, newBody)
+								core.ResetBody(r, newBody)
 							}
 						}
 					} else if strings.Contains(contentType, "application/x-www-form-urlencoded") {
 						vals, err := url.ParseQuery(string(bodyBytes))
 						if err == nil {
-							form := queryToMap(vals)
-							sanitized, f := in.ts.detectHoneyFields(form, watch.BodyFields, r)
+							form := core.QueryToMap(vals)
+							sanitized, f := in.ts.DetectHoneyFields(form, watch.BodyFields, r)
 							if len(f) > 0 {
 								for i := range f {
 									f[i].Type = "body"
 								}
 								found = append(found, f...)
-								newBody := mapToQuery(sanitized)
-								resetBody(r, []byte(newBody))
+								core.ResetBody(r, []byte(core.MapToQuery(sanitized)))
 							}
 						}
 					}
@@ -152,89 +188,10 @@ func (in *netHTTPServerIntegration) wrap(next http.Handler) http.Handler {
 			}
 
 			if len(found) > 0 {
-				in.ts.triggerWatchEvent(r, found)
+				in.ts.TriggerWatchEvent(r, found)
 			}
 		}
 
 		next.ServeHTTP(w, r)
 	})
-}
-
-func methodAllowed(method string, allowed []string) bool {
-	for _, m := range allowed {
-		if strings.EqualFold(method, m) {
-			return true
-		}
-	}
-	return false
-}
-
-func queryToMap(vals url.Values) map[string]any {
-	out := map[string]any{}
-	for k, v := range vals {
-		if len(v) == 1 {
-			out[k] = v[0]
-		} else {
-			arr := make([]any, 0, len(v))
-			for _, item := range v {
-				arr = append(arr, item)
-			}
-			out[k] = arr
-		}
-	}
-	return out
-}
-
-func mapToQuery(data map[string]any) string {
-	vals := url.Values{}
-	for k, v := range data {
-		switch vv := v.(type) {
-		case []any:
-			for _, i := range vv {
-				vals.Add(k, toString(i))
-			}
-		case []string:
-			for _, i := range vv {
-				vals.Add(k, i)
-			}
-		default:
-			vals.Set(k, toString(vv))
-		}
-	}
-	return vals.Encode()
-}
-
-func readBody(r *http.Request) []byte {
-	if r.Body == nil {
-		return nil
-	}
-	data, _ := io.ReadAll(r.Body)
-	resetBody(r, data)
-	return data
-}
-
-func resetBody(r *http.Request, data []byte) {
-	r.Body = io.NopCloser(bytes.NewReader(data))
-	r.ContentLength = int64(len(data))
-}
-
-func toString(v any) string {
-	switch t := v.(type) {
-	case string:
-		return t
-	case int:
-		return fmt.Sprintf("%d", t)
-	case int64:
-		return fmt.Sprintf("%d", t)
-	case float64:
-		return fmt.Sprintf("%v", t)
-	case bool:
-		if t {
-			return "true"
-		}
-		return "false"
-	default:
-		b, _ := json.Marshal(v)
-		return string(b)
-	}
 }
