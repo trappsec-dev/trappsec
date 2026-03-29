@@ -99,7 +99,7 @@ func (in *ginIntegration) middleware() gin.HandlerFunc {
 			}
 
 			if len(watch.BodyFields) > 0 {
-				bodyBytes, _ := c.GetRawData()
+				bodyBytes := readBody(c.Request)
 				contentType := c.GetHeader("Content-Type")
 				if len(bodyBytes) > 0 {
 					if strings.Contains(contentType, "application/json") {
