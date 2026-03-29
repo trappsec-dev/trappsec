@@ -162,3 +162,26 @@ All handler `.emit()` calls must be wrapped in try/catch. Failures must be logge
 **Reference:**
 - Both implementations wrap `h.emit(trigger_ctx)` in try/catch with `logger.error` on failure
 - No handler failure affects the request response
+
+---
+
+## R13: Trap and watch lookups must be O(1) per request
+
+The integration must maintain a hash map (dict/object/map) indexed by route pattern for both traps and watches. Per-request lookup must be a single key access — never a linear scan through all configured traps or watches.
+
+The index must be built exactly once — at startup or on the first request via a one-time initializer (e.g., `sync.Once`). Trap and watch configuration is immutable after the server starts listening; no versioning, cache invalidation, or locking is needed for lookups.
+
+**Reference:**
+- Python FastAPI/Flask: `watch_map = dict()` built once in `setup_watches()`, looked up via `watch_map[route.path]`
+- Node.js Express/NestJS: `watchMap = {}` built once in `setup_watches()`, looked up via `watchMap[routePath]`
+
+**What to avoid:**
+```python
+# Wrong — O(n) scan on every request
+for watch in self.watches:
+    if watch.path == request.path:
+        ...
+
+# Correct — O(1) map lookup
+watch = watch_map.get(request.path)
+```
