@@ -15,8 +15,8 @@ import (
 type netHTTPServerIntegration struct {
 	ts       *Sentry
 	once     sync.Once
-	trapIdx  map[string][]TrapConfig
-	watchIdx map[string][]WatchConfig
+	trapIdx  map[string]TrapConfig
+	watchIdx map[string]WatchConfig
 }
 
 func newNetHTTPServerIntegration(ts *Sentry, server *http.Server) *netHTTPServerIntegration {
@@ -68,42 +68,40 @@ func newNetHTTPServerIntegration(ts *Sentry, server *http.Server) *netHTTPServer
 
 func (in *netHTTPServerIntegration) buildIndexes() {
 	in.once.Do(func() {
-		in.trapIdx = make(map[string][]TrapConfig)
+		in.trapIdx = make(map[string]TrapConfig)
 		for _, t := range in.ts.Traps() {
-			in.trapIdx[t.Path] = append(in.trapIdx[t.Path], t)
+			in.trapIdx[t.Path] = t
 		}
-		in.watchIdx = make(map[string][]WatchConfig)
+		in.watchIdx = make(map[string]WatchConfig)
 		for _, w := range in.ts.Watches() {
-			in.watchIdx[w.Path] = append(in.watchIdx[w.Path], w)
+			in.watchIdx[w.Path] = w
 		}
 	})
 }
 
 func (in *netHTTPServerIntegration) wrap(next http.Handler) http.Handler {
+	mux, _ := next.(*http.ServeMux)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		in.buildIndexes()
-		// r.Pattern is set by http.ServeMux (Go 1.22+) when used via WrapHTTPHandler.
-		// When wrapping at the server level, routing hasn't occurred yet so r.Pattern
-		// is empty; fall back to the raw URL path in that case.
-		path := r.Pattern
-		if path == "" {
-			path = r.URL.Path
-		}
+		path := r.URL.Path
 		method := strings.ToUpper(r.Method)
 
-		for _, trap := range in.trapIdx[path] {
-			if methodAllowed(method, trap.Methods) {
-				body, cfg := in.ts.triggerTrapEvent(r, trap)
-				if cfg.MIMEType != "" {
-					w.Header().Set("Content-Type", cfg.MIMEType)
-				}
-				w.WriteHeader(cfg.StatusCode)
-				_, _ = w.Write(body)
-				return
+		if trap, ok := in.trapIdx[path]; ok && methodAllowed(method, trap.Methods) {
+			body, cfg := in.ts.triggerTrapEvent(r, trap)
+			if cfg.MIMEType != "" {
+				w.Header().Set("Content-Type", cfg.MIMEType)
 			}
+			w.WriteHeader(cfg.StatusCode)
+			_, _ = w.Write(body)
+			return
 		}
 
-		for _, watch := range in.watchIdx[path] {
+		watchPath := path
+		if mux != nil {
+			_, watchPath = mux.Handler(r)
+		}
+
+		if watch, ok := in.watchIdx[watchPath]; ok {
 			found := make([]FoundField, 0)
 
 			if len(watch.QueryFields) > 0 {

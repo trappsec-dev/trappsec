@@ -13,8 +13,8 @@ import (
 type ginIntegration struct {
 	ts       *Sentry
 	once     sync.Once
-	trapIdx  map[string][]TrapConfig
-	watchIdx map[string][]WatchConfig
+	trapIdx  map[string]TrapConfig
+	watchIdx map[string]WatchConfig
 }
 
 func newGinIntegration(ts *Sentry, app *gin.Engine) *ginIntegration {
@@ -54,13 +54,13 @@ func newGinIntegration(ts *Sentry, app *gin.Engine) *ginIntegration {
 
 func (in *ginIntegration) buildIndexes() {
 	in.once.Do(func() {
-		in.trapIdx = make(map[string][]TrapConfig)
+		in.trapIdx = make(map[string]TrapConfig)
 		for _, t := range in.ts.Traps() {
-			in.trapIdx[t.Path] = append(in.trapIdx[t.Path], t)
+			in.trapIdx[t.Path] = t
 		}
-		in.watchIdx = make(map[string][]WatchConfig)
+		in.watchIdx = make(map[string]WatchConfig)
 		for _, w := range in.ts.Watches() {
-			in.watchIdx[w.Path] = append(in.watchIdx[w.Path], w)
+			in.watchIdx[w.Path] = w
 		}
 	})
 }
@@ -74,16 +74,14 @@ func (in *ginIntegration) middleware() gin.HandlerFunc {
 		}
 		method := c.Request.Method
 
-		for _, trap := range in.trapIdx[path] {
-			if methodAllowed(method, trap.Methods) {
-				body, cfg := in.ts.triggerTrapEvent(c, trap)
-				c.Data(cfg.StatusCode, cfg.MIMEType, body)
-				c.Abort()
-				return
-			}
+		if trap, ok := in.trapIdx[path]; ok && methodAllowed(method, trap.Methods) {
+			body, cfg := in.ts.triggerTrapEvent(c, trap)
+			c.Data(cfg.StatusCode, cfg.MIMEType, body)
+			c.Abort()
+			return
 		}
 
-		for _, watch := range in.watchIdx[path] {
+		if watch, ok := in.watchIdx[path]; ok {
 			found := make([]FoundField, 0)
 
 			if len(watch.QueryFields) > 0 {
