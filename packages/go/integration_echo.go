@@ -5,12 +5,16 @@ import (
 	"io"
 	"net/url"
 	"strings"
+	"sync"
 
 	"github.com/labstack/echo/v4"
 )
 
 type echoIntegration struct {
-	ts *Sentry
+	ts       *Sentry
+	once     sync.Once
+	trapIdx  map[string][]TrapConfig
+	watchIdx map[string][]WatchConfig
 }
 
 func newEchoIntegration(ts *Sentry, app *echo.Echo) *echoIntegration {
@@ -48,16 +52,30 @@ func newEchoIntegration(ts *Sentry, app *echo.Echo) *echoIntegration {
 	return in
 }
 
+func (in *echoIntegration) buildIndexes() {
+	in.once.Do(func() {
+		in.trapIdx = make(map[string][]TrapConfig)
+		for _, t := range in.ts.Traps() {
+			in.trapIdx[t.Path] = append(in.trapIdx[t.Path], t)
+		}
+		in.watchIdx = make(map[string][]WatchConfig)
+		for _, w := range in.ts.Watches() {
+			in.watchIdx[w.Path] = append(in.watchIdx[w.Path], w)
+		}
+	})
+}
+
 func (in *echoIntegration) middleware() echo.MiddlewareFunc {
 	return func(next echo.HandlerFunc) echo.HandlerFunc {
 		return func(c echo.Context) error {
+			in.buildIndexes()
 			path := c.Path()
 			if path == "" {
 				path = c.Request().URL.Path
 			}
 			method := c.Request().Method
 
-			for _, trap := range in.ts.trapsForPath(path) {
+			for _, trap := range in.trapIdx[path] {
 				if methodAllowed(method, trap.Methods) {
 					body, cfg := in.ts.triggerTrapEvent(c, trap)
 					if cfg.MIMEType == "" {
@@ -67,7 +85,7 @@ func (in *echoIntegration) middleware() echo.MiddlewareFunc {
 				}
 			}
 
-			for _, watch := range in.ts.watchesForPath(path) {
+			for _, watch := range in.watchIdx[path] {
 				found := make([]FoundField, 0)
 
 				if len(watch.QueryFields) > 0 {

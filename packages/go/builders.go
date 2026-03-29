@@ -69,14 +69,12 @@ func (b *TrapBuilder) Methods(methods ...string) *TrapBuilder {
 	}
 	if len(cleaned) > 0 {
 		b.config.Methods = cleaned
-		b.ts.touchConfig()
 	}
 	return b
 }
 
 func (b *TrapBuilder) Intent(intent string) *TrapBuilder {
 	b.config.Intent = intent
-	b.ts.touchConfig()
 	return b
 }
 
@@ -110,7 +108,6 @@ func (b *TrapBuilder) applyResponse(key string, cfg ResponseConfig) {
 			panic("response_builder: template not found: " + cfg.Template)
 		}
 		*target = cloneTemplate(t)
-		b.ts.touchConfig()
 		return
 	}
 
@@ -123,7 +120,6 @@ func (b *TrapBuilder) applyResponse(key string, cfg ResponseConfig) {
 	if cfg.MIMEType != "" {
 		target.MIMEType = cfg.MIMEType
 	}
-	b.ts.touchConfig()
 }
 
 type WatchBuilder struct {
@@ -144,13 +140,11 @@ func newWatchBuilder(ts *Sentry, path string) *WatchBuilder {
 
 func (b *WatchBuilder) Query(name string, defaultValue any, intent string) *WatchBuilder {
 	b.config.QueryFields[name] = WatchFieldRule{Default: defaultValue, Intent: intent}
-	b.ts.touchConfig()
 	return b
 }
 
 func (b *WatchBuilder) Body(name string, defaultValue any, intent string) *WatchBuilder {
 	b.config.BodyFields[name] = WatchFieldRule{Default: defaultValue, Intent: intent}
-	b.ts.touchConfig()
 	return b
 }
 

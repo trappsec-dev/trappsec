@@ -9,10 +9,14 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 )
 
 type netHTTPServerIntegration struct {
-	ts *Sentry
+	ts       *Sentry
+	once     sync.Once
+	trapIdx  map[string][]TrapConfig
+	watchIdx map[string][]WatchConfig
 }
 
 func newNetHTTPServerIntegration(ts *Sentry, server *http.Server) *netHTTPServerIntegration {
@@ -62,8 +66,22 @@ func newNetHTTPServerIntegration(ts *Sentry, server *http.Server) *netHTTPServer
 	return in
 }
 
+func (in *netHTTPServerIntegration) buildIndexes() {
+	in.once.Do(func() {
+		in.trapIdx = make(map[string][]TrapConfig)
+		for _, t := range in.ts.Traps() {
+			in.trapIdx[t.Path] = append(in.trapIdx[t.Path], t)
+		}
+		in.watchIdx = make(map[string][]WatchConfig)
+		for _, w := range in.ts.Watches() {
+			in.watchIdx[w.Path] = append(in.watchIdx[w.Path], w)
+		}
+	})
+}
+
 func (in *netHTTPServerIntegration) wrap(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		in.buildIndexes()
 		// r.Pattern is set by http.ServeMux (Go 1.22+) when used via WrapHTTPHandler.
 		// When wrapping at the server level, routing hasn't occurred yet so r.Pattern
 		// is empty; fall back to the raw URL path in that case.
@@ -73,7 +91,7 @@ func (in *netHTTPServerIntegration) wrap(next http.Handler) http.Handler {
 		}
 		method := strings.ToUpper(r.Method)
 
-		for _, trap := range in.ts.trapsForPath(path) {
+		for _, trap := range in.trapIdx[path] {
 			if methodAllowed(method, trap.Methods) {
 				body, cfg := in.ts.triggerTrapEvent(r, trap)
 				if cfg.MIMEType != "" {
@@ -85,7 +103,7 @@ func (in *netHTTPServerIntegration) wrap(next http.Handler) http.Handler {
 			}
 		}
 
-		for _, watch := range in.ts.watchesForPath(path) {
+		for _, watch := range in.watchIdx[path] {
 			found := make([]FoundField, 0)
 
 			if len(watch.QueryFields) > 0 {

@@ -70,12 +70,6 @@ type Sentry struct {
 	watches          []*WatchBuilder
 	templates        map[string]ResponseTemplate
 	handlers         []EventHandler
-	configVersion    uint64
-	cachedTraps      []TrapConfig
-	cachedWatches    []WatchConfig
-	cachedTrapIndex  map[string][]TrapConfig
-	cachedWatchIndex map[string][]WatchConfig
-	cacheVersion     uint64
 
 	integration integration
 	mu          sync.RWMutex
@@ -111,14 +105,10 @@ func NewSentry(app any, service, environment string) *Sentry {
 				MIMEType:   "application/json",
 			},
 		},
-		traps:            []*TrapBuilder{},
-		watches:          []*WatchBuilder{},
-		templates:        map[string]ResponseTemplate{},
-		handlers:         []EventHandler{},
-		cachedTraps:      []TrapConfig{},
-		cachedWatches:    []WatchConfig{},
-		cachedTrapIndex:  map[string][]TrapConfig{},
-		cachedWatchIndex: map[string][]WatchConfig{},
+		traps:     []*TrapBuilder{},
+		watches:   []*WatchBuilder{},
+		templates: map[string]ResponseTemplate{},
+		handlers:  []EventHandler{},
 	}
 
 	s.handlers = append(s.handlers, &LogHandler{logger: s.logger})
@@ -168,7 +158,6 @@ func (s *Sentry) Trap(path string) *TrapBuilder {
 	defer s.mu.Unlock()
 	builder := newTrapBuilder(s, path)
 	s.traps = append(s.traps, builder)
-	s.touchConfigLocked()
 	return builder
 }
 
@@ -177,7 +166,6 @@ func (s *Sentry) Watch(path string) *WatchBuilder {
 	defer s.mu.Unlock()
 	builder := newWatchBuilder(s, path)
 	s.watches = append(s.watches, builder)
-	s.touchConfigLocked()
 	return builder
 }
 
@@ -223,11 +211,19 @@ func (s *Sentry) OverrideSourceIP(fn func(any) string) *Sentry {
 }
 
 func (s *Sentry) Traps() []TrapConfig {
-	return s.trapsSnapshot()
+	out := make([]TrapConfig, 0, len(s.traps))
+	for _, t := range s.traps {
+		out = append(out, t.Build())
+	}
+	return out
 }
 
 func (s *Sentry) Watches() []WatchConfig {
-	return s.watchesSnapshot()
+	out := make([]WatchConfig, 0, len(s.watches))
+	for _, w := range s.watches {
+		out = append(out, w.Build())
+	}
+	return out
 }
 
 func (s *Sentry) Trigger(req any, reason, intent string, metadata any) {
@@ -450,119 +446,6 @@ func deepCopyValue(v any) any {
 	default:
 		return v
 	}
-}
-
-func cloneWatchRules(src map[string]WatchFieldRule) map[string]WatchFieldRule {
-	out := make(map[string]WatchFieldRule, len(src))
-	for k, rule := range src {
-		out[k] = WatchFieldRule{
-			Default: deepCopyValue(rule.Default),
-			Intent:  rule.Intent,
-		}
-	}
-	return out
-}
-
-func cloneTrapConfig(src TrapConfig) TrapConfig {
-	methods := make([]string, len(src.Methods))
-	copy(methods, src.Methods)
-	return TrapConfig{
-		Path:                    src.Path,
-		Methods:                 methods,
-		Intent:                  src.Intent,
-		ResponseAuthenticated:   cloneTemplate(src.ResponseAuthenticated),
-		ResponseUnauthenticated: cloneTemplate(src.ResponseUnauthenticated),
-	}
-}
-
-func cloneWatchConfig(src WatchConfig) WatchConfig {
-	return WatchConfig{
-		Path:        src.Path,
-		QueryFields: cloneWatchRules(src.QueryFields),
-		BodyFields:  cloneWatchRules(src.BodyFields),
-	}
-}
-
-func cloneTrapSlice(src []TrapConfig) []TrapConfig {
-	out := make([]TrapConfig, len(src))
-	for i := range src {
-		out[i] = cloneTrapConfig(src[i])
-	}
-	return out
-}
-
-func cloneWatchSlice(src []WatchConfig) []WatchConfig {
-	out := make([]WatchConfig, len(src))
-	for i := range src {
-		out[i] = cloneWatchConfig(src[i])
-	}
-	return out
-}
-
-func (s *Sentry) touchConfig() {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.touchConfigLocked()
-}
-
-func (s *Sentry) touchConfigLocked() {
-	s.configVersion++
-}
-
-func (s *Sentry) rebuildConfigCacheLocked() {
-	if s.cacheVersion == s.configVersion {
-		return
-	}
-
-	traps := make([]TrapConfig, 0, len(s.traps))
-	trapIndex := make(map[string][]TrapConfig, len(s.traps))
-	for _, t := range s.traps {
-		cfg := cloneTrapConfig(t.Build())
-		traps = append(traps, cfg)
-		trapIndex[cfg.Path] = append(trapIndex[cfg.Path], cfg)
-	}
-
-	watches := make([]WatchConfig, 0, len(s.watches))
-	watchIndex := make(map[string][]WatchConfig, len(s.watches))
-	for _, w := range s.watches {
-		cfg := cloneWatchConfig(w.Build())
-		watches = append(watches, cfg)
-		watchIndex[cfg.Path] = append(watchIndex[cfg.Path], cfg)
-	}
-
-	s.cachedTraps = traps
-	s.cachedWatches = watches
-	s.cachedTrapIndex = trapIndex
-	s.cachedWatchIndex = watchIndex
-	s.cacheVersion = s.configVersion
-}
-
-func (s *Sentry) trapsSnapshot() []TrapConfig {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.rebuildConfigCacheLocked()
-	return cloneTrapSlice(s.cachedTraps)
-}
-
-func (s *Sentry) watchesSnapshot() []WatchConfig {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.rebuildConfigCacheLocked()
-	return cloneWatchSlice(s.cachedWatches)
-}
-
-func (s *Sentry) watchesForPath(path string) []WatchConfig {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.rebuildConfigCacheLocked()
-	return cloneWatchSlice(s.cachedWatchIndex[path])
-}
-
-func (s *Sentry) trapsForPath(path string) []TrapConfig {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.rebuildConfigCacheLocked()
-	return cloneTrapSlice(s.cachedTrapIndex[path])
 }
 
 func normalizePayload(mimeType string, body any) []byte {
