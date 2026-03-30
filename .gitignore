@@ -216,3 +216,6 @@ docs/_site/
 uv.lock
 package-lock.json
 GemFile.lock
+
+*.exe
+.claude/
