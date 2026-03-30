@@ -231,6 +231,10 @@ class Sentry {
         if (app.getHttpAdapter && app.useGlobalInterceptors) {
             const NestIntegration = require('./integrations/nestjs');
             this.integration = new NestIntegration(this, app);
+        // Koa
+        } else if (app.callback && Array.isArray(app.middleware) && app.use) {
+            const KoaIntegration = require('./integrations/koa');
+            this.integration = new KoaIntegration(this, app);
         // Fastify
         } else if (app.addHook && app.route && app.listen) {
             const FastifyIntegration = require('./integrations/fastify');
