@@ -1,17 +1,25 @@
 import io
 import json
+import threading
 from urllib.parse import parse_qs, urlencode
 
 from django.http import HttpResponse, QueryDict
 
 
 class DjangoIntegration:
+    _bootstrapped = False
+
     def __init__(self, ts, app):
+        if DjangoIntegration._bootstrapped:
+            raise RuntimeError("trappsec error: DjangoIntegration already bootstrapped.")
+        DjangoIntegration._bootstrapped = True
+
         self.ts = ts
         self.app = app
         self.trap_map = {}
         self.watch_map = {}
         self._initialized = False
+        self._init_lock = threading.Lock()
 
         if not self.ts.identity.ip:
             self.ts.identity.ip = lambda r: r.headers.get("x-real-ip", r.META.get("REMOTE_ADDR", "0.0.0.0"))
@@ -37,9 +45,11 @@ class DjangoIntegration:
 
         def wrapped_chain(request):
             if not self._initialized:
-                self.setup_traps()
-                self.setup_watches()
-                self._initialized = True
+                with self._init_lock:
+                    if not self._initialized:  # re-check: another thread may have finished while we waited
+                        self.setup_traps()
+                        self.setup_watches()
+                        self._initialized = True
 
             trap = self.trap_map.get(request.path)
             if trap and request.method in trap.get("methods", []):
@@ -107,6 +117,10 @@ class DjangoIntegration:
                     self.ts.logger.error("error reading body: %s", e)
 
             if new_body is not None:
+                # Mutates private WSGIRequest internals to replace body bytes and invalidate
+                # Django's cached parsed forms. Tested against Django 4.x–5.x.
+                # On upgrade: verify _body, _stream, _post, _files attribute names in
+                # django/core/handlers/wsgi.py and django/http/request.py.
                 request._body = new_body
                 request._stream = io.BytesIO(new_body)
                 request.META["CONTENT_LENGTH"] = str(len(new_body))
