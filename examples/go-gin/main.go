@@ -24,10 +24,10 @@ func main() {
 
 	r := gin.New()
 	r.Use(gin.Recovery())
-	ts := trappsec.NewSentry(r, "GoGinApp", "Development")
-	ts.SetDefaultUnauthenticated(401, gin.H{"error": "authentication required"}, "application/json")
+	app := trappsec.InstallSentry(r, "GoGinApp", "Development")
+	app.SetDefaultUnauthenticated(401, gin.H{"error": "authentication required"}, "application/json")
 
-	ts.IdentifyUser(func(req any) *trappsec.AuthContext {
+	app.IdentifyUser(func(req any) *trappsec.AuthContext {
 		c, ok := req.(*gin.Context)
 		if !ok {
 			return nil
@@ -43,7 +43,7 @@ func main() {
 		return &trappsec.AuthContext{User: uid, Role: role}
 	})
 
-	ts.OverrideSourceIP(func(req any) string {
+	app.OverrideSourceIP(func(req any) string {
 		if c, ok := req.(*gin.Context); ok {
 			if ip := c.GetHeader("x-real-ip"); ip != "" {
 				return ip
@@ -53,21 +53,21 @@ func main() {
 		return "0.0.0.0"
 	})
 
-	r.POST("/auth/register", func(c *gin.Context) {
+	app.POST("/auth/register", func(c *gin.Context) {
 		var payload registerPayload
 		_ = c.ShouldBind(&payload)
 		c.JSON(http.StatusOK, gin.H{"status": "registered", "email": payload.Email})
 	})
 
-	r.GET("/api/v2/profile", func(c *gin.Context) {
+	app.GET("/api/v2/profile", func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"name": c.GetHeader("x-user-id"), "is_admin": false})
 	})
 
-	r.POST("/api/v2/profile", func(c *gin.Context) {
+	app.POST("/api/v2/profile", func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"name": c.GetHeader("x-user-id"), "status": "updated"})
 	})
 
-	r.GET("/api/v2/orders", func(c *gin.Context) {
+	app.GET("/api/v2/orders", func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"orders": []gin.H{
 			{"id": "ord-123", "item": "Laptop", "amount": 1200},
 			{"id": "ord-124", "item": "Mouse", "amount": 45},
@@ -75,10 +75,10 @@ func main() {
 	})
 
 	frontendDir := filepath.Join("..", "lure-frontend")
-	r.GET("/", func(c *gin.Context) {
+	app.GET("/", func(c *gin.Context) {
 		c.File(filepath.Join(frontendDir, "index.html"))
 	})
-	r.NoRoute(func(c *gin.Context) {
+	app.NoRoute(func(c *gin.Context) {
 		path := c.Request.URL.Path
 		if len(path) > 0 && path[0] == '/' {
 			path = path[1:]
@@ -91,12 +91,12 @@ func main() {
 		c.File(target)
 	})
 
-	ts.Trap("/deployment/config").Methods("GET").Intent("Reconnaissance").Respond(trappsec.ResponseConfig{
+	app.Trap("/deployment/config").Methods("GET").Intent("Reconnaissance").Respond(trappsec.ResponseConfig{
 		Status: 200,
 		Body:   gin.H{"region": "us-east-1", "deployment_type": "production"},
 	})
 
-	ts.Trap("/deployment/metrics").Methods("GET").Intent("Reconnaissance").Respond(trappsec.ResponseConfig{
+	app.Trap("/deployment/metrics").Methods("GET").Intent("Reconnaissance").Respond(trappsec.ResponseConfig{
 		Status: 200,
 		Body: func(_ any) any {
 			return gin.H{
@@ -106,22 +106,22 @@ func main() {
 		},
 	})
 
-	ts.Template("fake_deprecated_api_response", 410, gin.H{"error": "Gone", "message": "API v1 has been deprecated"}, "application/json")
-	ts.Trap("/api/v1/orders").Methods("GET", "POST").Intent("Legacy API Probing").Respond(trappsec.ResponseConfig{Template: "fake_deprecated_api_response"})
-	ts.Trap("/api/v1/profile").Methods("GET", "POST").Intent("Legacy API Probing").Respond(trappsec.ResponseConfig{Template: "fake_deprecated_api_response"})
+	app.Template("fake_deprecated_api_response", 410, gin.H{"error": "Gone", "message": "API v1 has been deprecated"}, "application/json")
+	app.Trap("/api/v1/orders").Methods("GET", "POST").Intent("Legacy API Probing").Respond(trappsec.ResponseConfig{Template: "fake_deprecated_api_response"})
+	app.Trap("/api/v1/profile").Methods("GET", "POST").Intent("Legacy API Probing").Respond(trappsec.ResponseConfig{Template: "fake_deprecated_api_response"})
 
-	ts.Watch("/auth/register").Body("role", "user", "Privilege Escalation (role)").Body("credits", 0, "Credit Manipulation")
-	ts.Watch("/api/v2/profile").Body("is_admin", trappsec.NoDefault, "Privilege Escalation")
+	app.Watch("/auth/register").Body("role", "user", "Privilege Escalation (role)").Body("credits", 0, "Credit Manipulation")
+	app.Watch("/api/v2/profile").Body("is_admin", trappsec.NoDefault, "Privilege Escalation")
 
 	if *otelEnabled {
-		ts.AddOTEL()
+		app.AddOTEL()
 	}
 	if *webhookURL != "" {
-		ts.AddWebhook(*webhookURL, nil)
+		app.AddWebhook(*webhookURL, nil)
 	}
 
 	log.Println("Starting server on http://127.0.0.1:8000")
-	if err := r.Run("127.0.0.1:8000"); err != nil {
+	if err := app.Run("127.0.0.1:8000"); err != nil {
 		log.Fatal(err)
 	}
 }
