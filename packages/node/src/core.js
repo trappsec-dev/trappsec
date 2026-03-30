@@ -235,6 +235,10 @@ class Sentry {
         } else if (app.callback && Array.isArray(app.middleware) && app.use) {
             const KoaIntegration = require('./integrations/koa');
             this.integration = new KoaIntegration(this, app);
+        // Fastify
+        } else if (app.addHook && app.route && app.listen) {
+            const FastifyIntegration = require('./integrations/fastify');
+            this.integration = new FastifyIntegration(this, app);
         // Express
         } else if (app.use && app.get && app.post) {
             const ExpressIntegration = require('./integrations/express');
