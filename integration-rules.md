@@ -185,3 +185,23 @@ for watch in self.watches:
 # Correct — O(1) map lookup
 watch = watch_map.get(request.path)
 ```
+
+---
+
+## R14: Traps must be registered as real framework routes to resist fingerprinting
+
+Traps must be indistinguishable from real API endpoints during unauthenticated scanning.
+Intercepting trap paths in middleware rather than registering them as routes introduces
+observable behavioral differences that allow attackers to identify traps.
+
+**Reference implementations**:
+- FastAPI: `app.router.routes = new_routes + app.router.routes`, called from a patched
+  lifespan context at startup
+- Express: `app.get(path, handler)` per method, called from a patched `app.listen()`
+- Go Gin: `engine.Handle(method, path, handler)`, called from the `*App.Run*()` wrappers
+  returned by `InstallSentry`
+- Go Echo: `app.Add(method, path, handler)`, called from the `*App.Start*()` wrappers
+  returned by `InstallSentry`
+- Go net/http: `mux.HandleFunc("GET /path", handler)` using Go 1.22+ method-qualified
+  patterns, called from `*App.ListenAndServe*()` / `Serve*()` wrappers returned by
+  `InstallSentry`; `App.ServeHTTP` is shadowed to inject watch inspection before dispatch

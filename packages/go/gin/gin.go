@@ -3,11 +3,15 @@
 // Usage:
 //
 //	r := gin.New()
-//	ts := trappsecgin.NewSentry(r, "my-service", "production")
+//	app := trappsecgin.InstallSentry(r, "my-service", "production")
+//	app.GET("/real-route", handler)
+//	app.Trap("/fake-config").Methods("GET").Intent("Reconnaissance").Respond(...)
+//	app.Run(":8080")
 package trappsecgin
 
 import (
 	"encoding/json"
+	"net"
 	"net/url"
 	"strings"
 	"sync"
@@ -34,21 +38,68 @@ type (
 // NoDefault is re-exported from core so callers need only one import.
 var NoDefault = core.NoDefault
 
-// NewSentry creates a Sentry and wires trappsec middleware onto the given Gin engine.
-func NewSentry(app *gin.Engine, service, environment string) *Sentry {
+// App wraps a Gin engine and a trappsec Sentry. All Gin engine methods (GET, POST,
+// Use, Group, NoRoute, etc.) and all Sentry methods (Trap, Watch, IdentifyUser, etc.)
+// are promoted directly — no inner field access needed. The Run* methods are shadowed
+// to register trap routes transparently before the server starts accepting requests.
+type App struct {
+	*core.Sentry
+	*gin.Engine
+	integration *ginIntegration
+}
+
+// InstallSentry creates a Sentry, wires trappsec watch middleware onto the given Gin
+// engine, and returns an *App that embeds both. Use app.Run() (not r.Run()) to start
+// the server — this ensures trap routes are registered before the server accepts requests.
+func InstallSentry(engine *gin.Engine, service, environment string) *App {
 	s := core.NewSentry(service, environment)
-	Use(s, app)
-	return s
+	in := &ginIntegration{ts: s}
+
+	if s.Identity.IP == nil {
+		s.Identity.IP = func(req any) string {
+			if c, ok := req.(*gin.Context); ok {
+				return c.ClientIP()
+			}
+			return "0.0.0.0"
+		}
+	}
+
+	s.Request.Path = func(req any) string {
+		if c, ok := req.(*gin.Context); ok {
+			return c.Request.URL.Path
+		}
+		return ""
+	}
+	s.Request.UserAgent = func(req any) string {
+		if c, ok := req.(*gin.Context); ok {
+			return c.Request.UserAgent()
+		}
+		return ""
+	}
+	s.Request.Method = func(req any) string {
+		if c, ok := req.(*gin.Context); ok {
+			return c.Request.Method
+		}
+		return ""
+	}
+
+	s.SetBodyResolver(func(body any, req any) any {
+		if fn, ok := body.(func(*gin.Context) any); ok {
+			if c, ok := req.(*gin.Context); ok {
+				return fn(c)
+			}
+		}
+		return body
+	})
+
+	engine.Use(in.watchMiddleware())
+
+	return &App{Sentry: s, Engine: engine, integration: in}
 }
 
-type ginIntegration struct {
-	ts       *core.Sentry
-	once     sync.Once
-	trapIdx  map[string]core.TrapConfig
-	watchIdx map[string]core.WatchConfig
-}
-
-// Use wires up the trappsec middleware on the given Gin engine.
+// Use wires up the trappsec watch middleware on the given Gin engine.
+// Prefer InstallSentry, which also returns an *App whose Run* methods register
+// trap routes transparently before the server starts.
 func Use(s *core.Sentry, app *gin.Engine) {
 	in := &ginIntegration{ts: s}
 
@@ -89,36 +140,85 @@ func Use(s *core.Sentry, app *gin.Engine) {
 		return body
 	})
 
-	app.Use(in.middleware())
+	app.Use(in.watchMiddleware())
 }
 
-func (in *ginIntegration) buildIndexes() {
-	in.once.Do(func() {
-		in.trapIdx = make(map[string]core.TrapConfig)
-		for _, t := range in.ts.Traps() {
-			in.trapIdx[t.Path] = t
+type ginIntegration struct {
+	ts       *core.Sentry
+	once     sync.Once
+	watchIdx map[string]core.WatchConfig
+}
+
+// bootstrap registers all configured trap routes with the Gin engine and builds the
+// watch index. Called transparently from Run* methods. Safe to call multiple times —
+// sync.Once ensures only the first call has any effect.
+func (a *App) bootstrap() {
+	a.integration.once.Do(func() {
+		a.integration.watchIdx = make(map[string]core.WatchConfig)
+		for _, w := range a.Sentry.Watches() {
+			a.integration.watchIdx[w.Path] = w
 		}
-		in.watchIdx = make(map[string]core.WatchConfig)
-		for _, w := range in.ts.Watches() {
-			in.watchIdx[w.Path] = w
+		// Register each trap as a real Gin route for each declared method.
+		// By going through the engine's router, traps participate in the full middleware
+		// chain (CORS, auth, rate limiting, etc.) and inherit the engine's
+		// HandleMethodNotAllowed configuration — ensuring trap behavior is always
+		// consistent with real application routes.
+		for _, trap := range a.Sentry.Traps() {
+			t := trap
+			for _, method := range trap.Methods {
+				a.Engine.Handle(strings.ToUpper(method), trap.Path, ginTrapHandler(a.Sentry, t))
+			}
 		}
 	})
 }
 
-func (in *ginIntegration) middleware() gin.HandlerFunc {
+// ginTrapHandler returns a Gin handler for a trap route.
+func ginTrapHandler(ts *core.Sentry, trap core.TrapConfig) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		in.buildIndexes()
+		body, cfg := ts.TriggerTrapEvent(c, trap)
+		c.Data(cfg.StatusCode, cfg.MIMEType, body)
+	}
+}
+
+// Run calls bootstrap (registering trap routes) then starts the HTTP server.
+// Use this instead of engine.Run() to ensure traps are active before serving.
+func (a *App) Run(addr ...string) error {
+	a.bootstrap()
+	return a.Engine.Run(addr...)
+}
+
+// RunTLS calls bootstrap then starts an HTTPS server.
+func (a *App) RunTLS(addr, certFile, keyFile string) error {
+	a.bootstrap()
+	return a.Engine.RunTLS(addr, certFile, keyFile)
+}
+
+// RunUnix calls bootstrap then starts a Unix socket server.
+func (a *App) RunUnix(file string) error {
+	a.bootstrap()
+	return a.Engine.RunUnix(file)
+}
+
+// RunFd calls bootstrap then starts a server using a file descriptor.
+func (a *App) RunFd(fd int) error {
+	a.bootstrap()
+	return a.Engine.RunFd(fd)
+}
+
+// RunListener calls bootstrap then starts a server using a custom net.Listener.
+func (a *App) RunListener(listener net.Listener) error {
+	a.bootstrap()
+	return a.Engine.RunListener(listener)
+}
+
+// watchMiddleware returns a Gin middleware that inspects requests for honey fields
+// on watched routes. It runs after route matching so c.FullPath() carries the route
+// pattern (e.g. /users/:id) rather than the raw URL.
+func (in *ginIntegration) watchMiddleware() gin.HandlerFunc {
+	return func(c *gin.Context) {
 		path := c.FullPath()
 		if path == "" {
 			path = c.Request.URL.Path
-		}
-		method := c.Request.Method
-
-		if trap, ok := in.trapIdx[path]; ok && core.MethodAllowed(method, trap.Methods) {
-			body, cfg := in.ts.TriggerTrapEvent(c, trap)
-			c.Data(cfg.StatusCode, cfg.MIMEType, body)
-			c.Abort()
-			return
 		}
 
 		if watch, ok := in.watchIdx[path]; ok {

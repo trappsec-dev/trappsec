@@ -21,12 +21,9 @@ func main() {
 	flag.Parse()
 
 	mux := http.NewServeMux()
+	app := trappsec.InstallSentry(mux, "GoNetHTTPApp", "Development")
 
-	mux.HandleFunc("/auth/register", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost {
-			w.WriteHeader(http.StatusMethodNotAllowed)
-			return
-		}
+	app.HandleFunc("POST /auth/register", func(w http.ResponseWriter, r *http.Request) {
 
 		email := ""
 		ct := r.Header.Get("Content-Type")
@@ -45,23 +42,17 @@ func main() {
 		writeJSON(w, http.StatusOK, map[string]any{"status": "registered", "email": email})
 	})
 
-	mux.HandleFunc("/api/v2/profile", func(w http.ResponseWriter, r *http.Request) {
+	app.HandleFunc("GET /api/v2/profile", func(w http.ResponseWriter, r *http.Request) {
 		name := r.Header.Get("x-user-id")
-		switch r.Method {
-		case http.MethodGet:
-			writeJSON(w, http.StatusOK, map[string]any{"name": name, "is_admin": false})
-		case http.MethodPost:
-			writeJSON(w, http.StatusOK, map[string]any{"name": name, "status": "updated"})
-		default:
-			w.WriteHeader(http.StatusMethodNotAllowed)
-		}
+		writeJSON(w, http.StatusOK, map[string]any{"name": name, "is_admin": false})
 	})
 
-	mux.HandleFunc("/api/v2/orders", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodGet {
-			w.WriteHeader(http.StatusMethodNotAllowed)
-			return
-		}
+	app.HandleFunc("POST /api/v2/profile", func(w http.ResponseWriter, r *http.Request) {
+		name := r.Header.Get("x-user-id")
+		writeJSON(w, http.StatusOK, map[string]any{"name": name, "status": "updated"})
+	})
+
+	app.HandleFunc("GET /api/v2/orders", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{"orders": []map[string]any{
 			{"id": "ord-123", "item": "Laptop", "amount": 1200},
 			{"id": "ord-124", "item": "Mouse", "amount": 45},
@@ -69,7 +60,7 @@ func main() {
 	})
 
 	frontendDir := filepath.Join("..", "lure-frontend")
-	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+	app.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasPrefix(r.URL.Path, "/api/") || strings.HasPrefix(r.URL.Path, "/auth/") || strings.HasPrefix(r.URL.Path, "/deployment/") {
 			w.WriteHeader(http.StatusNotFound)
 			return
@@ -97,12 +88,9 @@ func main() {
 		_, _ = io.Copy(w, f)
 	})
 
-	server := &http.Server{Addr: ":8000", Handler: mux}
-	ts := trappsec.NewSentry(server, "GoNetHTTPApp", "Development")
+	app.SetDefaultUnauthenticated(401, map[string]any{"error": "authentication required"}, "application/json")
 
-	ts.SetDefaultUnauthenticated(401, map[string]any{"error": "authentication required"}, "application/json")
-
-	ts.IdentifyUser(func(req any) *trappsec.AuthContext {
+	app.IdentifyUser(func(req any) *trappsec.AuthContext {
 		r, ok := req.(*http.Request)
 		if !ok || r == nil {
 			return nil
@@ -118,7 +106,7 @@ func main() {
 		return &trappsec.AuthContext{User: uid, Role: role}
 	})
 
-	ts.OverrideSourceIP(func(req any) string {
+	app.OverrideSourceIP(func(req any) string {
 		r, ok := req.(*http.Request)
 		if !ok || r == nil {
 			return "0.0.0.0"
@@ -130,12 +118,12 @@ func main() {
 		return r.RemoteAddr
 	})
 
-	ts.Trap("/deployment/config").Methods("GET").Intent("Reconnaissance").Respond(trappsec.ResponseConfig{
+	app.Trap("/deployment/config").Methods("GET").Intent("Reconnaissance").Respond(trappsec.ResponseConfig{
 		Status: 200,
 		Body:   map[string]any{"region": "us-east-1", "deployment_type": "production"},
 	})
 
-	ts.Trap("/deployment/metrics").Methods("GET").Intent("Reconnaissance").Respond(trappsec.ResponseConfig{
+	app.Trap("/deployment/metrics").Methods("GET").Intent("Reconnaissance").Respond(trappsec.ResponseConfig{
 		Status: 200,
 		Body: func(_ any) any {
 			return map[string]any{
@@ -145,25 +133,25 @@ func main() {
 		},
 	})
 
-	ts.Template("fake_deprecated_api_response", 410, map[string]any{
+	app.Template("fake_deprecated_api_response", 410, map[string]any{
 		"error": "Gone", "message": "API v1 has been deprecated",
 	}, "application/json")
 
-	ts.Trap("/api/v1/orders").Methods("GET", "POST").Intent("Legacy API Probing").Respond(trappsec.ResponseConfig{Template: "fake_deprecated_api_response"})
-	ts.Trap("/api/v1/profile").Methods("GET", "POST").Intent("Legacy API Probing").Respond(trappsec.ResponseConfig{Template: "fake_deprecated_api_response"})
+	app.Trap("/api/v1/orders").Methods("GET", "POST").Intent("Legacy API Probing").Respond(trappsec.ResponseConfig{Template: "fake_deprecated_api_response"})
+	app.Trap("/api/v1/profile").Methods("GET", "POST").Intent("Legacy API Probing").Respond(trappsec.ResponseConfig{Template: "fake_deprecated_api_response"})
 
-	ts.Watch("/auth/register").Body("role", "user", "Privilege Escalation (role)").Body("credits", 0, "Credit Manipulation")
-	ts.Watch("/api/v2/profile").Body("is_admin", trappsec.NoDefault, "Privilege Escalation")
+	app.Watch("/auth/register").Body("role", "user", "Privilege Escalation (role)").Body("credits", 0, "Credit Manipulation")
+	app.Watch("/api/v2/profile").Body("is_admin", trappsec.NoDefault, "Privilege Escalation")
 
 	if *otelFlag {
-		ts.AddOTEL()
+		app.AddOTEL()
 	}
 	if *webhook != "" {
-		ts.AddWebhook(*webhook, nil)
+		app.AddWebhook(*webhook, nil)
 	}
 
 	log.Println("Starting server on http://127.0.0.1:8000")
-	if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+	if err := app.ListenAndServe("127.0.0.1:8000"); err != nil && err != http.ErrServerClosed {
 		log.Fatal(err)
 	}
 }

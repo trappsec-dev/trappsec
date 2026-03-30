@@ -1,9 +1,10 @@
+import importlib
 import io
 import json
 import threading
 from urllib.parse import parse_qs, urlencode
 
-from django.http import HttpResponse, QueryDict
+from django.http import HttpResponse, HttpResponseNotAllowed, QueryDict
 from django.urls import resolve, Resolver404
 
 
@@ -17,7 +18,6 @@ class DjangoIntegration:
 
         self.ts = ts
         self.app = app
-        self.trap_map = {}
         self.watch_map = {}
         self._initialized = False
         self._init_lock = threading.Lock()
@@ -31,11 +31,40 @@ class DjangoIntegration:
 
         self._patch_middleware_chain()
 
-    def setup_traps(self):
-        self.trap_map = {t["path"]: t for t in self.ts.traps}
-
     def setup_watches(self):
         self.watch_map = {w["path"]: w for w in self.ts.watches}
+
+    def _register_traps(self):
+        from django.conf import settings
+        from django.urls import path, clear_url_caches
+
+        urlconf = importlib.import_module(settings.ROOT_URLCONF)
+
+        trap_patterns = []
+        for trap in self.ts.traps:
+            def make_view(trap_config):
+                def trap_view(request):
+                    if request.method not in trap_config["methods"]:
+                        return HttpResponseNotAllowed(trap_config["methods"])
+                    body, cfg = self.ts._trigger_trap_event(request, trap_config)
+                    if isinstance(body, str):
+                        body = body.encode("utf-8")
+                    return HttpResponse(
+                        body,
+                        status=cfg["status_code"],
+                        content_type=cfg["mime_type"],
+                    )
+                trap_view.__name__ = "trappsec_trap"
+                return trap_view
+            trap_patterns.append(
+                path(trap["path"].lstrip("/"), make_view(trap))
+            )
+
+        # Prepend so traps take priority over application routes
+        urlconf.urlpatterns = trap_patterns + urlconf.urlpatterns
+
+        # Invalidate Django's cached URL resolver so the new patterns are picked up
+        clear_url_caches()
 
     def _patch_middleware_chain(self):
         # Django builds the request middleware chain lazily.
@@ -48,24 +77,14 @@ class DjangoIntegration:
             if not self._initialized:
                 with self._init_lock:
                     if not self._initialized:  # re-check: another thread may have finished while we waited
-                        self.setup_traps()
                         self.setup_watches()
+                        self._register_traps()
                         self._initialized = True
 
             try:
                 route_pattern = "/" + resolve(request.path).route
             except Resolver404:
                 route_pattern = request.path
-
-            trap = self.trap_map.get(route_pattern) or self.trap_map.get(request.path)
-            if trap and request.method in trap.get("methods", []):
-                response_body, response_config = self.ts._trigger_trap_event(request, trap)
-                body = response_body.encode("utf-8") if isinstance(response_body, str) else response_body
-                return HttpResponse(
-                    body,
-                    status=response_config["status_code"],
-                    content_type=response_config["mime_type"],
-                )
 
             self._watch_request(request, route_pattern)
             return original_chain(request)
