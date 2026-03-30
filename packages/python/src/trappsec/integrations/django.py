@@ -4,6 +4,7 @@ import threading
 from urllib.parse import parse_qs, urlencode
 
 from django.http import HttpResponse, QueryDict
+from django.urls import resolve, Resolver404
 
 
 class DjangoIntegration:
@@ -51,7 +52,12 @@ class DjangoIntegration:
                         self.setup_watches()
                         self._initialized = True
 
-            trap = self.trap_map.get(request.path)
+            try:
+                route_pattern = "/" + resolve(request.path).route
+            except Resolver404:
+                route_pattern = request.path
+
+            trap = self.trap_map.get(route_pattern) or self.trap_map.get(request.path)
             if trap and request.method in trap.get("methods", []):
                 response_body, response_config = self.ts._trigger_trap_event(request, trap)
                 body = response_body.encode("utf-8") if isinstance(response_body, str) else response_body
@@ -61,13 +67,13 @@ class DjangoIntegration:
                     content_type=response_config["mime_type"],
                 )
 
-            self._watch_request(request)
+            self._watch_request(request, route_pattern)
             return original_chain(request)
 
         self.app._middleware_chain = wrapped_chain
 
-    def _watch_request(self, request):
-        watch = self.watch_map.get(request.path)
+    def _watch_request(self, request, route_pattern):
+        watch = self.watch_map.get(route_pattern)
         if not watch:
             return
 
