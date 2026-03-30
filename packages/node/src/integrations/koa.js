@@ -36,32 +36,68 @@ class KoaIntegration {
             trapMap[this._normalizePath(trap.path)] = trap;
         }
 
-        // Insert at the beginning so traps/watches run before application handlers.
+        // R14: Register traps as real routes via @koa/router if available.
+        // @koa/router attaches a .router back-reference on the middleware returned by router.routes().
+        const routerMiddleware = this.app.middleware.find((m) => m.router);
+        const router = routerMiddleware?.router;
+
+        if (router) {
+            for (const trap of this.ts.traps) {
+                for (const method of trap.methods) {
+                    router[method.toLowerCase()](trap.path, async (ctx) => {
+                        try {
+                            const { response_body, response_config } = this.ts._trigger_trap_event(ctx, trap);
+                            ctx.status = response_config.status_code;
+                            if (response_config.mime_type) {
+                                ctx.type = response_config.mime_type;
+                            }
+                            ctx.body = response_body;
+                        } catch (e) {
+                            this.ts.logger.error("Trappsec error in Koa trap handler:", e);
+                            ctx.status = 500;
+                            ctx.type = "application/json";
+                            ctx.body = JSON.stringify({ error: "internal error" });
+                        }
+                    });
+                }
+            }
+        } else {
+            this.ts.logger.warn(
+                "Trappsec: could not find a @koa/router instance — traps will be handled via middleware (R14 not satisfied)."
+            );
+        }
+
+        // Insert at the beginning so watches run before application handlers.
+        // When no router was found, trap interception is also handled here as a fallback.
         this.app.middleware.unshift(async (ctx, next) => {
             const path = this._normalizePath(ctx.path);
             const method = (ctx.method || "").toUpperCase();
 
-            const trap = trapMap[path];
-            if (trap && trap.methods.includes(method)) {
-                try {
-                    const { response_body, response_config } = this.ts._trigger_trap_event(ctx, trap);
-                    ctx.status = response_config.status_code;
-                    if (response_config.mime_type) {
-                        ctx.type = response_config.mime_type;
+            if (!router) {
+                const trap = trapMap[path];
+                if (trap && trap.methods.includes(method)) {
+                    try {
+                        const { response_body, response_config } = this.ts._trigger_trap_event(ctx, trap);
+                        ctx.status = response_config.status_code;
+                        if (response_config.mime_type) {
+                            ctx.type = response_config.mime_type;
+                        }
+                        ctx.body = response_body;
+                    } catch (e) {
+                        this.ts.logger.error("Trappsec error in Koa trap handler:", e);
+                        ctx.status = 500;
+                        ctx.type = "application/json";
+                        ctx.body = JSON.stringify({ error: "internal error" });
                     }
-                    ctx.body = response_body;
-                } catch (e) {
-                    this.ts.logger.error("Trappsec error in Koa trap handler:", e);
-                    ctx.status = 500;
-                    ctx.type = "application/json";
-                    ctx.body = JSON.stringify({ error: "internal error" });
+                    return;
                 }
-                return;
             }
 
             await next();
 
-            const watch = watchMap[path];
+            // R1: Use the resolved route pattern (set by @koa/router after routing)
+            // rather than the raw request URL, so parameterized watches match correctly.
+            const watch = watchMap[this._normalizePath(ctx._matchedRoute || ctx.routerPath || path)];
             if (watch) {
                 try {
                     this._inspect(ctx, watch);
