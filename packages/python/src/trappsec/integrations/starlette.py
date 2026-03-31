@@ -16,7 +16,6 @@ class StarletteIntegration:
         self.ts.request.user_agent = lambda r: r.headers.get("user-agent", "unknown")
         self.ts.request.method = lambda r: r.method
 
-        self.setup_middleware()
         self._patch_startup()
 
     def inject_traps(self):
@@ -51,56 +50,104 @@ class StarletteIntegration:
     def setup_watches(self):
         self.watch_map = {w["path"]: w for w in self.ts.watches}
 
-    def setup_middleware(self):
-        from starlette.middleware.base import BaseHTTPMiddleware
+        if not self.watch_map:
+            return
 
-        integration = self
+        self._wrap_routes(self.app.router.routes, prefix="")
 
-        class TrappSecWatchMiddleware(BaseHTTPMiddleware):
-            async def dispatch(self, request, call_next):
-                route = request.scope.get("route")
-                if route is not None:
-                    watch = integration.watch_map.get(getattr(route, "path", None))
-                    if watch:
-                        found_fields = []
-                        query_fields = watch["query_fields"]
-                        body_fields = watch["body_fields"]
+    def _wrap_routes(self, routes, prefix):
+        from starlette.routing import Route, Router, Mount
+        from starlette.routing import request_response
 
-                        if query_fields:
-                            qs = request.scope.get("query_string", b"").decode("utf-8")
-                            if qs:
-                                q_dict = parse_qs(qs)
-                                q_dict, mod = integration.ts._detect_honey_fields(q_dict, query_fields, request)
-                                if mod:
-                                    found_fields.extend(mod)
-                                    request.scope["query_string"] = urlencode(q_dict, doseq=True).encode("utf-8")
-                                    if hasattr(request, "_query_params"):
-                                        del request._query_params
+        for route in routes:
+            if isinstance(route, Route):
+                full_path = prefix + route.path
+                watch = self.watch_map.get(full_path)
+                if watch is not None:
+                    route.endpoint = self._make_watch_endpoint(route.endpoint, watch)
+                    # Rebuild route.app so it wraps the new endpoint; Starlette sets
+                    # route.app = request_response(endpoint) at __init__ time and does
+                    # not update it automatically when endpoint is replaced.
+                    route.app = request_response(route.endpoint)
+            elif isinstance(route, Mount):
+                inner = route.app
+                if isinstance(inner, Router):
+                    # Mount.path strips the trailing slash in Starlette, and inner
+                    # Route paths always begin with /, so concatenation produces the
+                    # correct full path (e.g. "/api" + "/users/{id}" → "/api/users/{id}").
+                    mount_prefix = prefix + (route.path or "")
+                    self._wrap_routes(inner.routes, mount_prefix)
+                # Non-Router mounts (e.g. StaticFiles) wrap an opaque ASGI app —
+                # recursion is not possible; any watches under them will be missed.
+                # Configure watches only on routes served by a Starlette Router.
 
-                        if body_fields:
-                            ctype = request.headers.get("content-type", "")
-                            if "application/json" in ctype:
-                                try:
-                                    body_bytes = await request.body()
-                                    data = json.loads(body_bytes.decode("utf-8")) if body_bytes else {}
-                                    data, mod = integration.ts._detect_honey_fields(data, body_fields, request)
-                                    if mod:
-                                        found_fields.extend(mod)
-                                        new_body = json.dumps(data).encode("utf-8")
+    def _make_watch_endpoint(self, orig_endpoint, watch):
+        from starlette.datastructures import FormData
 
-                                        async def receive():
-                                            return {"type": "http.request", "body": new_body, "more_body": False}
+        ts = self.ts
 
-                                        request._receive = receive
-                                except Exception as e:
-                                    integration.ts.logger.error("error reading json body: %s", e)
+        async def watch_endpoint(request):
+            found_fields = []
+            query_fields = watch["query_fields"]
+            body_fields = watch["body_fields"]
 
-                        if found_fields:
-                            integration.ts._trigger_watch_event(request, found_fields)
+            if query_fields:
+                qs = request.scope.get("query_string", b"").decode("utf-8")
+                if qs:
+                    q_dict = parse_qs(qs)
+                    q_dict, mod, touched = ts._detect_honey_fields(q_dict, query_fields, request)
+                    if mod:
+                        found_fields.extend(mod)
+                    if touched:
+                        # Rewrite scope before request.query_params is first accessed;
+                        # no cache busting needed since the property hasn't been read yet.
+                        request.scope["query_string"] = urlencode(q_dict, doseq=True).encode("utf-8")
 
-                return await call_next(request)
+            if body_fields:
+                ctype = request.headers.get("content-type", "")
 
-        self.app.add_middleware(TrappSecWatchMiddleware)
+                if "application/json" in ctype:
+                    try:
+                        data = await request.json()
+                        data, mod, touched = ts._detect_honey_fields(data, body_fields, request)
+                        if mod:
+                            found_fields.extend(mod)
+                        if touched:
+                            # Replace the parsed JSON cache so the handler sees clean data
+                            # when it calls await request.json(). The raw body bytes are
+                            # left intact; handlers must use request.json(), not request.body(),
+                            # to see the stripped result (starlette >= 0.14).
+                            request._json = data
+                    except Exception as e:
+                        ts.logger.error("error reading json body: %s", e)
+
+                elif "application/x-www-form-urlencoded" in ctype or "multipart/form-data" in ctype:
+                    try:
+                        form_data = await request.form()
+                        flat = dict(form_data)
+                        flat, mod, touched = ts._detect_honey_fields(flat, body_fields, request)
+                        if mod:
+                            found_fields.extend(mod)
+                        if touched:
+                            # Rebuild FormData from the original multi-items, dropping
+                            # only the watched keys. Using multi_items() preserves both
+                            # multi-value fields and UploadFile objects untouched.
+                            # Replaces the parsed form cache so the handler's
+                            # await request.form() returns the cleaned data (starlette >= 0.20).
+                            cleaned_items = [(k, v) for k, v in form_data.multi_items() if k in flat]
+                            request._form = FormData(cleaned_items)
+                    except Exception as e:
+                        ts.logger.error("error reading form body: %s", e)
+
+            if found_fields:
+                try:
+                    ts._trigger_watch_event(request, found_fields)
+                except Exception as e:
+                    ts.logger.error("error triggering watch event: %s", e)
+
+            return await orig_endpoint(request)
+
+        return watch_endpoint
 
     def _patch_startup(self):
         original_lifespan = self.app.router.lifespan_context
