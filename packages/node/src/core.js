@@ -169,10 +169,11 @@ class Sentry {
 
     _detect_honey_fields(data, rules, request_obj = null) {
         const found_fields = [];
-        let modified = false;
+        let touched = false;
 
         for (const key of Object.keys(data)) {
             if (rules[key]) {
+                touched = true;
                 const rule_definition = rules[key];
                 let expected = rule_definition.default;
 
@@ -188,15 +189,14 @@ class Sentry {
                             value: data[key],
                             intent: rule_definition.intent,
                         });
-                        delete data[key];
-                        modified = true;
                     }
+                    delete data[key];
                 } catch (e) {
                     this.logger.error(`failed to evaluate callable expected value for body field \`\${key}\`: `, e);
                 }
             }
         }
-        return { data, found_fields };
+        return { data, found_fields, touched };
     }
 
     _get_identity_context(req) {
