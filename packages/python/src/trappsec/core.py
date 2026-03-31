@@ -253,6 +253,12 @@ class Sentry:
         elif name == "Sanic" or module.startswith("sanic"):
             from .integrations.sanic import SanicIntegration
             self.integration = SanicIntegration(self, app)
+        elif name == "Litestar" or module.startswith("litestar"):
+            from .integrations.litestar import LitestarIntegration
+            self.integration = LitestarIntegration(self, app)
+        elif module.startswith("django"):
+            from .integrations.django import DjangoIntegration
+            self.integration = DjangoIntegration(self, app)
         elif name == "Flask" or module.startswith("flask"):
             from .integrations.flask import FlaskIntegration
             self.integration = FlaskIntegration(self, app)
