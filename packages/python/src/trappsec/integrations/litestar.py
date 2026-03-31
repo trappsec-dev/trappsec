@@ -164,6 +164,82 @@ class LitestarIntegration:
                             found_fields.extend(mod)
                         if touched:
                             new_body = urlencode(body_data, doseq=True).encode("utf-8")
+                    elif "multipart/form-data" in content_type:
+                        from email.parser import BytesParser
+                        from email.mime.multipart import MIMEMultipart
+                        from email.mime.text import MIMEText
+                        from email.mime.base import MIMEBase
+
+                        # Extract boundary from content-type
+                        boundary = None
+                        for param in content_type.split(";"):
+                            param = param.strip()
+                            if param.lower().startswith("boundary="):
+                                boundary = param.split("=", 1)[1].strip().strip('"')
+                                break
+
+                        if boundary:
+                            # Parse multipart body to extract text fields
+                            full_header = f"Content-Type: multipart/form-data; boundary={boundary}\r\n\r\n"
+                            msg = BytesParser().parsebytes(full_header.encode("utf-8") + body_bytes)
+
+                            text_fields = {}
+                            for part in msg.walk():
+                                if part.get_content_maintype() == "multipart":
+                                    continue
+                                cd = part.get("Content-Disposition", "")
+                                if 'filename=' in cd:
+                                    continue  # skip file parts
+                                # extract field name
+                                name = part.get_param("name", header="content-disposition")
+                                if name:
+                                    text_fields[name] = part.get_payload(decode=True).decode("utf-8", errors="replace")
+
+                            if text_fields:
+                                body_data = text_fields
+                                body_data, mod, touched = self.ts._detect_honey_fields(body_data, body_fields, None)
+                                if mod:
+                                    found_fields.extend(mod)
+                                if touched:
+                                    # Rebuild multipart body, keeping file parts, dropping watched text keys
+                                    import io
+                                    from email.generator import BytesGenerator
+                                    rebuilt = MIMEMultipart("form-data")
+                                    for part in msg.walk():
+                                        if part.get_content_maintype() == "multipart":
+                                            continue
+                                        cd = part.get("Content-Disposition", "")
+                                        name = part.get_param("name", header="content-disposition")
+                                        if 'filename=' in cd:
+                                            rebuilt.attach(part)  # keep file parts
+                                        elif name and name in body_data:
+                                            # Rewrite text part with sanitized value
+                                            new_part = MIMEText(str(body_data[name]), "plain", "utf-8")
+                                            new_part.replace_header("Content-Disposition", f'form-data; name="{name}"')
+                                            del new_part["MIME-Version"]
+                                            rebuilt.attach(new_part)
+                                    buf = io.BytesIO()
+                                    gen = BytesGenerator(buf)
+                                    gen.flatten(rebuilt)
+                                    raw = buf.getvalue()
+                                    # Extract only the body (after the header block)
+                                    idx = raw.find(b"\r\n\r\n")
+                                    if idx != -1:
+                                        new_body = raw[idx + 4:]
+                                    else:
+                                        new_body = raw
+                                    # Update content-type with the new boundary
+                                    new_boundary = rebuilt.get_boundary()
+                                    content_type = f"multipart/form-data; boundary={new_boundary}"
+                                    # Push updated content-type into scope headers
+                                    new_headers = []
+                                    for k_h, v_h in scope.get("headers", []):
+                                        if k_h.decode("latin1").lower() == "content-type":
+                                            new_headers.append((k_h, content_type.encode("latin1")))
+                                        else:
+                                            new_headers.append((k_h, v_h))
+                                    scope["headers"] = new_headers
+                                    headers["content-type"] = content_type
                 except Exception as e:
                     self.ts.logger.error("error reading body: %s", e)
 

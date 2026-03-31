@@ -178,6 +178,25 @@ class TornadoIntegration:
                                     if k not in form_data:
                                         del self.request.body_arguments[k]
                                         self.request.arguments.pop(k, None)
+                        elif "multipart/form-data" in ctype:
+                            # Tornado eagerly parses multipart into body_arguments;
+                            # operate on that rather than rebuilding raw bytes.
+                            mp_data = {
+                                k: [v.decode("utf-8", errors="ignore") for v in vals]
+                                for k, vals in self.request.body_arguments.items()
+                            }
+                            mp_flat = {
+                                k: v[0] if isinstance(v, list) and len(v) == 1 else v
+                                for k, v in mp_data.items()
+                            }
+                            mp_flat, mod, touched_b = integration.ts._detect_honey_fields(mp_flat, body_fields, self.request)
+                            if mod:
+                                found_fields.extend(mod)
+                            if touched_b:
+                                for k in list(self.request.body_arguments.keys()):
+                                    if k not in mp_flat:
+                                        del self.request.body_arguments[k]
+                                        self.request.arguments.pop(k, None)
                     except Exception as e:
                         integration.ts.logger.error("error reading body: %s", e)
 

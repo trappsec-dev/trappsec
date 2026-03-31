@@ -194,6 +194,20 @@ func (a *App) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 							core.ResetBody(r, []byte(core.MapToQuery(sanitized)))
 						}
 					}
+				} else if strings.Contains(contentType, "multipart/form-data") {
+					form := core.ParseMultipartFields(r)
+					if form != nil {
+						sanitized, f, touched := a.integration.ts.DetectHoneyFields(form, watch.BodyFields, r)
+						if len(f) > 0 {
+							for i := range f {
+								f[i].Type = "body"
+							}
+							found = append(found, f...)
+						}
+						if touched {
+							core.RebuildMultipartBody(r, sanitized)
+						}
+					}
 				}
 			}
 		}

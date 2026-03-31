@@ -141,6 +141,20 @@ class DjangoIntegration:
                             found_fields.extend(mod)
                         if touched:
                             new_body = urlencode(data, doseq=True).encode("utf-8")
+                    elif "multipart/form-data" in content_type:
+                        # Django eagerly parses multipart into request.POST;
+                        # operate on that rather than rebuilding raw bytes.
+                        post_data = {
+                            k: (v[0] if isinstance(v, list) and len(v) == 1 else v)
+                            for k, v in request.POST.lists()
+                        }
+                        post_data, mod, touched = self.ts._detect_honey_fields(post_data, body_fields, request)
+                        if mod:
+                            found_fields.extend(mod)
+                        if touched:
+                            request._post = self._to_querydict(post_data)
+                            if hasattr(request, "_files"):
+                                del request._files
                 except Exception as e:
                     self.ts.logger.error("error reading body: %s", e)
 
