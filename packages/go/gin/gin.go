@@ -11,26 +11,26 @@ package trappsecgin
 
 import (
 	"encoding/json"
+	"github.com/gin-gonic/gin"
+	core "github.com/trappsec-dev/trappsec/packages/go"
 	"net"
 	"net/url"
 	"strings"
-	"github.com/gin-gonic/gin"
-	core "github.com/trappsec-dev/trappsec/packages/go"
 )
 
 // Re-export core types as aliases so callers need only one import.
 type (
 	Sentry         = core.Sentry
-	AuthContext     = core.AuthContext
-	ResponseConfig  = core.ResponseConfig
-	TrapConfig      = core.TrapConfig
-	WatchConfig     = core.WatchConfig
-	WatchFieldRule  = core.WatchFieldRule
-	FoundField      = core.FoundField
-	TriggerContext  = core.TriggerContext
-	AppInfo         = core.AppInfo
-	WebhookOptions  = core.WebhookOptions
-	EventHandler    = core.EventHandler
+	AuthContext    = core.AuthContext
+	ResponseConfig = core.ResponseConfig
+	TrapConfig     = core.TrapConfig
+	WatchConfig    = core.WatchConfig
+	WatchFieldRule = core.WatchFieldRule
+	FoundField     = core.FoundField
+	TriggerContext = core.TriggerContext
+	AppInfo        = core.AppInfo
+	WebhookOptions = core.WebhookOptions
+	EventHandler   = core.EventHandler
 )
 
 // NoDefault is re-exported from core so callers need only one import.
@@ -220,12 +220,14 @@ func (in *ginIntegration) watchMiddleware() gin.HandlerFunc {
 
 			if len(watch.QueryFields) > 0 {
 				qData := core.QueryToMap(c.Request.URL.Query())
-				sanitized, f := in.ts.DetectHoneyFields(qData, watch.QueryFields, c)
+				sanitized, f, touched := in.ts.DetectHoneyFields(qData, watch.QueryFields, c)
 				if len(f) > 0 {
 					for i := range f {
 						f[i].Type = "query"
 					}
 					found = append(found, f...)
+				}
+				if touched {
 					c.Request.URL.RawQuery = core.MapToQuery(sanitized)
 				}
 			}
@@ -237,12 +239,14 @@ func (in *ginIntegration) watchMiddleware() gin.HandlerFunc {
 					if strings.Contains(contentType, "application/json") {
 						var data map[string]any
 						if err := json.Unmarshal(bodyBytes, &data); err == nil {
-							sanitized, f := in.ts.DetectHoneyFields(data, watch.BodyFields, c)
+							sanitized, f, touched := in.ts.DetectHoneyFields(data, watch.BodyFields, c)
 							if len(f) > 0 {
 								for i := range f {
 									f[i].Type = "body"
 								}
 								found = append(found, f...)
+							}
+							if touched {
 								newBody, _ := json.Marshal(sanitized)
 								core.ResetBody(c.Request, newBody)
 							}
@@ -251,12 +255,14 @@ func (in *ginIntegration) watchMiddleware() gin.HandlerFunc {
 						vals, err := url.ParseQuery(string(bodyBytes))
 						if err == nil {
 							form := core.QueryToMap(vals)
-							sanitized, f := in.ts.DetectHoneyFields(form, watch.BodyFields, c)
+							sanitized, f, touched := in.ts.DetectHoneyFields(form, watch.BodyFields, c)
 							if len(f) > 0 {
 								for i := range f {
 									f[i].Type = "body"
 								}
 								found = append(found, f...)
+							}
+							if touched {
 								core.ResetBody(c.Request, []byte(core.MapToQuery(sanitized)))
 							}
 						}

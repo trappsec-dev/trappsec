@@ -329,9 +329,11 @@ class NestIntegration {
         let found = [];
 
         if (Object.keys(query_fields).length > 0 && req.query) {
-            const { data, found_fields } = this.ts._detect_honey_fields(req.query, query_fields, req);
+            const { data, found_fields, touched } = this.ts._detect_honey_fields(req.query, query_fields, req);
             if (found_fields.length > 0) {
                 found.push(...this._withType(found_fields, "query"));
+            }
+            if (touched) {
                 try {
                     req.query = this._replaceData(req.query, data);
                 } catch (e) {
@@ -341,9 +343,11 @@ class NestIntegration {
         }
 
         if (Object.keys(body_fields).length > 0 && req.body) {
-            const { data, found_fields } = this.ts._detect_honey_fields(req.body, body_fields, req);
+            const { data, found_fields, touched } = this.ts._detect_honey_fields(req.body, body_fields, req);
             if (found_fields.length > 0) {
                 found.push(...this._withType(found_fields, "body"));
+            }
+            if (touched) {
                 try {
                     req.body = this._replaceData(req.body, data);
                 } catch (e) {

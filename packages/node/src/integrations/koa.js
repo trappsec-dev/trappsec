@@ -108,17 +108,21 @@ class KoaIntegration {
         const found = [];
 
         if (ctx.query && Object.keys(queryFields).length > 0) {
-            const { data, found_fields } = this.ts._detect_honey_fields(ctx.query, queryFields, ctx);
+            const { data, found_fields, touched } = this.ts._detect_honey_fields(ctx.query, queryFields, ctx);
             if (found_fields.length > 0) {
                 found.push(...found_fields.map((f) => ({ ...f, type: "query" })));
+            }
+            if (touched) {
                 ctx.query = data;
             }
         }
 
         if (ctx.request?.body && Object.keys(bodyFields).length > 0 && typeof ctx.request.body === "object") {
-            const { data, found_fields } = this.ts._detect_honey_fields(ctx.request.body, bodyFields, ctx);
+            const { data, found_fields, touched } = this.ts._detect_honey_fields(ctx.request.body, bodyFields, ctx);
             if (found_fields.length > 0) {
                 found.push(...found_fields.map((f) => ({ ...f, type: "body" })));
+            }
+            if (touched) {
                 ctx.request.body = data;
             }
         }

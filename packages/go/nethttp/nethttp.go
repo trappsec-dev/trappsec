@@ -11,16 +11,16 @@ package trappsecnethttp
 
 import (
 	"encoding/json"
+	core "github.com/trappsec-dev/trappsec/packages/go"
 	"net"
 	"net/http"
 	"net/url"
 	"strings"
-	core "github.com/trappsec-dev/trappsec/packages/go"
 )
 
 // Re-export core types as aliases so callers need only one import.
 type (
-	Sentry        = core.Sentry
+	Sentry         = core.Sentry
 	AuthContext    = core.AuthContext
 	ResponseConfig = core.ResponseConfig
 	TrapConfig     = core.TrapConfig
@@ -148,12 +148,14 @@ func (a *App) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 		if len(watch.QueryFields) > 0 {
 			qData := core.QueryToMap(r.URL.Query())
-			sanitized, f := a.integration.ts.DetectHoneyFields(qData, watch.QueryFields, r)
+			sanitized, f, touched := a.integration.ts.DetectHoneyFields(qData, watch.QueryFields, r)
 			if len(f) > 0 {
 				for i := range f {
 					f[i].Type = "query"
 				}
 				found = append(found, f...)
+			}
+			if touched {
 				r.URL.RawQuery = core.MapToQuery(sanitized)
 			}
 		}
@@ -165,12 +167,14 @@ func (a *App) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				if strings.Contains(contentType, "application/json") {
 					var data map[string]any
 					if err := json.Unmarshal(bodyBytes, &data); err == nil {
-						sanitized, f := a.integration.ts.DetectHoneyFields(data, watch.BodyFields, r)
+						sanitized, f, touched := a.integration.ts.DetectHoneyFields(data, watch.BodyFields, r)
 						if len(f) > 0 {
 							for i := range f {
 								f[i].Type = "body"
 							}
 							found = append(found, f...)
+						}
+						if touched {
 							newBody, _ := json.Marshal(sanitized)
 							core.ResetBody(r, newBody)
 						}
@@ -179,12 +183,14 @@ func (a *App) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 					vals, err := url.ParseQuery(string(bodyBytes))
 					if err == nil {
 						form := core.QueryToMap(vals)
-						sanitized, f := a.integration.ts.DetectHoneyFields(form, watch.BodyFields, r)
+						sanitized, f, touched := a.integration.ts.DetectHoneyFields(form, watch.BodyFields, r)
 						if len(f) > 0 {
 							for i := range f {
 								f[i].Type = "body"
 							}
 							found = append(found, f...)
+						}
+						if touched {
 							core.ResetBody(r, []byte(core.MapToQuery(sanitized)))
 						}
 					}

@@ -71,17 +71,21 @@ class HapiIntegration {
                 const bodyFields = watch.body_fields || {};
 
                 if (request.query && Object.keys(queryFields).length > 0) {
-                    const { data, found_fields } = this.ts._detect_honey_fields(request.query, queryFields, request);
+                    const { data, found_fields, touched } = this.ts._detect_honey_fields(request.query, queryFields, request);
                     if (found_fields.length > 0) {
                         found.push(...found_fields.map((f) => ({ ...f, type: "query" })));
+                    }
+                    if (touched) {
                         request.query = data;
                     }
                 }
 
                 if (request.payload && typeof request.payload === "object" && Object.keys(bodyFields).length > 0) {
-                    const { data, found_fields } = this.ts._detect_honey_fields(request.payload, bodyFields, request);
+                    const { data, found_fields, touched } = this.ts._detect_honey_fields(request.payload, bodyFields, request);
                     if (found_fields.length > 0) {
                         found.push(...found_fields.map((f) => ({ ...f, type: "body" })));
+                    }
+                    if (touched) {
                         request.payload = data;
                     }
                 }

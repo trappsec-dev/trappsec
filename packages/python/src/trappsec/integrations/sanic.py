@@ -33,7 +33,7 @@ class SanicIntegration:
         @self.app.on_request
         async def trappsec_watcher(request):
             route = getattr(request, "route", None)
-            matched_path = getattr(route, "path", request.path) if route else request.path
+            matched_path = f"/{route.path}" if route else request.path
             watch = self.watch_map.get(matched_path)
             if not watch:
                 return
@@ -44,19 +44,22 @@ class SanicIntegration:
 
             if query_fields and request.args:
                 args_dict = dict(request.args)
-                args_dict, mod = self.ts._detect_honey_fields(args_dict, query_fields, request)
+                args_dict, mod, touched = self.ts._detect_honey_fields(args_dict, query_fields, request)
                 if mod:
                     found_fields.extend(mod)
+                if touched:
                     try:
                         request.args = args_dict
                     except Exception:
                         pass
 
             if body_fields:
-                if isinstance(request.json, dict):
-                    data, mod = self.ts._detect_honey_fields(dict(request.json), body_fields, request)
+                content_type = request.content_type or ""
+                if "application/json" in content_type and isinstance(request.json, dict):
+                    data, mod, touched = self.ts._detect_honey_fields(dict(request.json), body_fields, request)
                     if mod:
                         found_fields.extend(mod)
+                    if touched:
                         try:
                             request._json = data
                         except Exception:
@@ -64,9 +67,10 @@ class SanicIntegration:
 
                 if request.form:
                     form_dict = dict(request.form)
-                    data, mod = self.ts._detect_honey_fields(form_dict, body_fields, request)
+                    data, mod, touched = self.ts._detect_honey_fields(form_dict, body_fields, request)
                     if mod:
                         found_fields.extend(mod)
+                    if touched:
                         try:
                             request.form = data
                         except Exception:
@@ -76,7 +80,7 @@ class SanicIntegration:
                 self.ts._trigger_watch_event(request, found_fields)
 
     def _patch_startup(self):
-        @self.app.main_process_start
-        async def trappsec_init(_app):
+        @self.app.before_server_start
+        async def trappsec_init(_app, loop):
             self.inject_traps()
             self.setup_watches()

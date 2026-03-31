@@ -68,17 +68,21 @@ class ExpressIntegration {
                         let found = [];
 
                         if (Object.keys(query_fields).length > 0 && req.query) {
-                            const { data, found_fields } = ts._detect_honey_fields(req.query, query_fields, req);
+                            const { data, found_fields, touched } = ts._detect_honey_fields(req.query, query_fields, req);
                             if (found_fields.length > 0) {
                                 found.push(...found_fields);
+                            }
+                            if (touched) {
                                 req.query = data;
                             }
                         }
 
                         if (Object.keys(body_fields).length > 0 && req.body) {
-                            const { data, found_fields } = ts._detect_honey_fields(req.body, body_fields, req);
+                            const { data, found_fields, touched } = ts._detect_honey_fields(req.body, body_fields, req);
                             if (found_fields.length > 0) {
                                 found.push(...found_fields);
+                            }
+                            if (touched) {
                                 req.body = data;
                             }
                         }

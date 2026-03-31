@@ -76,17 +76,21 @@ class FastifyIntegration {
                 const bodyFields = watch.body_fields || {};
 
                 if (req.query && Object.keys(queryFields).length > 0) {
-                    const { data, found_fields } = this.ts._detect_honey_fields(req.query, queryFields, req);
+                    const { data, found_fields, touched } = this.ts._detect_honey_fields(req.query, queryFields, req);
                     if (found_fields.length > 0) {
                         found.push(...found_fields.map((f) => ({ ...f, type: "query" })));
+                    }
+                    if (touched) {
                         req.query = data;
                     }
                 }
 
                 if (req.body && Object.keys(bodyFields).length > 0 && typeof req.body === "object") {
-                    const { data, found_fields } = this.ts._detect_honey_fields(req.body, bodyFields, req);
+                    const { data, found_fields, touched } = this.ts._detect_honey_fields(req.body, bodyFields, req);
                     if (found_fields.length > 0) {
                         found.push(...found_fields.map((f) => ({ ...f, type: "body" })));
+                    }
+                    if (touched) {
                         req.body = data;
                     }
                 }
