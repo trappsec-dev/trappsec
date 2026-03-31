@@ -54,14 +54,36 @@ class ExpressIntegration {
             watchMap[w.path] = w;
         }
 
+        this._wrapRouterStack(this.app.router.stack, watchMap);
+    }
+
+    _wrapRouterStack(stack, watchMap) {
         const ts = this.ts;
 
-        for (let layer of this.app.router.stack) {
-            const oldHandler = layer.handle
+        for (const layer of stack) {
+            if (!layer || typeof layer.handle !== 'function') continue;
 
-            layer.handle = function (req, res, next) {
+            // Sub-router: layer.route is null and the handle function carries its own
+            // .stack of child layers. Recurse so inner route layers get wrapped.
+            // The mount prefix is baked into req.baseUrl by the time the inner
+            // handler runs, so no prefix tracking is needed here.
+            if (!layer.route && Array.isArray(layer.handle.stack)) {
+                this._wrapRouterStack(layer.handle.stack, watchMap);
+                continue;
+            }
+
+            // Only wrap route-matched layers; skip plain middleware and already-wrapped layers.
+            if (!layer.route || layer.handle.__trappsecWrapped) continue;
+
+            const oldHandler = layer.handle;
+            const wrapped = function (req, res, next) {
                 if (req.route) {
-                    const watch = watchMap[req.route.path];
+                    // req.baseUrl is the mount prefix stripped by any parent router
+                    // (empty string for top-level routes). Concatenating with
+                    // req.route.path reconstructs the full registered pattern, which
+                    // is the key used in watchMap.
+                    const fullPath = (req.baseUrl || '') + req.route.path;
+                    const watch = watchMap[fullPath];
                     if (watch) {
                         const query_fields = watch.query_fields;
                         const body_fields = watch.body_fields;
@@ -69,22 +91,14 @@ class ExpressIntegration {
 
                         if (Object.keys(query_fields).length > 0 && req.query) {
                             const { data, found_fields, touched } = ts._detect_honey_fields(req.query, query_fields, req);
-                            if (found_fields.length > 0) {
-                                found.push(...found_fields);
-                            }
-                            if (touched) {
-                                req.query = data;
-                            }
+                            if (found_fields.length > 0) found.push(...found_fields);
+                            if (touched) req.query = data;
                         }
 
                         if (Object.keys(body_fields).length > 0 && req.body) {
                             const { data, found_fields, touched } = ts._detect_honey_fields(req.body, body_fields, req);
-                            if (found_fields.length > 0) {
-                                found.push(...found_fields);
-                            }
-                            if (touched) {
-                                req.body = data;
-                            }
+                            if (found_fields.length > 0) found.push(...found_fields);
+                            if (touched) req.body = data;
                         }
 
                         if (found.length > 0) {
@@ -92,8 +106,11 @@ class ExpressIntegration {
                         }
                     }
                 }
-                oldHandler(req, res, next);
-            }
+                return oldHandler(req, res, next);
+            };
+
+            wrapped.__trappsecWrapped = true;
+            layer.handle = wrapped;
         }
     }
 }

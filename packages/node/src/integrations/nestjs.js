@@ -204,7 +204,13 @@ class NestIntegration {
             );
         }
         if (this._adapterType === 'express') {
-            return this._normalizePath(req.route?.path);
+            if (req.route?.path) {
+                // req.baseUrl holds the mount prefix stripped by any parent router
+                // (empty string for top-level routes). Concatenating with req.route.path
+                // reconstructs the full registered pattern used as the watchMap key.
+                return this._normalizePath((req.baseUrl || '') + req.route.path);
+            }
+            return null;
         }
 
         return this._normalizePath(
@@ -231,9 +237,18 @@ class NestIntegration {
     _setupExpressWatches(routerStack, watchMap) {
         const integration = this;
         for (const layer of routerStack) {
-            if (!layer || typeof layer.handle !== 'function' || layer.handle.__trappsecWrapped) {
+            if (!layer || typeof layer.handle !== 'function') continue;
+
+            // Sub-router: layer.route is null and the handle carries its own .stack.
+            // Recurse so inner route layers are wrapped. req.baseUrl is set correctly
+            // by Express for each nesting level, so _extractMatchedRoutePath handles
+            // path reconstruction without any prefix tracking here.
+            if (!layer.route && Array.isArray(layer.handle.stack)) {
+                this._setupExpressWatches(layer.handle.stack, watchMap);
                 continue;
             }
+
+            if (layer.handle.__trappsecWrapped) continue;
 
             const oldHandler = layer.handle;
             const wrapped = function (req, res, next) {
