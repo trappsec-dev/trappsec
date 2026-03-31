@@ -62,7 +62,7 @@ class FastAPIIntegration:
             if query_fields:
                 qs = request.scope.get("query_string", b"").decode("utf-8")
                 if qs:
-                    q_dict = parse_qs(qs).to_dict(flat=False)                    
+                    q_dict = parse_qs(qs)                    
                     q_dict, mod, touched = self.ts._detect_honey_fields(q_dict, query_fields, request)
                     
                     if mod:
