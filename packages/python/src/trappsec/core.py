@@ -252,6 +252,9 @@ class Sentry:
         if name == "FastAPI" or module.startswith("fastapi"):
             from .integrations.fastapi import FastAPIIntegration
             self.integration = FastAPIIntegration(self, app)
+        elif name == "Starlette" or module.startswith("starlette"):
+            from .integrations.starlette import StarletteIntegration
+            self.integration = StarletteIntegration(self, app)
         elif name == "Application" and module.startswith("tornado"):
             from .integrations.tornado import TornadoIntegration
             self.integration = TornadoIntegration(self, app)
