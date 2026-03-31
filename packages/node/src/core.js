@@ -227,7 +227,7 @@ class Sentry {
     }
 
     _register(app) {
-        if (!app || typeof app !== 'object') {
+        if (!app) {
             throw new Error("trappsec error: unknown framework.");
         }
 
