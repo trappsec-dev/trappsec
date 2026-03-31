@@ -63,10 +63,11 @@ class FastAPIIntegration:
                 qs = request.scope.get("query_string", b"").decode("utf-8")
                 if qs:
                     q_dict = parse_qs(qs).to_dict(flat=False)                    
-                    q_dict, mod = self.ts._detect_honey_fields(q_dict, query_fields, request)
+                    q_dict, mod, touched = self.ts._detect_honey_fields(q_dict, query_fields, request)
                     
                     if mod:
                         found_fields.extend(mod)
+                    if touched:
                         request.scope["query_string"] = urlencode(q_dict, doseq=True).encode("utf-8")
                         if hasattr(request, "_query_params"):
                             del request._query_params
@@ -76,9 +77,10 @@ class FastAPIIntegration:
                 if "application/json" in ctype:
                     try:
                         body = await request.json()
-                        b, mod = self.ts._detect_honey_fields(body, body_fields, request)
+                        b, mod, touched = self.ts._detect_honey_fields(body, body_fields, request)
                         if mod:
                             found_fields.extend(mod)
+                        if touched:
                             request._json = b
                     except Exception as e: 
                         self.ts.logger.error("error reading json body: %s", e)
@@ -86,9 +88,10 @@ class FastAPIIntegration:
                     try:
                         form_data = await request.form()
                         data = dict(form_data)
-                        b, mod = self.ts._detect_honey_fields(data, body_fields, request)
+                        b, mod, touched = self.ts._detect_honey_fields(data, body_fields, request)
                         if mod:
                             found_fields.extend(mod)
+                        if touched:
                             request._form = FormData(b)
                     except Exception as e: 
                         self.ts.logger.error("error reading form body: %s", e)

@@ -54,17 +54,19 @@ class FlaskIntegration:
             found_fields = []
             if request.args and query_fields:
                 q_dict = request.args.to_dict(flat=False)
-                q_dict, mod = self.ts._detect_honey_fields(q_dict, query_fields, request)
+                q_dict, mod, touched = self.ts._detect_honey_fields(q_dict, query_fields, request)
                 if mod: 
                     found_fields.extend(mod)
+                if touched:
                     request.args = ImmutableMultiDict(q_dict)
 
             if request.is_json and body_fields:
                 data = request.get_json(silent=True)
                 if data:
-                    data, mod = self.ts._detect_honey_fields(data, body_fields, request)
+                    data, mod, touched = self.ts._detect_honey_fields(data, body_fields, request)
                     if mod:
                         found_fields.extend(mod)
+                    if touched:
                         current = getattr(request, '_cached_json', None)
                         if isinstance(current, tuple): 
                             request._cached_json = (data, current[1])
@@ -73,9 +75,10 @@ class FlaskIntegration:
 
             if request.form and body_fields:
                 form_copy = request.form.to_dict(flat=True)
-                form, mod = self.ts._detect_honey_fields(form_copy, body_fields, request)
+                form, mod, touched = self.ts._detect_honey_fields(form_copy, body_fields, request)
                 if mod: 
                     found_fields.extend(mod)
+                if touched:
                     request.form = ImmutableMultiDict(form)
             
             if found_fields:
