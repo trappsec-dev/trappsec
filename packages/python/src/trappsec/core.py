@@ -220,9 +220,11 @@ class Sentry:
     
     def _detect_honey_fields(self, data, rules, request_obj=None):
         found_fields = []
+        touched = False
 
         for key in list(data.keys()):
             if key in rules:
+                touched = True
                 rule_definition = rules[key]
                 expected = rule_definition.get("default", NO_DEFAULT)
                 
@@ -241,7 +243,7 @@ class Sentry:
                     self.logger.error(f"failed to evaluate callable expected value for body field `{key}`: ", e)            
 
                 del data[key]
-        return data, found_fields
+        return data, found_fields, touched
 
     def _register(self, app):
         name = app.__class__.__name__
@@ -250,6 +252,9 @@ class Sentry:
         if name == "FastAPI" or module.startswith("fastapi"):
             from .integrations.fastapi import FastAPIIntegration
             self.integration = FastAPIIntegration(self, app)
+        elif name == "Sanic" or module.startswith("sanic"):
+            from .integrations.sanic import SanicIntegration
+            self.integration = SanicIntegration(self, app)
         elif name == "Litestar" or module.startswith("litestar"):
             from .integrations.litestar import LitestarIntegration
             self.integration = LitestarIntegration(self, app)

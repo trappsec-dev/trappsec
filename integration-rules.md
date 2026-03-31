@@ -6,7 +6,9 @@ Rules derived from architectural analysis of the Python (FastAPI, Flask) and Nod
 
 ## R1: Watch matching must use the resolved route pattern, not the request URL
 
-The integration must hook into a lifecycle point where the framework has already matched the request to a route and exposes the **route definition pattern** (e.g., `/users/:id`, `/users/{id}`, `/users/<id>`). Watches are keyed by pattern — matching against the raw URL path would break parameterized routes.
+The integration must hook into a lifecycle point where the framework has **already matched the request to a route** and exposes the **route definition pattern** (e.g., `/users/:id`, `/users/{id}`, `/users/<id>`). Watches are keyed by pattern — using the raw URL as the primary lookup key will miss every parameterized watch.
+
+**Raw URL fallbacks are safe.** Most integrations end their pattern-resolution chain with a raw URL fallback (e.g. `req.routeOptions?.url || req.url`). This is not a bug. Because the hook runs after routing, the fallback only fires when no route was matched (a 404), in which case there is no watch to trigger anyway. The concern is using raw URL as the *only* or *primary* strategy — not as a last-resort fallback that is unreachable for matched routes.
 
 **Reference:**
 - FastAPI uses `request.scope.get("route").path` — the matched `APIRoute` object's pattern
@@ -16,16 +18,20 @@ The integration must hook into a lifecycle point where the framework has already
 
 ---
 
-## R2: Trap routes must be registered with guaranteed priority over application routes
+## R2: Trap routes must not be silently shadowed by application routes
 
-Use whatever mechanism the framework provides to ensure traps match before real routes: route list prepending, stack manipulation, priority/weight systems.
+The requirement differs based on how the framework resolves route conflicts:
 
-If the framework uses specificity-based routing (like Werkzeug/Flask), verify that trap paths won't lose to more-specific real routes. Order-based routers (Express, FastAPI) are more straightforward — prepend or insert traps before application routes.
+**Order-based routers** (first-registered wins): an explicit priority mechanism is required — prepend trap routes before application routes, or manipulate the route list/stack so traps are evaluated first. Registering traps after app routes without reordering will silently shadow them.
+
+**Specificity-based routers** (pattern specificity wins): registering traps as native routes is sufficient. The framework's routing engine guarantees that a static trap path beats a wildcard or catch-all regardless of registration order. If a trap path exactly duplicates a real app route, the framework will raise a route conflict error — this is the correct outcome, forcing the developer to resolve the ambiguity explicitly rather than silently picking a winner.
+
+**Middleware-based trap interception** (traps handled in middleware rather than as native routes): explicit priority is always required, and the ordering of middleware registration matters regardless of router type.
 
 **Reference:**
-- FastAPI prepends `APIRoute` objects: `app.router.routes = new_routes + app.router.routes`
-- NestJS-Express clears and restores the router stack to force trap-first ordering
-- Flask uses `app.add_url_rule()` with no explicit ordering guarantee — this is the weakest approach
+- FastAPI prepends `APIRoute` objects: `app.router.routes = new_routes + app.router.routes` — required because Starlette is order-based
+- NestJS-Express clears and restores the router stack to force trap-first ordering — required because Express is order-based
+- Sanic, Gin, Echo, Hapi, net/http: native `add_route()` / `engine.Handle()` / `app.route()` registration is sufficient — specificity-based routing provides the guarantee implicitly
 
 ---
 
@@ -42,19 +48,20 @@ If the framework provides a lifecycle hook (lifespan, onReady, beforeListen), us
 
 ---
 
-## R4: Watched field deletion semantics must be deliberate and documented
+## R4: Watched field deletion semantics are always-strip
 
-Decide whether watched fields are **always stripped** from the request (regardless of value) or **only stripped when a violation is detected**.
+The required behavior is **always strip**: watched fields must be removed from the request whenever present, regardless of whether the value matches the configured default.
 
-Both are valid strategies:
-- **Always strip** (Python behavior): the downstream handler never sees honey fields, even with expected values. The handler must supply its own defaults. More conservative.
-- **Strip on violation only** (Node.js behavior): the handler receives normal values transparently. Only suspicious values are removed. More transparent.
+Detection and mutation are separate:
+- Emit a watch event only when a violation is detected (`default` missing or value mismatch)
+- Still remove watched fields even when no violation is emitted
+- To avoid no-op work, track whether any watched key was present (`touched`)
+- Only rewrite/reset request data when `touched` is true; skip mutation when no watched key exists in the request
 
-This is currently inconsistent between the Python and Node.js reference implementations. New integrations must pick one and document it.
+All integrations must follow this behavior consistently.
 
 **Reference:**
 - Python `core.py:243`: `del data[key]` is outside the detection condition — always deletes
-- Node.js `core.js:191`: `delete data[key]` is inside the `if (expected === NO_DEFAULT || data[key] !== expected)` condition — only deletes on violation
 
 ---
 
@@ -103,19 +110,19 @@ If neither is possible, the limitation must be documented.
 
 ---
 
-## R8: Guard against double initialization
+## R8: Guard against double initialization — first-request strategies only
 
-Use flags to prevent:
-- Double-wrapping route handlers
-- Double-registering trap routes
-- Double-registering watch hooks
+Bootstrap guards are **required only for first-request initialization strategies**, where setup runs inside a request handler or WSGI/ASGI middleware on the first incoming request. These strategies create genuine double-init risk: concurrent initial requests race to initialize, and test suites that process multiple requests against the same app instance will re-trigger setup.
 
-This is critical when the startup mechanism could fire more than once (hot reload, WSGI wrapper race, test teardown/setup cycles).
+**Startup-hook strategies do not need guards.** When setup runs inside a framework lifecycle hook (`before_server_start`, lifespan context manager) or a patched server-start method (`app.listen()`, `app.start()`, `app.run()`, `ListenAndServe()`), the hook fires once per server start by definition. Calling `listen()` twice in the same process is an application-level error that results in an "address already in use" OS error — defending against it is not trappsec's responsibility.
+
+**Per-handler deduplication is a separate concern.** When `setup_watches()` iterates existing route handler layers and wraps them (e.g. the Express router stack), each layer must be tagged to prevent double-wrapping if the same stack happens to be inspected more than once within a single bootstrap pass. This is not an init guard — it is structural idempotency at the handler level.
 
 **Reference:**
-- NestJS uses `__trappsecWrapped` on handlers, `__trappsecWatchHookInstalled` on the app instance, and `_bootstrapped` on the integration
-- Express has no double-init protection
-- Flask's self-removing WSGI wrapper is the protection, but it's racy under concurrent first requests
+- Django requires `_bootstrapped` (class-level) + `threading.Lock` — setup runs on the first request, which is racy under concurrent startup load
+- Flask's self-removing WSGI wrapper is the guard — required for the same reason
+- FastAPI (lifespan), Sanic (`before_server_start`), Express/Fastify/Koa/Hapi (`app.listen`/`app.start` patch), Gin (`Run*`), Echo (`Start*`), net/http (`ListenAndServe*`): **no init guard needed or present**
+- NestJS uses `__trappsecWrapped` on individual Express handler layers — this is per-handler deduplication within a single bootstrap pass, not an init guard
 
 ---
 

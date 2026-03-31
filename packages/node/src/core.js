@@ -169,10 +169,11 @@ class Sentry {
 
     _detect_honey_fields(data, rules, request_obj = null) {
         const found_fields = [];
-        let modified = false;
+        let touched = false;
 
         for (const key of Object.keys(data)) {
             if (rules[key]) {
+                touched = true;
                 const rule_definition = rules[key];
                 let expected = rule_definition.default;
 
@@ -188,15 +189,14 @@ class Sentry {
                             value: data[key],
                             intent: rule_definition.intent,
                         });
-                        delete data[key];
-                        modified = true;
                     }
+                    delete data[key];
                 } catch (e) {
                     this.logger.error(`failed to evaluate callable expected value for body field \`\${key}\`: `, e);
                 }
             }
         }
-        return { data, found_fields };
+        return { data, found_fields, touched };
     }
 
     _get_identity_context(req) {
@@ -227,29 +227,27 @@ class Sentry {
     }
 
     _register(app) {
-        // NestJS
-        if (app.getHttpAdapter && app.useGlobalInterceptors) {
-            const NestIntegration = require('./integrations/nestjs');
-            this.integration = new NestIntegration(this, app);
-        // Hapi
-        } else if (app.route && app.ext && app.start) {
-            const HapiIntegration = require('./integrations/hapi');
-            this.integration = new HapiIntegration(this, app);
-        // Koa
-        } else if (app.callback && Array.isArray(app.middleware) && app.use) {
-            const KoaIntegration = require('./integrations/koa');
-            this.integration = new KoaIntegration(this, app);
-        // Fastify
-        } else if (app.addHook && app.route && app.listen) {
-            const FastifyIntegration = require('./integrations/fastify');
-            this.integration = new FastifyIntegration(this, app);
-        // Express
-        } else if (app.use && app.get && app.post) {
-            const ExpressIntegration = require('./integrations/express');
-            this.integration = new ExpressIntegration(this, app);
-        } else {
+        if (!app) {
             throw new Error("trappsec error: unknown framework.");
         }
+
+        const fn = (x) => typeof x === 'function';
+
+        const integrations = [
+            { detect: a => fn(a.getHttpAdapter) && fn(a.useGlobalInterceptors), path: './integrations/nestjs'  },
+            { detect: a => fn(a.ext) && fn(a.start) && fn(a.route),             path: './integrations/hapi'    },
+            { detect: a => fn(a.callback) && Array.isArray(a.middleware),       path: './integrations/koa'     },
+            { detect: a => fn(a.addHook) && fn(a.register) && fn(a.listen),     path: './integrations/fastify' },
+            { detect: a => fn(a.use) && fn(a.get) && fn(a.post) && !fn(a.ext) && !fn(a.callback), path: './integrations/express' },
+        ];
+
+        for (const { path } of integrations.filter(({ detect }) => detect(app))) {
+            const Integration = require(path);
+            this.integration = new Integration(this, app);
+            return;
+        }
+
+        throw new Error("trappsec error: unknown framework.");
     }
 }
 

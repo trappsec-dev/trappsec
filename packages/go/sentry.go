@@ -306,17 +306,20 @@ func (s *Sentry) TriggerWatchEvent(req any, found []FoundField) {
 }
 
 // DetectHoneyFields scans data for fields matching the watch rules and returns
-// the sanitized map and any triggered fields. Called by framework integration packages.
-func (s *Sentry) DetectHoneyFields(data map[string]any, rules map[string]WatchFieldRule, requestObj any) (map[string]any, []FoundField) {
+// the sanitized map, any triggered fields, and whether any watched key was present.
+// Called by framework integration packages.
+func (s *Sentry) DetectHoneyFields(data map[string]any, rules map[string]WatchFieldRule, requestObj any) (map[string]any, []FoundField, bool) {
 	if len(data) == 0 {
-		return data, nil
+		return data, nil, false
 	}
 	found := make([]FoundField, 0)
+	touched := false
 	for key, value := range data {
 		rule, ok := rules[key]
 		if !ok {
 			continue
 		}
+		touched = true
 
 		expected := rule.Default
 		if fn, ok := expected.(func(any) any); ok {
@@ -330,10 +333,10 @@ func (s *Sentry) DetectHoneyFields(data map[string]any, rules map[string]WatchFi
 				Value:  value,
 				Intent: rule.Intent,
 			})
-			delete(data, key)
 		}
+		delete(data, key)
 	}
-	return data, found
+	return data, found, touched
 }
 
 type extractedIdentity struct {

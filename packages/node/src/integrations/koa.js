@@ -2,7 +2,6 @@ class KoaIntegration {
     constructor(ts, app) {
         this.ts = ts;
         this.app = app;
-        this._bootstrapped = false;
 
         if (!this.ts.identity.ip) {
             this.ts.identity.ip = (ctx) => ctx.ip || ctx.request?.ip || ctx.req?.socket?.remoteAddress || "0.0.0.0";
@@ -21,11 +20,6 @@ class KoaIntegration {
     }
 
     _bootstrap() {
-        if (this._bootstrapped) {
-            return;
-        }
-        this._bootstrapped = true;
-
         const watchMap = {};
         for (const watch of this.ts.watches) {
             watchMap[this._normalizePath(watch.path)] = watch;
@@ -114,17 +108,21 @@ class KoaIntegration {
         const found = [];
 
         if (ctx.query && Object.keys(queryFields).length > 0) {
-            const { data, found_fields } = this.ts._detect_honey_fields(ctx.query, queryFields, ctx);
+            const { data, found_fields, touched } = this.ts._detect_honey_fields(ctx.query, queryFields, ctx);
             if (found_fields.length > 0) {
                 found.push(...found_fields.map((f) => ({ ...f, type: "query" })));
+            }
+            if (touched) {
                 ctx.query = data;
             }
         }
 
         if (ctx.request?.body && Object.keys(bodyFields).length > 0 && typeof ctx.request.body === "object") {
-            const { data, found_fields } = this.ts._detect_honey_fields(ctx.request.body, bodyFields, ctx);
+            const { data, found_fields, touched } = this.ts._detect_honey_fields(ctx.request.body, bodyFields, ctx);
             if (found_fields.length > 0) {
                 found.push(...found_fields.map((f) => ({ ...f, type: "body" })));
+            }
+            if (touched) {
                 ctx.request.body = data;
             }
         }

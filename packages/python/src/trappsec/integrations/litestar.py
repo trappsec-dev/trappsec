@@ -2,8 +2,6 @@ import json
 import re
 from urllib.parse import parse_qs, urlencode
 
-_installed_apps = set()  # R8: tracks app ids that already have trappsec installed
-
 
 class _ASGIRequestURL:
     __slots__ = ("path",)
@@ -26,9 +24,6 @@ class _ASGIRequest:
 
 class LitestarIntegration:
     def __init__(self, ts, app):
-        if id(app) in _installed_apps:  # R8: double-init guard (Litestar uses __slots__)
-            return
-
         self.ts = ts
         self.app = app
         self.watch_map = {}      # route pattern -> watch dict, built once at init (R13)
@@ -45,8 +40,6 @@ class LitestarIntegration:
         # all ts.trap() / ts.watch() calls in user code have run first.
         self.app.on_startup.append(self._startup)
         self._patch_asgi_handler()
-
-        _installed_apps.add(id(app))  # R8: mark initialized
 
     def _startup(self):
         self._inject_traps()   # R14: real Litestar routes; R10: traps before watches
@@ -143,9 +136,10 @@ class LitestarIntegration:
             if query_fields:
                 qs = scope.get("query_string", b"").decode("utf-8")
                 q_dict = parse_qs(qs) if qs else {}
-                q_dict, mod = self.ts._detect_honey_fields(q_dict, query_fields, None)
+                q_dict, mod, touched = self.ts._detect_honey_fields(q_dict, query_fields, None)
                 if mod:
                     found_fields.extend(mod)
+                if touched:
                     scope["query_string"] = urlencode(q_dict, doseq=True).encode("utf-8")
 
             content_type = headers.get("content-type", "")
@@ -157,16 +151,18 @@ class LitestarIntegration:
                         body_data = json.loads(body_bytes.decode("utf-8"))
                         if isinstance(body_data, dict):
                             # R4: always strip — field removed regardless of value (Python convention)
-                            body_data, mod = self.ts._detect_honey_fields(body_data, body_fields, None)
+                            body_data, mod, touched = self.ts._detect_honey_fields(body_data, body_fields, None)
                             if mod:
                                 found_fields.extend(mod)
+                            if touched:
                                 new_body = json.dumps(body_data).encode("utf-8")
                     elif "application/x-www-form-urlencoded" in content_type:
                         body_data = {k: v[0] if isinstance(v, list) and v else v for k, v in parse_qs(body_bytes.decode("utf-8")).items()}
                         # R4: always strip — field removed regardless of value (Python convention)
-                        body_data, mod = self.ts._detect_honey_fields(body_data, body_fields, None)
+                        body_data, mod, touched = self.ts._detect_honey_fields(body_data, body_fields, None)
                         if mod:
                             found_fields.extend(mod)
+                        if touched:
                             new_body = urlencode(body_data, doseq=True).encode("utf-8")
                 except Exception as e:
                     self.ts.logger.error("error reading body: %s", e)

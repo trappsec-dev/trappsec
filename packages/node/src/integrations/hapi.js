@@ -2,8 +2,6 @@ class HapiIntegration {
     constructor(ts, app) {
         this.ts = ts;
         this.app = app;
-        this._bootstrapped = false;
-        this._watchHookInstalled = false;
 
         if (!this.ts.identity.ip) {
             this.ts.identity.ip = (request) => request.info?.remoteAddress || request.raw?.req?.socket?.remoteAddress || "0.0.0.0";
@@ -22,10 +20,6 @@ class HapiIntegration {
     }
 
     _bootstrap() {
-        if (this._bootstrapped) {
-            return;
-        }
-        this._bootstrapped = true;
         this.inject_traps();
         this.setup_watches();
     }
@@ -55,7 +49,7 @@ class HapiIntegration {
     }
 
     setup_watches() {
-        if (this._watchHookInstalled || this.ts.watches.length === 0) {
+        if (this.ts.watches.length === 0) {
             return;
         }
 
@@ -77,17 +71,21 @@ class HapiIntegration {
                 const bodyFields = watch.body_fields || {};
 
                 if (request.query && Object.keys(queryFields).length > 0) {
-                    const { data, found_fields } = this.ts._detect_honey_fields(request.query, queryFields, request);
+                    const { data, found_fields, touched } = this.ts._detect_honey_fields(request.query, queryFields, request);
                     if (found_fields.length > 0) {
                         found.push(...found_fields.map((f) => ({ ...f, type: "query" })));
+                    }
+                    if (touched) {
                         request.query = data;
                     }
                 }
 
                 if (request.payload && typeof request.payload === "object" && Object.keys(bodyFields).length > 0) {
-                    const { data, found_fields } = this.ts._detect_honey_fields(request.payload, bodyFields, request);
+                    const { data, found_fields, touched } = this.ts._detect_honey_fields(request.payload, bodyFields, request);
                     if (found_fields.length > 0) {
                         found.push(...found_fields.map((f) => ({ ...f, type: "body" })));
+                    }
+                    if (touched) {
                         request.payload = data;
                     }
                 }
@@ -102,7 +100,6 @@ class HapiIntegration {
             return h.continue;
         });
 
-        this._watchHookInstalled = true;
     }
 
     _normalizePath(path) {

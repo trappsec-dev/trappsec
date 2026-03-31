@@ -11,18 +11,16 @@ package trappsecnethttp
 
 import (
 	"encoding/json"
+	core "github.com/trappsec-dev/trappsec/packages/go"
 	"net"
 	"net/http"
 	"net/url"
 	"strings"
-	"sync"
-
-	core "github.com/trappsec-dev/trappsec/packages/go"
 )
 
 // Re-export core types as aliases so callers need only one import.
 type (
-	Sentry        = core.Sentry
+	Sentry         = core.Sentry
 	AuthContext    = core.AuthContext
 	ResponseConfig = core.ResponseConfig
 	TrapConfig     = core.TrapConfig
@@ -101,38 +99,34 @@ func InstallSentry(mux *http.ServeMux, service, environment string) *App {
 
 type netHTTPIntegration struct {
 	ts       *core.Sentry
-	once     sync.Once
 	watchIdx map[string]core.WatchConfig
 }
 
 // bootstrap registers all configured trap routes with the ServeMux and builds the
 // watch index. Called transparently from ListenAndServe* / Serve* methods.
-// Safe to call multiple times — sync.Once ensures only the first call has any effect.
 func (a *App) bootstrap() {
-	a.integration.once.Do(func() {
-		a.integration.watchIdx = make(map[string]core.WatchConfig)
-		for _, w := range a.Sentry.Watches() {
-			a.integration.watchIdx[w.Path] = w
+	a.integration.watchIdx = make(map[string]core.WatchConfig)
+	for _, w := range a.Sentry.Watches() {
+		a.integration.watchIdx[w.Path] = w
+	}
+	// Register each trap as a real route using Go 1.22+ method-qualified patterns.
+	// This gives traps identical ServeMux behaviour to real routes: correct 405
+	// responses for wrong methods, participation in the same routing pipeline, and
+	// consistent response headers from any middleware wrapping the App handler.
+	for _, trap := range a.Sentry.Traps() {
+		t := trap
+		for _, method := range trap.Methods {
+			pattern := strings.ToUpper(method) + " " + trap.Path
+			a.ServeMux.HandleFunc(pattern, func(w http.ResponseWriter, r *http.Request) {
+				body, cfg := a.Sentry.TriggerTrapEvent(r, t)
+				if cfg.MIMEType != "" {
+					w.Header().Set("Content-Type", cfg.MIMEType)
+				}
+				w.WriteHeader(cfg.StatusCode)
+				_, _ = w.Write(body)
+			})
 		}
-		// Register each trap as a real route using Go 1.22+ method-qualified patterns.
-		// This gives traps identical ServeMux behaviour to real routes: correct 405
-		// responses for wrong methods, participation in the same routing pipeline, and
-		// consistent response headers from any middleware wrapping the App handler.
-		for _, trap := range a.Sentry.Traps() {
-			t := trap
-			for _, method := range trap.Methods {
-				pattern := strings.ToUpper(method) + " " + trap.Path
-				a.ServeMux.HandleFunc(pattern, func(w http.ResponseWriter, r *http.Request) {
-					body, cfg := a.Sentry.TriggerTrapEvent(r, t)
-					if cfg.MIMEType != "" {
-						w.Header().Set("Content-Type", cfg.MIMEType)
-					}
-					w.WriteHeader(cfg.StatusCode)
-					_, _ = w.Write(body)
-				})
-			}
-		}
-	})
+	}
 }
 
 // ServeHTTP shadows *http.ServeMux's ServeHTTP to inject watch inspection before
@@ -154,12 +148,14 @@ func (a *App) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 		if len(watch.QueryFields) > 0 {
 			qData := core.QueryToMap(r.URL.Query())
-			sanitized, f := a.integration.ts.DetectHoneyFields(qData, watch.QueryFields, r)
+			sanitized, f, touched := a.integration.ts.DetectHoneyFields(qData, watch.QueryFields, r)
 			if len(f) > 0 {
 				for i := range f {
 					f[i].Type = "query"
 				}
 				found = append(found, f...)
+			}
+			if touched {
 				r.URL.RawQuery = core.MapToQuery(sanitized)
 			}
 		}
@@ -171,12 +167,14 @@ func (a *App) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				if strings.Contains(contentType, "application/json") {
 					var data map[string]any
 					if err := json.Unmarshal(bodyBytes, &data); err == nil {
-						sanitized, f := a.integration.ts.DetectHoneyFields(data, watch.BodyFields, r)
+						sanitized, f, touched := a.integration.ts.DetectHoneyFields(data, watch.BodyFields, r)
 						if len(f) > 0 {
 							for i := range f {
 								f[i].Type = "body"
 							}
 							found = append(found, f...)
+						}
+						if touched {
 							newBody, _ := json.Marshal(sanitized)
 							core.ResetBody(r, newBody)
 						}
@@ -185,12 +183,14 @@ func (a *App) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 					vals, err := url.ParseQuery(string(bodyBytes))
 					if err == nil {
 						form := core.QueryToMap(vals)
-						sanitized, f := a.integration.ts.DetectHoneyFields(form, watch.BodyFields, r)
+						sanitized, f, touched := a.integration.ts.DetectHoneyFields(form, watch.BodyFields, r)
 						if len(f) > 0 {
 							for i := range f {
 								f[i].Type = "body"
 							}
 							found = append(found, f...)
+						}
+						if touched {
 							core.ResetBody(r, []byte(core.MapToQuery(sanitized)))
 						}
 					}

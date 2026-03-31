@@ -105,9 +105,10 @@ class DjangoIntegration:
                 k: (v[0] if isinstance(v, list) and len(v) == 1 else v)
                 for k, v in request.GET.lists()
             }
-            query_data, mod = self.ts._detect_honey_fields(query_data, query_fields, request)
+            query_data, mod, touched = self.ts._detect_honey_fields(query_data, query_fields, request)
             if mod:
                 found_fields.extend(mod)
+            if touched:
                 request.GET = self._to_querydict(query_data)
                 request.META["QUERY_STRING"] = urlencode(query_data, doseq=True)
 
@@ -125,18 +126,20 @@ class DjangoIntegration:
                     if "application/json" in content_type:
                         data = json.loads(body_bytes.decode("utf-8"))
                         if isinstance(data, dict):
-                            data, mod = self.ts._detect_honey_fields(data, body_fields, request)
+                            data, mod, touched = self.ts._detect_honey_fields(data, body_fields, request)
                             if mod:
                                 found_fields.extend(mod)
+                            if touched:
                                 new_body = json.dumps(data).encode("utf-8")
                     elif "application/x-www-form-urlencoded" in content_type:
                         data = {
                             k: v[0] if isinstance(v, list) and v else v
                             for k, v in parse_qs(body_bytes.decode("utf-8")).items()
                         }
-                        data, mod = self.ts._detect_honey_fields(data, body_fields, request)
+                        data, mod, touched = self.ts._detect_honey_fields(data, body_fields, request)
                         if mod:
                             found_fields.extend(mod)
+                        if touched:
                             new_body = urlencode(data, doseq=True).encode("utf-8")
                 except Exception as e:
                     self.ts.logger.error("error reading body: %s", e)
