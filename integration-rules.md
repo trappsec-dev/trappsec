@@ -6,7 +6,9 @@ Rules derived from architectural analysis of the Python (FastAPI, Flask) and Nod
 
 ## R1: Watch matching must use the resolved route pattern, not the request URL
 
-The integration must hook into a lifecycle point where the framework has already matched the request to a route and exposes the **route definition pattern** (e.g., `/users/:id`, `/users/{id}`, `/users/<id>`). Watches are keyed by pattern — matching against the raw URL path would break parameterized routes.
+The integration must hook into a lifecycle point where the framework has **already matched the request to a route** and exposes the **route definition pattern** (e.g., `/users/:id`, `/users/{id}`, `/users/<id>`). Watches are keyed by pattern — using the raw URL as the primary lookup key will miss every parameterized watch.
+
+**Raw URL fallbacks are safe.** Most integrations end their pattern-resolution chain with a raw URL fallback (e.g. `req.routeOptions?.url || req.url`). This is not a bug. Because the hook runs after routing, the fallback only fires when no route was matched (a 404), in which case there is no watch to trigger anyway. The concern is using raw URL as the *only* or *primary* strategy — not as a last-resort fallback that is unreachable for matched routes.
 
 **Reference:**
 - FastAPI uses `request.scope.get("route").path` — the matched `APIRoute` object's pattern
@@ -16,16 +18,20 @@ The integration must hook into a lifecycle point where the framework has already
 
 ---
 
-## R2: Trap routes must be registered with guaranteed priority over application routes
+## R2: Trap routes must not be silently shadowed by application routes
 
-Use whatever mechanism the framework provides to ensure traps match before real routes: route list prepending, stack manipulation, priority/weight systems.
+The requirement differs based on how the framework resolves route conflicts:
 
-If the framework uses specificity-based routing (like Werkzeug/Flask), verify that trap paths won't lose to more-specific real routes. Order-based routers (Express, FastAPI) are more straightforward — prepend or insert traps before application routes.
+**Order-based routers** (first-registered wins): an explicit priority mechanism is required — prepend trap routes before application routes, or manipulate the route list/stack so traps are evaluated first. Registering traps after app routes without reordering will silently shadow them.
+
+**Specificity-based routers** (pattern specificity wins): registering traps as native routes is sufficient. The framework's routing engine guarantees that a static trap path beats a wildcard or catch-all regardless of registration order. If a trap path exactly duplicates a real app route, the framework will raise a route conflict error — this is the correct outcome, forcing the developer to resolve the ambiguity explicitly rather than silently picking a winner.
+
+**Middleware-based trap interception** (traps handled in middleware rather than as native routes): explicit priority is always required, and the ordering of middleware registration matters regardless of router type.
 
 **Reference:**
-- FastAPI prepends `APIRoute` objects: `app.router.routes = new_routes + app.router.routes`
-- NestJS-Express clears and restores the router stack to force trap-first ordering
-- Flask uses `app.add_url_rule()` with no explicit ordering guarantee — this is the weakest approach
+- FastAPI prepends `APIRoute` objects: `app.router.routes = new_routes + app.router.routes` — required because Starlette is order-based
+- NestJS-Express clears and restores the router stack to force trap-first ordering — required because Express is order-based
+- Sanic, Gin, Echo, Hapi, net/http: native `add_route()` / `engine.Handle()` / `app.route()` registration is sufficient — specificity-based routing provides the guarantee implicitly
 
 ---
 
