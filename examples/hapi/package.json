@@ -1,0 +1,11 @@
+{
+  "name": "trappsec-hapi-example",
+  "version": "0.1.0",
+  "scripts": {
+    "start": "node app.js"
+  },
+  "dependencies": {
+    "@hapi/hapi": "^21.3.12",
+    "@hapi/inert": "^7.1.0"
+  }
+}
