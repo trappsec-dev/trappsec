@@ -2,7 +2,6 @@ class NestIntegration {
     constructor(ts, app) {
         this.ts = ts;
         this.app = app;
-        this._bootstrapped = false;
         this._adapterType = this._resolveAdapterType();
 
         // Default identity provider if not set
@@ -30,10 +29,6 @@ class NestIntegration {
     }
 
     _bootstrapTrappsec() {
-        if (this._bootstrapped) {
-            return;
-        }
-        this._bootstrapped = true;
         this.inject_traps();
         this.setup_watches();
     }

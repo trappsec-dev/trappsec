@@ -2,8 +2,6 @@ import json
 import re
 from urllib.parse import parse_qs, urlencode
 
-_installed_apps = set()  # R8: tracks app ids that already have trappsec installed
-
 
 class _ASGIRequestURL:
     __slots__ = ("path",)
@@ -26,9 +24,6 @@ class _ASGIRequest:
 
 class LitestarIntegration:
     def __init__(self, ts, app):
-        if id(app) in _installed_apps:  # R8: double-init guard (Litestar uses __slots__)
-            return
-
         self.ts = ts
         self.app = app
         self.watch_map = {}      # route pattern -> watch dict, built once at init (R13)
@@ -45,8 +40,6 @@ class LitestarIntegration:
         # all ts.trap() / ts.watch() calls in user code have run first.
         self.app.on_startup.append(self._startup)
         self._patch_asgi_handler()
-
-        _installed_apps.add(id(app))  # R8: mark initialized
 
     def _startup(self):
         self._inject_traps()   # R14: real Litestar routes; R10: traps before watches

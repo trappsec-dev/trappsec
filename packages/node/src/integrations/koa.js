@@ -2,7 +2,6 @@ class KoaIntegration {
     constructor(ts, app) {
         this.ts = ts;
         this.app = app;
-        this._bootstrapped = false;
 
         if (!this.ts.identity.ip) {
             this.ts.identity.ip = (ctx) => ctx.ip || ctx.request?.ip || ctx.req?.socket?.remoteAddress || "0.0.0.0";
@@ -21,11 +20,6 @@ class KoaIntegration {
     }
 
     _bootstrap() {
-        if (this._bootstrapped) {
-            return;
-        }
-        this._bootstrapped = true;
-
         const watchMap = {};
         for (const watch of this.ts.watches) {
             watchMap[this._normalizePath(watch.path)] = watch;

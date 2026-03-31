@@ -14,8 +14,6 @@ import (
 	"net"
 	"net/url"
 	"strings"
-	"sync"
-
 	"github.com/gin-gonic/gin"
 	core "github.com/trappsec-dev/trappsec/packages/go"
 )
@@ -145,31 +143,27 @@ func Use(s *core.Sentry, app *gin.Engine) {
 
 type ginIntegration struct {
 	ts       *core.Sentry
-	once     sync.Once
 	watchIdx map[string]core.WatchConfig
 }
 
 // bootstrap registers all configured trap routes with the Gin engine and builds the
-// watch index. Called transparently from Run* methods. Safe to call multiple times —
-// sync.Once ensures only the first call has any effect.
+// watch index. Called transparently from Run* methods.
 func (a *App) bootstrap() {
-	a.integration.once.Do(func() {
-		a.integration.watchIdx = make(map[string]core.WatchConfig)
-		for _, w := range a.Sentry.Watches() {
-			a.integration.watchIdx[w.Path] = w
+	a.integration.watchIdx = make(map[string]core.WatchConfig)
+	for _, w := range a.Sentry.Watches() {
+		a.integration.watchIdx[w.Path] = w
+	}
+	// Register each trap as a real Gin route for each declared method.
+	// By going through the engine's router, traps participate in the full middleware
+	// chain (CORS, auth, rate limiting, etc.) and inherit the engine's
+	// HandleMethodNotAllowed configuration — ensuring trap behavior is always
+	// consistent with real application routes.
+	for _, trap := range a.Sentry.Traps() {
+		t := trap
+		for _, method := range trap.Methods {
+			a.Engine.Handle(strings.ToUpper(method), trap.Path, ginTrapHandler(a.Sentry, t))
 		}
-		// Register each trap as a real Gin route for each declared method.
-		// By going through the engine's router, traps participate in the full middleware
-		// chain (CORS, auth, rate limiting, etc.) and inherit the engine's
-		// HandleMethodNotAllowed configuration — ensuring trap behavior is always
-		// consistent with real application routes.
-		for _, trap := range a.Sentry.Traps() {
-			t := trap
-			for _, method := range trap.Methods {
-				a.Engine.Handle(strings.ToUpper(method), trap.Path, ginTrapHandler(a.Sentry, t))
-			}
-		}
-	})
+	}
 }
 
 // ginTrapHandler returns a Gin handler for a trap route.

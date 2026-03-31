@@ -103,19 +103,19 @@ If neither is possible, the limitation must be documented.
 
 ---
 
-## R8: Guard against double initialization
+## R8: Guard against double initialization — first-request strategies only
 
-Use flags to prevent:
-- Double-wrapping route handlers
-- Double-registering trap routes
-- Double-registering watch hooks
+Bootstrap guards are **required only for first-request initialization strategies**, where setup runs inside a request handler or WSGI/ASGI middleware on the first incoming request. These strategies create genuine double-init risk: concurrent initial requests race to initialize, and test suites that process multiple requests against the same app instance will re-trigger setup.
 
-This is critical when the startup mechanism could fire more than once (hot reload, WSGI wrapper race, test teardown/setup cycles).
+**Startup-hook strategies do not need guards.** When setup runs inside a framework lifecycle hook (`before_server_start`, lifespan context manager) or a patched server-start method (`app.listen()`, `app.start()`, `app.run()`, `ListenAndServe()`), the hook fires once per server start by definition. Calling `listen()` twice in the same process is an application-level error that results in an "address already in use" OS error — defending against it is not trappsec's responsibility.
+
+**Per-handler deduplication is a separate concern.** When `setup_watches()` iterates existing route handler layers and wraps them (e.g. the Express router stack), each layer must be tagged to prevent double-wrapping if the same stack happens to be inspected more than once within a single bootstrap pass. This is not an init guard — it is structural idempotency at the handler level.
 
 **Reference:**
-- NestJS uses `__trappsecWrapped` on handlers, `__trappsecWatchHookInstalled` on the app instance, and `_bootstrapped` on the integration
-- Express has no double-init protection
-- Flask's self-removing WSGI wrapper is the protection, but it's racy under concurrent first requests
+- Django requires `_bootstrapped` (class-level) + `threading.Lock` — setup runs on the first request, which is racy under concurrent startup load
+- Flask's self-removing WSGI wrapper is the guard — required for the same reason
+- FastAPI (lifespan), Sanic (`before_server_start`), Express/Fastify/Koa/Hapi (`app.listen`/`app.start` patch), Gin (`Run*`), Echo (`Start*`), net/http (`ListenAndServe*`): **no init guard needed or present**
+- NestJS uses `__trappsecWrapped` on individual Express handler layers — this is per-handler deduplication within a single bootstrap pass, not an init guard
 
 ---
 

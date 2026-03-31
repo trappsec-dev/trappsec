@@ -14,8 +14,6 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
-	"sync"
-
 	"github.com/labstack/echo/v4"
 	core "github.com/trappsec-dev/trappsec/packages/go"
 )
@@ -146,30 +144,26 @@ func Use(s *core.Sentry, app *echo.Echo) {
 
 type echoIntegration struct {
 	ts       *core.Sentry
-	once     sync.Once
 	watchIdx map[string]core.WatchConfig
 }
 
 // bootstrap registers all configured trap routes with the Echo instance and builds the
-// watch index. Called transparently from Start* methods. Safe to call multiple times —
-// sync.Once ensures only the first call has any effect.
+// watch index. Called transparently from Start* methods.
 func (a *App) bootstrap() {
-	a.integration.once.Do(func() {
-		a.integration.watchIdx = make(map[string]core.WatchConfig)
-		for _, w := range a.Sentry.Watches() {
-			a.integration.watchIdx[w.Path] = w
+	a.integration.watchIdx = make(map[string]core.WatchConfig)
+	for _, w := range a.Sentry.Watches() {
+		a.integration.watchIdx[w.Path] = w
+	}
+	// Register each trap as a real Echo route for each declared method.
+	// By going through Echo's router, traps participate in the full middleware chain
+	// (CORS, auth, rate limiting, etc.) and Echo's native 405 handling — ensuring
+	// trap behavior is always consistent with real application routes.
+	for _, trap := range a.Sentry.Traps() {
+		t := trap
+		for _, method := range trap.Methods {
+			a.Echo.Add(strings.ToUpper(method), trap.Path, echoTrapHandler(a.Sentry, t))
 		}
-		// Register each trap as a real Echo route for each declared method.
-		// By going through Echo's router, traps participate in the full middleware chain
-		// (CORS, auth, rate limiting, etc.) and Echo's native 405 handling — ensuring
-		// trap behavior is always consistent with real application routes.
-		for _, trap := range a.Sentry.Traps() {
-			t := trap
-			for _, method := range trap.Methods {
-				a.Echo.Add(strings.ToUpper(method), trap.Path, echoTrapHandler(a.Sentry, t))
-			}
-		}
-	})
+	}
 }
 
 // echoTrapHandler returns an Echo handler for a trap route.

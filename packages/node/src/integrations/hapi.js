@@ -2,8 +2,6 @@ class HapiIntegration {
     constructor(ts, app) {
         this.ts = ts;
         this.app = app;
-        this._bootstrapped = false;
-        this._watchHookInstalled = false;
 
         if (!this.ts.identity.ip) {
             this.ts.identity.ip = (request) => request.info?.remoteAddress || request.raw?.req?.socket?.remoteAddress || "0.0.0.0";
@@ -22,10 +20,6 @@ class HapiIntegration {
     }
 
     _bootstrap() {
-        if (this._bootstrapped) {
-            return;
-        }
-        this._bootstrapped = true;
         this.inject_traps();
         this.setup_watches();
     }
@@ -55,7 +49,7 @@ class HapiIntegration {
     }
 
     setup_watches() {
-        if (this._watchHookInstalled || this.ts.watches.length === 0) {
+        if (this.ts.watches.length === 0) {
             return;
         }
 
@@ -102,7 +96,6 @@ class HapiIntegration {
             return h.continue;
         });
 
-        this._watchHookInstalled = true;
     }
 
     _normalizePath(path) {

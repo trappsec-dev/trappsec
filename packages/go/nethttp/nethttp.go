@@ -15,8 +15,6 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
-	"sync"
-
 	core "github.com/trappsec-dev/trappsec/packages/go"
 )
 
@@ -101,38 +99,34 @@ func InstallSentry(mux *http.ServeMux, service, environment string) *App {
 
 type netHTTPIntegration struct {
 	ts       *core.Sentry
-	once     sync.Once
 	watchIdx map[string]core.WatchConfig
 }
 
 // bootstrap registers all configured trap routes with the ServeMux and builds the
 // watch index. Called transparently from ListenAndServe* / Serve* methods.
-// Safe to call multiple times — sync.Once ensures only the first call has any effect.
 func (a *App) bootstrap() {
-	a.integration.once.Do(func() {
-		a.integration.watchIdx = make(map[string]core.WatchConfig)
-		for _, w := range a.Sentry.Watches() {
-			a.integration.watchIdx[w.Path] = w
+	a.integration.watchIdx = make(map[string]core.WatchConfig)
+	for _, w := range a.Sentry.Watches() {
+		a.integration.watchIdx[w.Path] = w
+	}
+	// Register each trap as a real route using Go 1.22+ method-qualified patterns.
+	// This gives traps identical ServeMux behaviour to real routes: correct 405
+	// responses for wrong methods, participation in the same routing pipeline, and
+	// consistent response headers from any middleware wrapping the App handler.
+	for _, trap := range a.Sentry.Traps() {
+		t := trap
+		for _, method := range trap.Methods {
+			pattern := strings.ToUpper(method) + " " + trap.Path
+			a.ServeMux.HandleFunc(pattern, func(w http.ResponseWriter, r *http.Request) {
+				body, cfg := a.Sentry.TriggerTrapEvent(r, t)
+				if cfg.MIMEType != "" {
+					w.Header().Set("Content-Type", cfg.MIMEType)
+				}
+				w.WriteHeader(cfg.StatusCode)
+				_, _ = w.Write(body)
+			})
 		}
-		// Register each trap as a real route using Go 1.22+ method-qualified patterns.
-		// This gives traps identical ServeMux behaviour to real routes: correct 405
-		// responses for wrong methods, participation in the same routing pipeline, and
-		// consistent response headers from any middleware wrapping the App handler.
-		for _, trap := range a.Sentry.Traps() {
-			t := trap
-			for _, method := range trap.Methods {
-				pattern := strings.ToUpper(method) + " " + trap.Path
-				a.ServeMux.HandleFunc(pattern, func(w http.ResponseWriter, r *http.Request) {
-					body, cfg := a.Sentry.TriggerTrapEvent(r, t)
-					if cfg.MIMEType != "" {
-						w.Header().Set("Content-Type", cfg.MIMEType)
-					}
-					w.WriteHeader(cfg.StatusCode)
-					_, _ = w.Write(body)
-				})
-			}
-		}
-	})
+	}
 }
 
 // ServeHTTP shadows *http.ServeMux's ServeHTTP to inject watch inspection before

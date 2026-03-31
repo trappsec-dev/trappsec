@@ -2,8 +2,6 @@ class FastifyIntegration {
     constructor(ts, app) {
         this.ts = ts;
         this.app = app;
-        this._bootstrapped = false;
-        this._watchHookInstalled = false;
 
         if (!this.ts.identity.ip) {
             this.ts.identity.ip = (req) => req.ip || req.socket?.remoteAddress || req.raw?.socket?.remoteAddress || "0.0.0.0";
@@ -22,10 +20,6 @@ class FastifyIntegration {
     }
 
     _bootstrap() {
-        if (this._bootstrapped) {
-            return;
-        }
-        this._bootstrapped = true;
         this.inject_traps();
         this.setup_watches();
     }
@@ -56,7 +50,7 @@ class FastifyIntegration {
     }
 
     setup_watches() {
-        if (this._watchHookInstalled || this.ts.watches.length === 0) {
+        if (this.ts.watches.length === 0) {
             return;
         }
 
@@ -106,7 +100,6 @@ class FastifyIntegration {
             done();
         });
 
-        this._watchHookInstalled = true;
     }
 
     _normalizePath(path) {
