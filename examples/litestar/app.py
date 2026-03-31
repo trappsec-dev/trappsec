@@ -21,7 +21,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../.
 import trappsec
 
 
-@post("/auth/register")
+@post("/auth/register", status_code=200)
 async def register(request: Request) -> dict:
     email = None
     ctype = request.headers.get("content-type", "")
@@ -39,7 +39,7 @@ async def get_profile(request: Request) -> dict:
     return {"name": request.headers.get("x-user-id"), "is_admin": False}
 
 
-@post("/api/v2/profile")
+@post("/api/v2/profile", status_code=200)
 async def update_profile(request: Request) -> dict:
     return {"name": request.headers.get("x-user-id"), "status": "updated"}
 
