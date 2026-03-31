@@ -250,6 +250,9 @@ class Sentry:
         if name == "FastAPI" or module.startswith("fastapi"):
             from .integrations.fastapi import FastAPIIntegration
             self.integration = FastAPIIntegration(self, app)
+        elif name == "Litestar" or module.startswith("litestar"):
+            from .integrations.litestar import LitestarIntegration
+            self.integration = LitestarIntegration(self, app)
         elif module.startswith("django"):
             from .integrations.django import DjangoIntegration
             self.integration = DjangoIntegration(self, app)

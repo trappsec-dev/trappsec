@@ -23,7 +23,7 @@ class DjangoIntegration:
         self._init_lock = threading.Lock()
 
         if not self.ts.identity.ip:
-            self.ts.identity.ip = lambda r: r.headers.get("x-real-ip", r.META.get("REMOTE_ADDR", "0.0.0.0"))
+            self.ts.identity.ip = lambda r: r.META.get("REMOTE_ADDR", "0.0.0.0")
 
         self.ts.request.path = lambda r: r.path
         self.ts.request.user_agent = lambda r: r.headers.get("user-agent", "unknown")
