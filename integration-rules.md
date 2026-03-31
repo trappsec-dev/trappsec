@@ -48,19 +48,20 @@ If the framework provides a lifecycle hook (lifespan, onReady, beforeListen), us
 
 ---
 
-## R4: Watched field deletion semantics must be deliberate and documented
+## R4: Watched field deletion semantics are always-strip
 
-Decide whether watched fields are **always stripped** from the request (regardless of value) or **only stripped when a violation is detected**.
+The required behavior is **always strip**: watched fields must be removed from the request whenever present, regardless of whether the value matches the configured default.
 
-Both are valid strategies:
-- **Always strip** (Python behavior): the downstream handler never sees honey fields, even with expected values. The handler must supply its own defaults. More conservative.
-- **Strip on violation only** (Node.js behavior): the handler receives normal values transparently. Only suspicious values are removed. More transparent.
+Detection and mutation are separate:
+- Emit a watch event only when a violation is detected (`default` missing or value mismatch)
+- Still remove watched fields even when no violation is emitted
+- To avoid no-op work, track whether any watched key was present (`touched`)
+- Only rewrite/reset request data when `touched` is true; skip mutation when no watched key exists in the request
 
-This is currently inconsistent between the Python and Node.js reference implementations. New integrations must pick one and document it.
+All integrations must follow this behavior consistently.
 
 **Reference:**
 - Python `core.py:243`: `del data[key]` is outside the detection condition — always deletes
-- Node.js `core.js:191`: `delete data[key]` is inside the `if (expected === NO_DEFAULT || data[key] !== expected)` condition — only deletes on violation
 
 ---
 
