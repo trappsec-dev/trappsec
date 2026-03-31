@@ -22,6 +22,12 @@ import trappsec
 app = Sanic("trappsec-sanic-example")
 ts = trappsec.Sentry(app, service="SanicApp", environment="Development")
 
+# Handlers are configured at module level so that spawned worker processes
+# (which re-import this module but never execute __main__) pick them up.
+_webhook_url = os.environ.get("TRAPPSEC_WEBHOOK_URL")
+if _webhook_url:
+    ts.add_webhook(url=_webhook_url)
+
 ts.default_responses["unauthenticated"] = {
     "status_code": 401,
     "response_body": {"error": "authentication required"},
@@ -38,7 +44,8 @@ ts.override_source_ip(lambda r: r.headers.get("x-real-ip", r.remote_addr or "0.0
 @app.post("/auth/register")
 async def register(request):
     email = None
-    if isinstance(request.json, dict):
+    content_type = request.content_type or ""
+    if "application/json" in content_type and isinstance(request.json, dict):
         email = request.json.get("email")
     elif request.form:
         email = request.form.get("email")
@@ -74,7 +81,10 @@ async def serve_index(_request):
 @app.get("/<path:path>")
 async def serve_static(_request, path):
     frontend_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'lure-frontend')
-    return await file_response(os.path.join(frontend_dir, path))
+    full_path = os.path.join(frontend_dir, path)
+    if not os.path.isfile(full_path):
+        return json_response({"error": "not found"}, status=404)
+    return await file_response(full_path)
 
 
 # Traps
@@ -133,6 +143,9 @@ if __name__ == "__main__":
         ts.add_otel()
 
     if args.webhook:
+        # Set before app.run() so spawned worker processes inherit this env var
+        # and add the webhook handler via the module-level block above.
+        os.environ["TRAPPSEC_WEBHOOK_URL"] = args.webhook
         ts.add_webhook(url=args.webhook)
 
     print("Starting server on http://127.0.0.1:8000")
