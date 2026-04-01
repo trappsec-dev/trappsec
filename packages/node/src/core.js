@@ -1,6 +1,6 @@
 const os = require('os');
 const { TrapBuilder, WatchBuilder, NO_DEFAULT } = require('./builders');
-const { LogHandler, WebhookHandler, OTELHandler } = require('./handlers');
+const { LogHandler, WebhookHandler, SlackHandler, OTELHandler } = require('./handlers');
 
 class Sentry {
     constructor(app, service, environment) {
@@ -58,14 +58,20 @@ class Sentry {
         return builder;
     }
 
-    add_webhook(url, { secret = null, headers = null, heartbeat_interval = null, template = null } = {}) {
-        const handler = new WebhookHandler(url, { secret, headers, service: this.service, environment: this.environment, heartbeat_interval, template });
+    add_webhook(url, { secret = null, headers = null, heartbeat_interval = null, template = null, alerts_only = true } = {}) {
+        const handler = new WebhookHandler(url, { secret, headers, service: this.service, environment: this.environment, heartbeat_interval, template, alerts_only });
         this._handlers.push(handler);
         return this;
     }
 
     add_otel() {
         this._handlers.push(new OTELHandler());
+        return this;
+    }
+
+    add_slack(url, { alerts_only = true } = {}) {
+        const handler = new SlackHandler(url, { alerts_only, service: this.service, environment: this.environment });
+        this._handlers.push(handler);
         return this;
     }
 

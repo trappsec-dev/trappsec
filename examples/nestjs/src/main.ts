@@ -35,7 +35,7 @@ async function bootstrap() {
     }
 
     if (values.webhook) {
-        ts.add_webhook(values.webhook as string);
+        ts.add_webhook(values.webhook as string, { alerts_only: false });
     }
 
     ts.identify_user((req) => {
@@ -127,3 +127,4 @@ async function bootstrap() {
     console.log(`NestJSApp listening on port 8000 (Driver: ${values.fastify ? 'Fastify' : 'Express'})`);
 }
 bootstrap();
+

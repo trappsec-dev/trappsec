@@ -132,10 +132,11 @@ if (values.otel) {
 }
 
 if (values.webhook) {
-    ts.add_webhook(values.webhook);
+    ts.add_webhook(values.webhook, { alerts_only: false });
 }
 
 const port = 8000;
 app.listen(port, () => {
     console.log(`Starting server on http://127.0.0.1:${port}`);
 });
+

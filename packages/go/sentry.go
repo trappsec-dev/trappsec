@@ -199,6 +199,18 @@ func (s *Sentry) AddOTEL() *Sentry {
 	return s
 }
 
+func (s *Sentry) AddSlack(url string, opts *SlackOptions) *Sentry {
+	h, err := NewSlackHandler(url, opts)
+	if err != nil {
+		s.logger.Printf("failed to initialize slack handler: %v", err)
+		return s
+	}
+	s.mu.Lock()
+	s.handlers = append(s.handlers, h)
+	s.mu.Unlock()
+	return s
+}
+
 func (s *Sentry) IdentifyUser(fn func(any) *AuthContext) *Sentry {
 	s.Identity.Auth = fn
 	return s

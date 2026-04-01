@@ -26,7 +26,7 @@ ts = trappsec.Sentry(app, service="SanicApp", environment="Development")
 # (which re-import this module but never execute __main__) pick them up.
 _webhook_url = os.environ.get("TRAPPSEC_WEBHOOK_URL")
 if _webhook_url:
-    ts.add_webhook(url=_webhook_url)
+    ts.add_webhook(url=_webhook_url, alerts_only=False)
 
 ts.default_responses["unauthenticated"] = {
     "status_code": 401,
@@ -192,7 +192,8 @@ if __name__ == "__main__":
         # Set before app.run() so spawned worker processes inherit this env var
         # and add the webhook handler via the module-level block above.
         os.environ["TRAPPSEC_WEBHOOK_URL"] = args.webhook
-        ts.add_webhook(url=args.webhook)
+        ts.add_webhook(url=args.webhook, alerts_only=False)
 
     print("Starting server on http://127.0.0.1:8000")
     app.run(host="127.0.0.1", port=8000, access_log=False)
+

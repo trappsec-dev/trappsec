@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"strings"
 	"time"
 )
 
@@ -36,6 +37,11 @@ type WebhookOptions struct {
 	Template          func(TriggerContext) any
 	Service           string
 	Environment       string
+	AlertsOnly        *bool
+}
+
+type SlackOptions struct {
+	AlertsOnly *bool
 }
 
 type WebhookHandler struct {
@@ -45,7 +51,12 @@ type WebhookHandler struct {
 	template    func(TriggerContext) any
 	service     string
 	environment string
+	alertsOnly  bool
 	client      *http.Client
+}
+
+type SlackHandler struct {
+	webhook *WebhookHandler
 }
 
 func NewWebhookHandler(url string, opts *WebhookOptions) (*WebhookHandler, error) {
@@ -55,6 +66,10 @@ func NewWebhookHandler(url string, opts *WebhookOptions) (*WebhookHandler, error
 	if opts == nil {
 		opts = &WebhookOptions{}
 	}
+	alertsOnly := true
+	if opts.AlertsOnly != nil {
+		alertsOnly = *opts.AlertsOnly
+	}
 
 	h := &WebhookHandler{
 		url:         url,
@@ -63,6 +78,7 @@ func NewWebhookHandler(url string, opts *WebhookOptions) (*WebhookHandler, error
 		template:    opts.Template,
 		service:     opts.Service,
 		environment: opts.Environment,
+		alertsOnly:  alertsOnly,
 		client:      &http.Client{Timeout: 5 * time.Second},
 	}
 	for k, v := range opts.Headers {
@@ -77,6 +93,10 @@ func NewWebhookHandler(url string, opts *WebhookOptions) (*WebhookHandler, error
 }
 
 func (h *WebhookHandler) Emit(event TriggerContext) error {
+	if h.alertsOnly && event.Type != "alert" {
+		return nil
+	}
+
 	payload := any(event)
 	if h.template != nil {
 		payload = h.template(event)
@@ -123,6 +143,199 @@ func (h *WebhookHandler) send(payload any) error {
 	}
 	defer resp.Body.Close()
 	return nil
+}
+
+func NewSlackHandler(url string, opts *SlackOptions) (*SlackHandler, error) {
+	if opts == nil {
+		opts = &SlackOptions{}
+	}
+
+	wh, err := NewWebhookHandler(url, &WebhookOptions{
+		AlertsOnly: opts.AlertsOnly,
+		Template:   buildSlackPayload,
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	return &SlackHandler{webhook: wh}, nil
+}
+
+func (h *SlackHandler) Emit(event TriggerContext) error {
+	return h.webhook.Emit(event)
+}
+
+var slackEventLabels = map[string]string{
+	"trappsec.watch_hit": "Honey Field Accessed",
+	"trappsec.trap_hit":  "Decoy Route Triggered",
+	"trappsec.rule_hit":  "Security Rule Triggered",
+}
+
+func slackDateToken(ts float64) string {
+	seconds := int64(ts)
+	if seconds <= 0 {
+		return "-"
+	}
+	fallback := time.Unix(seconds, 0).UTC().Format("2006-01-02 15:04:05 UTC")
+	return fmt.Sprintf("<!date^%d^{date_short_pretty} at {time_secs}|%s>", seconds, fallback)
+}
+
+func kvLine(key, value string) string {
+	if value == "" {
+		return ""
+	}
+	return fmt.Sprintf("*%s:* %s", key, value)
+}
+
+func compactLines(lines []string) []string {
+	out := make([]string, 0, len(lines))
+	for _, line := range lines {
+		if strings.TrimSpace(line) != "" {
+			out = append(out, line)
+		}
+	}
+	return out
+}
+
+func slackNotificationText(eventName, severity, svc, user, method, path string, found []FoundField) string {
+	actor := user
+	if actor == "" {
+		actor = "An unauthenticated request"
+	}
+	switch eventName {
+	case "trappsec.watch_hit":
+		names := make([]string, 0, 3)
+		for i, f := range found {
+			if i >= 3 {
+				break
+			}
+			if f.Field != "" {
+				names = append(names, f.Field)
+			}
+		}
+		suffix := ""
+		if len(names) > 0 {
+			suffix = " (" + strings.Join(names, ", ") + ")"
+		}
+		return fmt.Sprintf("[%s] %s accessed a monitored field%s on %s", severity, actor, suffix, svc)
+	case "trappsec.trap_hit":
+		return fmt.Sprintf("[%s] Honeypot endpoint hit on %s - %s %s", severity, svc, method, path)
+	case "trappsec.rule_hit":
+		return fmt.Sprintf("[%s] Security rule triggered on %s - %s %s", severity, svc, method, path)
+	}
+	return fmt.Sprintf("[%s] %s on %s", severity, eventName, svc)
+}
+
+func buildSlackPayload(event TriggerContext) any {
+	level := "signal"
+	if strings.EqualFold(event.Type, "alert") {
+		level = "alert"
+	}
+	color := "#0066CC"
+	if level == "alert" {
+		color = "#CC0000"
+	}
+
+	eventName := event.Event
+	if eventName == "" {
+		eventName = "trappsec.event"
+	}
+	path := fallback(event.Path)
+	method := fallback(event.Method)
+	service := event.App.Service
+	if service == "" {
+		service = "unknown-service"
+	}
+	environment := event.App.Environment
+	if environment == "" {
+		environment = "unknown-env"
+	}
+	when := slackDateToken(event.Timestamp)
+
+	route := "-"
+	if !(method == "-" && path == "-") {
+		route = strings.TrimSpace(method + " " + path)
+	}
+
+	eventLines := compactLines([]string{
+		kvLine("Event", func() string {
+			if label, ok := slackEventLabels[eventName]; ok {
+				return label
+			}
+			return eventName
+		}()),
+		kvLine("Timestamp", when),
+		kvLine("Service", service),
+		kvLine("Environment", environment),
+		kvLine("Host", event.App.Hostname),
+	})
+	requestLines := compactLines([]string{
+		kvLine("IP", event.IP),
+		kvLine("Route", route),
+		kvLine("User Agent", event.UserAgent),
+		kvLine("User", event.User),
+		kvLine("Role", event.Role),
+	})
+
+	blocks := []any{
+		map[string]any{"type": "section", "text": map[string]any{"type": "mrkdwn", "text": strings.Join(eventLines, "\n")}},
+	}
+	if len(requestLines) > 0 {
+		blocks = append(blocks,
+			map[string]any{"type": "divider"},
+			map[string]any{"type": "section", "text": map[string]any{"type": "mrkdwn", "text": strings.Join(requestLines, "\n")}},
+		)
+	}
+
+	if strings.EqualFold(event.Event, "trappsec.watch_hit") && len(event.Found) > 0 {
+		limit := len(event.Found)
+		if limit > 8 {
+			limit = 8
+		}
+		lines := make([]string, 0, limit)
+		for i := 0; i < limit; i++ {
+			f := event.Found[i]
+			parts := []string{fallback(f.Field)}
+			if f.Type != "" {
+				parts = append(parts, "["+f.Type+"]")
+			}
+			if f.Intent != "" {
+				parts = append(parts, "- "+f.Intent)
+			}
+			lines = append(lines, kvLine(fmt.Sprintf("Triggered Field %d", i+1), strings.Join(parts, " ")))
+		}
+		blocks = append(blocks,
+			map[string]any{"type": "divider"},
+			map[string]any{"type": "section", "text": map[string]any{"type": "mrkdwn", "text": strings.Join(lines, "\n")}},
+		)
+	}
+
+	details := []string{}
+	if event.Intent != "" {
+		details = append(details, kvLine("Intent", event.Intent))
+	}
+	if event.Reason != "" {
+		details = append(details, kvLine("Reason", event.Reason))
+	}
+	details = compactLines(details)
+	if len(details) > 0 {
+		blocks = append(blocks,
+			map[string]any{"type": "divider"},
+			map[string]any{"type": "section", "text": map[string]any{"type": "mrkdwn", "text": strings.Join(details, "\n")}},
+		)
+	}
+
+	return map[string]any{
+		"text":        "",
+		"attachments": []map[string]any{{"color": color, "blocks": blocks}},
+	}
+}
+
+func fallback(v string) string {
+	if v == "" {
+		return "-"
+	}
+	return v
 }
 
 type OTELHandler struct{}

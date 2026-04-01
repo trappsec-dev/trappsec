@@ -202,7 +202,8 @@ func main() {
 		app.AddOTEL()
 	}
 	if *webhook != "" {
-		app.AddWebhook(*webhook, nil)
+		alertsOnly := false
+		app.AddWebhook(*webhook, &trappsec.WebhookOptions{AlertsOnly: &alertsOnly})
 	}
 
 	log.Println("Starting server on http://127.0.0.1:8000")

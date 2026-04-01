@@ -88,7 +88,15 @@ class Sentry:
         self._watches.append(builder)
         return builder
 
-    def add_webhook(self, url: str, secret: str = None, headers: dict = None, heartbeat_interval: int = None, template: typing.Callable = None):
+    def add_webhook(
+        self,
+        url: str,
+        secret: str = None,
+        headers: dict = None,
+        heartbeat_interval: int = None,
+        template: typing.Callable = None,
+        alerts_only: bool = True,
+    ):
         from .handlers import WebhookHandler
         handler = WebhookHandler(
             url=url, 
@@ -97,7 +105,8 @@ class Sentry:
             service=self.service, 
             environment=self.environment,
             heartbeat_interval=heartbeat_interval,
-            template=template
+            template=template,
+            alerts_only=alerts_only,
         )
         self._handlers.append(handler)
         return self
@@ -105,6 +114,18 @@ class Sentry:
     def add_otel(self):
         from .handlers import OTELHandler
         self._handlers.append(OTELHandler())
+        return self
+
+    def add_slack(self, url: str, alerts_only: bool = True):
+        from .handlers import SlackHandler
+        self._handlers.append(
+            SlackHandler(
+                url=url,
+                service=self.service,
+                environment=self.environment,
+                alerts_only=alerts_only,
+            )
+        )
         return self
 
     def identify_user(self, callback: typing.Callable):

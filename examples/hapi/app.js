@@ -197,7 +197,7 @@ async function bootstrap() {
     }
 
     if (values.webhook) {
-        ts.add_webhook(values.webhook);
+        ts.add_webhook(values.webhook, { alerts_only: false });
     }
 
     await server.start();
@@ -205,3 +205,4 @@ async function bootstrap() {
 }
 
 bootstrap();
+

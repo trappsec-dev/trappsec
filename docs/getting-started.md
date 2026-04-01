@@ -210,11 +210,13 @@ trappsec can integrate directly into your existing workflows. Events are written
 
 ### Webhooks
 Send alerts to Slack, Discord, or custom incident response tools.
+Webhook delivery is `alerts_only` by default, so only `type: "alert"` events are sent unless you override it.
 
 <div class="lang-content" data-lang="python" markdown="1">
 
 ```python
 ts.add_webhook("https://hooks.slack.com/services/...")
+ts.add_webhook("https://hooks.slack.com/services/...", alerts_only=False)
 ```
 
 </div>
@@ -222,6 +224,25 @@ ts.add_webhook("https://hooks.slack.com/services/...")
 
 ```javascript
 ts.add_webhook("https://hooks.slack.com/services/...");
+ts.add_webhook("https://hooks.slack.com/services/...", { alerts_only: false });
+
+</div>
+
+### Slack
+Use a Slack incoming webhook with a presentation-optimized payload out of the box.
+
+<div class="lang-content" data-lang="python" markdown="1">
+
+```python
+ts.add_slack("https://hooks.slack.com/services/...")
+```
+
+</div>
+<div class="lang-content" data-lang="node" markdown="1">
+
+```javascript
+ts.add_slack("https://hooks.slack.com/services/...");
+```
 
 </div>
 
