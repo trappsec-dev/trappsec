@@ -259,6 +259,20 @@ func (in *echoIntegration) watchMiddleware() echo.MiddlewareFunc {
 									core.ResetBody(r, []byte(core.MapToQuery(sanitized)))
 								}
 							}
+						} else if strings.Contains(contentType, "multipart/form-data") {
+							form := core.ParseMultipartFields(r)
+							if form != nil {
+								sanitized, f, touched := in.ts.DetectHoneyFields(form, watch.BodyFields, c)
+								if len(f) > 0 {
+									for i := range f {
+										f[i].Type = "body"
+									}
+									found = append(found, f...)
+								}
+								if touched {
+									core.RebuildMultipartBody(r, sanitized)
+								}
+							}
 						}
 					}
 				}

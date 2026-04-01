@@ -99,6 +99,13 @@ class TornadoIntegration:
             path = getattr(matcher, "_path", None)
             watch = self.watch_map.get(path) if path else None
             if watch is None:
+                # Fallback for parameterized routes: Tornado replaces capture groups with %s
+                # in _path, so look up by the raw regex pattern (strip trailing $).
+                regex_attr = getattr(matcher, "regex", None)
+                if regex_attr is not None:
+                    normalized = regex_attr.pattern.rstrip("$")
+                    watch = self.watch_map.get(normalized)
+            if watch is None:
                 continue
 
             class_rules.setdefault(handler_cls, []).append((matcher, watch))
@@ -134,7 +141,8 @@ class TornadoIntegration:
 
                 if query_fields and self.request.query_arguments:
                     q_dict = {
-                        k: [v.decode("utf-8", errors="ignore") for v in vals]
+                        k: vals[0].decode("utf-8", errors="ignore") if len(vals) == 1
+                        else [v.decode("utf-8", errors="ignore") for v in vals]
                         for k, vals in self.request.query_arguments.items()
                     }
                     # R4: unpack touched; use touched (not mod) to gate mutation
@@ -176,6 +184,25 @@ class TornadoIntegration:
                                 # R6: update body_arguments and arguments so get_body_argument() sees the change
                                 for k in list(self.request.body_arguments.keys()):
                                     if k not in form_data:
+                                        del self.request.body_arguments[k]
+                                        self.request.arguments.pop(k, None)
+                        elif "multipart/form-data" in ctype:
+                            # Tornado eagerly parses multipart into body_arguments;
+                            # operate on that rather than rebuilding raw bytes.
+                            mp_data = {
+                                k: [v.decode("utf-8", errors="ignore") for v in vals]
+                                for k, vals in self.request.body_arguments.items()
+                            }
+                            mp_flat = {
+                                k: v[0] if isinstance(v, list) and len(v) == 1 else v
+                                for k, v in mp_data.items()
+                            }
+                            mp_flat, mod, touched_b = integration.ts._detect_honey_fields(mp_flat, body_fields, self.request)
+                            if mod:
+                                found_fields.extend(mod)
+                            if touched_b:
+                                for k in list(self.request.body_arguments.keys()):
+                                    if k not in mp_flat:
                                         del self.request.body_arguments[k]
                                         self.request.arguments.pop(k, None)
                     except Exception as e:

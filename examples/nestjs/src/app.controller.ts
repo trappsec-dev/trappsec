@@ -1,4 +1,5 @@
-import { Controller, Get, Post, Body, Headers, HttpCode } from '@nestjs/common';
+import { Controller, Get, Post, Body, Headers, HttpCode, Param, Req } from '@nestjs/common';
+import { Request } from 'express';
 
 @Controller()
 export class AppController {
@@ -28,5 +29,33 @@ export class AppController {
                 { id: "ord-124", item: "Mouse", amount: 45 }
             ]
         };
+    }
+
+    @Get('api/v2/orders/:id')
+    getOrderDetail(@Param('id') id: string) {
+        return { id, item: "Laptop", amount: 1200, status: "shipped" };
+    }
+
+    @Get('api/v2/echo/query')
+    echoQuery(@Req() req: Request) {
+        return req.query;
+    }
+
+    @Post('api/v2/echo/body')
+    @HttpCode(200)
+    echoBody(@Body() body: any) {
+        return body || {};
+    }
+
+    @Post('api/v2/echo/form')
+    @HttpCode(200)
+    echoForm(@Body() body: any) {
+        return body || {};
+    }
+
+    @Post('api/v2/echo/multipart')
+    @HttpCode(200)
+    echoMultipart() {
+        return { supported: false };
     }
 }

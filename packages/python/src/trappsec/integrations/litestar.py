@@ -3,6 +3,81 @@ import re
 from urllib.parse import parse_qs, urlencode
 
 
+def _extract_multipart_boundary(content_type):
+    for param in content_type.split(";"):
+        param = param.strip()
+        if param.lower().startswith("boundary="):
+            return param.split("=", 1)[1].strip().strip('"')
+    return None
+
+
+def _parse_content_disposition(value):
+    if not value:
+        return {}
+    params = {}
+    for part in value.split(";"):
+        part = part.strip()
+        if "=" in part:
+            k, v = part.split("=", 1)
+            params[k.strip().lower()] = v.strip().strip('"')
+    return params
+
+
+def _parse_multipart_parts(body_bytes, boundary):
+    delimiter = b"--" + boundary.encode("utf-8")
+    segments = body_bytes.split(delimiter)
+    parts = []
+
+    for segment in segments[1:]:
+        # Final boundary marker.
+        if segment.startswith(b"--"):
+            break
+        if segment.startswith(b"\r\n"):
+            segment = segment[2:]
+        if segment.endswith(b"\r\n"):
+            segment = segment[:-2]
+        if not segment:
+            continue
+
+        header_end = segment.find(b"\r\n\r\n")
+        if header_end == -1:
+            continue
+
+        header_block = segment[:header_end]
+        body = segment[header_end + 4:]
+        header_lines = header_block.split(b"\r\n")
+        headers = {}
+        for line in header_lines:
+            if b":" not in line:
+                continue
+            key, val = line.split(b":", 1)
+            headers[key.decode("latin1").strip().lower()] = val.decode("latin1").strip()
+
+        disp = _parse_content_disposition(headers.get("content-disposition", ""))
+        parts.append(
+            {
+                "headers_raw": header_lines,
+                "headers": headers,
+                "name": disp.get("name"),
+                "is_file": "filename" in disp,
+                "body": body,
+            }
+        )
+
+    return parts
+
+
+def _rebuild_multipart_body(parts, boundary):
+    delimiter = b"--" + boundary.encode("utf-8")
+    chunks = []
+    for part in parts:
+        chunks.append(delimiter + b"\r\n")
+        chunks.append(b"\r\n".join(part["headers_raw"]) + b"\r\n\r\n")
+        chunks.append(part["body"] + b"\r\n")
+    chunks.append(delimiter + b"--\r\n")
+    return b"".join(chunks)
+
+
 class _ASGIRequestURL:
     __slots__ = ("path",)
 
@@ -135,7 +210,7 @@ class LitestarIntegration:
 
             if query_fields:
                 qs = scope.get("query_string", b"").decode("utf-8")
-                q_dict = parse_qs(qs) if qs else {}
+                q_dict = {k: v[0] if len(v) == 1 else v for k, v in parse_qs(qs).items()} if qs else {}
                 q_dict, mod, touched = self.ts._detect_honey_fields(q_dict, query_fields, None)
                 if mod:
                     found_fields.extend(mod)
@@ -164,6 +239,51 @@ class LitestarIntegration:
                             found_fields.extend(mod)
                         if touched:
                             new_body = urlencode(body_data, doseq=True).encode("utf-8")
+                    elif "multipart/form-data" in content_type:
+                        boundary = _extract_multipart_boundary(content_type)
+                        if boundary:
+                            parts = _parse_multipart_parts(body_bytes, boundary)
+                            text_fields = {}
+                            for part in parts:
+                                name = part.get("name")
+                                if not name or part.get("is_file"):
+                                    continue
+                                value = part["body"].decode("utf-8", errors="replace")
+                                if name in text_fields:
+                                    existing = text_fields[name]
+                                    if isinstance(existing, list):
+                                        existing.append(value)
+                                    else:
+                                        text_fields[name] = [existing, value]
+                                else:
+                                    text_fields[name] = value
+
+                            if text_fields:
+                                body_data = text_fields
+                                body_data, mod, touched = self.ts._detect_honey_fields(body_data, body_fields, None)
+                                if mod:
+                                    found_fields.extend(mod)
+                                if touched:
+                                    kept_parts = []
+                                    for part in parts:
+                                        name = part.get("name")
+                                        if part.get("is_file") or not name:
+                                            kept_parts.append(part)
+                                            continue
+                                        if name in body_data:
+                                            kept_parts.append(part)
+
+                                    new_body = _rebuild_multipart_body(kept_parts, boundary)
+
+                                    # Preserve content-type boundary and sync content-length with rewritten body.
+                                    new_headers = []
+                                    for k_h, v_h in scope.get("headers", []):
+                                        key = k_h.decode("latin1").lower()
+                                        if key == "content-length":
+                                            new_headers.append((k_h, str(len(new_body)).encode("latin1")))
+                                        else:
+                                            new_headers.append((k_h, v_h))
+                                    scope["headers"] = new_headers
                 except Exception as e:
                     self.ts.logger.error("error reading body: %s", e)
 

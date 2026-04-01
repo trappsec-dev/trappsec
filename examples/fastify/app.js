@@ -12,6 +12,9 @@ async function bootstrap() {
     const { values } = parseArgs({ options, strict: false });
 
     await fastify.register(require('@fastify/formbody'));
+    await fastify.register(require('@fastify/multipart'), {
+        attachFieldsToBody: 'keyValues',
+    });
     await fastify.register(require('@fastify/static'), {
         root: path.join(__dirname, '../lure-frontend'),
         prefix: '/',
@@ -60,6 +63,15 @@ async function bootstrap() {
         ]
     }));
 
+    fastify.get('/api/v2/orders/:id', async (req) => ({
+        id: req.params.id, item: 'Laptop', amount: 1200, status: 'shipped'
+    }));
+
+    fastify.get('/api/v2/echo/query', async (req) => req.query);
+    fastify.post('/api/v2/echo/body', async (req) => req.body || {});
+    fastify.post('/api/v2/echo/form', async (req) => req.body || {});
+    fastify.post('/api/v2/echo/multipart', async (req) => req.body || {});
+
     // Traps
     ts.trap('/deployment/config')
         .methods('GET')
@@ -99,6 +111,23 @@ async function bootstrap() {
 
     ts.watch('/api/v2/profile')
         .body('is_admin', { intent: 'Privilege Escalation' });
+
+    ts.watch('/api/v2/orders/:id')
+        .query('discount_code', { defaultValue: 'NONE', intent: 'Coupon Tampering' });
+
+    ts.watch('/api/v2/echo/query')
+        .query('honey_q', { intent: 'Query Field Test' })
+        .query('role_q', { defaultValue: 'user', intent: 'Query Default Test' });
+
+    ts.watch('/api/v2/echo/body')
+        .body('honey_b', { intent: 'Body Field Test' })
+        .body('role_b', { defaultValue: 'user', intent: 'Body Default Test' });
+
+    ts.watch('/api/v2/echo/form')
+        .body('honey_f', { intent: 'Form Field Test' });
+
+    ts.watch('/api/v2/echo/multipart')
+        .body('honey_m', { intent: 'Multipart Field Test' });
 
     if (values.otel) {
         ts.add_otel();

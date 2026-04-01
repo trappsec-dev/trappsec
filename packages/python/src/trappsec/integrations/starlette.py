@@ -94,7 +94,7 @@ class StarletteIntegration:
             if query_fields:
                 qs = request.scope.get("query_string", b"").decode("utf-8")
                 if qs:
-                    q_dict = parse_qs(qs)
+                    q_dict = {k: v[0] if len(v) == 1 else v for k, v in parse_qs(qs).items()}
                     q_dict, mod, touched = ts._detect_honey_fields(q_dict, query_fields, request)
                     if mod:
                         found_fields.extend(mod)

@@ -82,8 +82,28 @@ def get_orders():
         ]
     })
 
+@app.route("/api/v2/orders/<order_id>", methods=["GET"])
+def get_order_detail(order_id):
+    return jsonify({"id": order_id, "item": "Laptop", "amount": 1200, "status": "shipped"})
+
+@app.route("/api/v2/echo/query")
+def echo_query():
+    return jsonify(dict(request.args))
+
+@app.route("/api/v2/echo/body", methods=["POST"])
+def echo_body():
+    return jsonify(request.get_json(force=True, silent=True) or {})
+
+@app.route("/api/v2/echo/form", methods=["POST"])
+def echo_form():
+    return jsonify(dict(request.form))
+
+@app.route("/api/v2/echo/multipart", methods=["POST"])
+def echo_multipart():
+    return jsonify(dict(request.form))
+
 #############################
-##  DECOY ROUTES 
+##  DECOY ROUTES
 #############################
 
 # example of a decoy route with a static response
@@ -128,7 +148,24 @@ ts.watch("/auth/register") \
 # alerts on presence of key irrespective of value
 # useful when lure is a dummy key returned in other API responses.
 ts.watch("/api/v2/profile") \
-    .body("is_admin", intent="Privilege Escalation") \
+    .body("is_admin", intent="Privilege Escalation")
+
+ts.watch("/api/v2/orders/<order_id>") \
+    .query("discount_code", default="NONE", intent="Coupon Tampering")
+
+ts.watch("/api/v2/echo/query") \
+    .query("honey_q", intent="Query Field Test") \
+    .query("role_q", default="user", intent="Query Default Test")
+
+ts.watch("/api/v2/echo/body") \
+    .body("honey_b", intent="Body Field Test") \
+    .body("role_b", default="user", intent="Body Default Test")
+
+ts.watch("/api/v2/echo/form") \
+    .body("honey_f", intent="Form Field Test")
+
+ts.watch("/api/v2/echo/multipart") \
+    .body("honey_m", intent="Multipart Field Test")
 
 def setup_opentelemetry(app):
     from opentelemetry import trace

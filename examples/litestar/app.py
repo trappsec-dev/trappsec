@@ -54,6 +54,37 @@ async def get_orders() -> dict:
     }
 
 
+@get("/api/v2/orders/{order_id:str}")
+async def get_order_detail(order_id: str) -> dict:
+    return {"id": order_id, "item": "Laptop", "amount": 1200, "status": "shipped"}
+
+
+@get("/api/v2/echo/query")
+async def echo_query(request: Request) -> dict:
+    return dict(request.query_params)
+
+
+@post("/api/v2/echo/body", status_code=200)
+async def echo_body(request: Request) -> dict:
+    try:
+        data = await request.json()
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
+@post("/api/v2/echo/form", status_code=200)
+async def echo_form(request: Request) -> dict:
+    form = await request.form()
+    return {k: v for k, v in form.items() if isinstance(v, str)}
+
+
+@post("/api/v2/echo/multipart", status_code=200)
+async def echo_multipart(request: Request) -> dict:
+    form = await request.form()
+    return {k: v for k, v in form.items() if isinstance(v, str)}
+
+
 @get("/")
 async def serve_index() -> Response:
     frontend_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'lure-frontend')
@@ -83,6 +114,11 @@ app = Litestar(route_handlers=[
     get_profile,
     update_profile,
     get_orders,
+    get_order_detail,
+    echo_query,
+    echo_body,
+    echo_form,
+    echo_multipart,
     serve_index,
     serve_static,
 ])
@@ -133,6 +169,23 @@ ts.watch("/auth/register") \
 
 ts.watch("/api/v2/profile") \
     .body("is_admin", intent="Privilege Escalation")
+
+ts.watch("/api/v2/orders/{order_id:str}") \
+    .query("discount_code", default="NONE", intent="Coupon Tampering")
+
+ts.watch("/api/v2/echo/query") \
+    .query("honey_q", intent="Query Field Test") \
+    .query("role_q", default="user", intent="Query Default Test")
+
+ts.watch("/api/v2/echo/body") \
+    .body("honey_b", intent="Body Field Test") \
+    .body("role_b", default="user", intent="Body Default Test")
+
+ts.watch("/api/v2/echo/form") \
+    .body("honey_f", intent="Form Field Test")
+
+ts.watch("/api/v2/echo/multipart") \
+    .body("honey_m", intent="Multipart Field Test")
 
 
 def setup_opentelemetry(application):

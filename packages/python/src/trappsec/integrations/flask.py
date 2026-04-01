@@ -86,14 +86,20 @@ class FlaskIntegration:
 
     
     def _patch_startup(self):
+        import threading
         original_wsgi_app = self.app.wsgi_app
+        init_lock = threading.Lock()
+        bootstrapped = False
 
         def trappsec_wrapper(environ, start_response):
-            self.inject_traps()
-            self.setup_watches()
-
-            # un-patch after first request
-            self.app.wsgi_app = original_wsgi_app
+            nonlocal bootstrapped
+            if not bootstrapped:
+                with init_lock:
+                    if not bootstrapped:
+                        self.inject_traps()
+                        self.setup_watches()
+                        self.app.wsgi_app = original_wsgi_app
+                        bootstrapped = True
 
             return original_wsgi_app(environ, start_response)
 

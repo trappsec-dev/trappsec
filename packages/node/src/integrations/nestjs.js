@@ -204,7 +204,13 @@ class NestIntegration {
             );
         }
         if (this._adapterType === 'express') {
-            return this._normalizePath(req.route?.path);
+            if (req.route?.path) {
+                // req.baseUrl holds the mount prefix stripped by any parent router
+                // (empty string for top-level routes). Concatenating with req.route.path
+                // reconstructs the full registered pattern used as the watchMap key.
+                return this._normalizePath((req.baseUrl || '') + req.route.path);
+            }
+            return null;
         }
 
         return this._normalizePath(
@@ -231,9 +237,18 @@ class NestIntegration {
     _setupExpressWatches(routerStack, watchMap) {
         const integration = this;
         for (const layer of routerStack) {
-            if (!layer || typeof layer.handle !== 'function' || layer.handle.__trappsecWrapped) {
+            if (!layer || typeof layer.handle !== 'function') continue;
+
+            // Sub-router: layer.route is null and the handle carries its own .stack.
+            // Recurse so inner route layers are wrapped. req.baseUrl is set correctly
+            // by Express for each nesting level, so _extractMatchedRoutePath handles
+            // path reconstruction without any prefix tracking here.
+            if (!layer.route && Array.isArray(layer.handle.stack)) {
+                this._setupExpressWatches(layer.handle.stack, watchMap);
                 continue;
             }
+
+            if (layer.handle.__trappsecWrapped) continue;
 
             const oldHandler = layer.handle;
             const wrapped = function (req, res, next) {
@@ -316,6 +331,60 @@ class NestIntegration {
         return target;
     }
 
+    _toQueryString(data) {
+        const params = new URLSearchParams();
+        for (const [key, value] of Object.entries(data || {})) {
+            if (Array.isArray(value)) {
+                for (const item of value) {
+                    params.append(key, String(item));
+                }
+            } else {
+                params.append(key, String(value));
+            }
+        }
+        return params.toString();
+    }
+
+    _applySanitizedQuery(req, data) {
+        // Fastify: sanitize parsed query object only. URL mutation is adapter-specific
+        // and not needed for route handlers to observe cleaned query values.
+        if (this._adapterType === 'fastify') {
+            if (req.query && typeof req.query === 'object') {
+                this._replaceData(req.query, data);
+                return;
+            }
+            try {
+                req.query = data;
+            } catch (_e) {
+                // no-op: keep request flow intact even if adapter marks query readonly
+            }
+            return;
+        }
+
+        // Express 5 can expose req.query as a getter-only property. Mutate in place
+        // where possible and always rewrite URL query so subsequent getter reads reflect
+        // sanitized values.
+        if (req.query && typeof req.query === 'object') {
+            this._replaceData(req.query, data);
+        }
+
+        const queryString = this._toQueryString(data);
+        const baseUrl = this._stripQuery(req.url || req.originalUrl || '') || '';
+        const nextUrl = queryString ? `${baseUrl}?${queryString}` : baseUrl;
+
+        if (typeof req.url === 'string') {
+            req.url = nextUrl;
+        }
+        if (typeof req.originalUrl === 'string') {
+            req.originalUrl = nextUrl;
+        }
+
+        // Clear Express parseurl cache so req.query getter re-parses updated URL.
+        if (Object.prototype.hasOwnProperty.call(req, '_parsedUrl')) {
+            req._parsedUrl = undefined;
+        }
+    }
+
     _withType(foundFields, type) {
         return foundFields.map((field) => ({
             ...field,
@@ -329,13 +398,14 @@ class NestIntegration {
         let found = [];
 
         if (Object.keys(query_fields).length > 0 && req.query) {
-            const { data, found_fields, touched } = this.ts._detect_honey_fields(req.query, query_fields, req);
+            const queryCopy = { ...req.query };
+            const { data, found_fields, touched } = this.ts._detect_honey_fields(queryCopy, query_fields, req);
             if (found_fields.length > 0) {
                 found.push(...this._withType(found_fields, "query"));
             }
             if (touched) {
                 try {
-                    req.query = this._replaceData(req.query, data);
+                    this._applySanitizedQuery(req, data);
                 } catch (e) {
                     this.ts.logger.error("Trappsec failed to sanitize query fields:", e);
                 }
@@ -343,7 +413,8 @@ class NestIntegration {
         }
 
         if (Object.keys(body_fields).length > 0 && req.body) {
-            const { data, found_fields, touched } = this.ts._detect_honey_fields(req.body, body_fields, req);
+            const bodyCopy = { ...req.body };
+            const { data, found_fields, touched } = this.ts._detect_honey_fields(bodyCopy, body_fields, req);
             if (found_fields.length > 0) {
                 found.push(...this._withType(found_fields, "body"));
             }

@@ -71,11 +71,43 @@ async def get_orders(_request: Request):
     })
 
 
+async def get_order_detail(request: Request):
+    order_id = request.path_params["order_id"]
+    return JSONResponse({"id": order_id, "item": "Laptop", "amount": 1200, "status": "shipped"})
+
+
+async def echo_query(request: Request):
+    return JSONResponse(dict(request.query_params))
+
+
+async def echo_body(request: Request):
+    try:
+        data = await request.json()
+        return JSONResponse(data if isinstance(data, dict) else {})
+    except Exception:
+        return JSONResponse({})
+
+
+async def echo_form(request: Request):
+    form = await request.form()
+    return JSONResponse({k: v for k, v in form.items() if isinstance(v, str)})
+
+
+async def echo_multipart(request: Request):
+    form = await request.form()
+    return JSONResponse({k: v for k, v in form.items() if isinstance(v, str)})
+
+
 app.router.routes.extend([
     Route("/auth/register", register, methods=["POST"]),
     Route("/api/v2/profile", get_profile, methods=["GET"]),
     Route("/api/v2/profile", update_profile, methods=["POST"]),
     Route("/api/v2/orders", get_orders, methods=["GET"]),
+    Route("/api/v2/orders/{order_id}", get_order_detail, methods=["GET"]),
+    Route("/api/v2/echo/query", echo_query, methods=["GET"]),
+    Route("/api/v2/echo/body", echo_body, methods=["POST"]),
+    Route("/api/v2/echo/form", echo_form, methods=["POST"]),
+    Route("/api/v2/echo/multipart", echo_multipart, methods=["POST"]),
 ])
 
 # Traps
@@ -110,6 +142,23 @@ ts.watch("/auth/register") \
 
 ts.watch("/api/v2/profile") \
     .body("is_admin", intent="Privilege Escalation")
+
+ts.watch("/api/v2/orders/{order_id}") \
+    .query("discount_code", default="NONE", intent="Coupon Tampering")
+
+ts.watch("/api/v2/echo/query") \
+    .query("honey_q", intent="Query Field Test") \
+    .query("role_q", default="user", intent="Query Default Test")
+
+ts.watch("/api/v2/echo/body") \
+    .body("honey_b", intent="Body Field Test") \
+    .body("role_b", default="user", intent="Body Default Test")
+
+ts.watch("/api/v2/echo/form") \
+    .body("honey_f", intent="Form Field Test")
+
+ts.watch("/api/v2/echo/multipart") \
+    .body("honey_m", intent="Multipart Field Test")
 
 frontend_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'lure-frontend')
 app.router.routes.append(Mount("/", app=StaticFiles(directory=frontend_dir, html=True), name="frontend"))

@@ -61,6 +61,30 @@ def get_orders(_request):
     })
 
 
+def get_order_detail(_request, order_id):
+    return JsonResponse({"id": order_id, "item": "Laptop", "amount": 1200, "status": "shipped"})
+
+
+def echo_query(request):
+    return JsonResponse({k: v for k, v in request.GET.items()})
+
+
+def echo_body(request):
+    try:
+        data = json.loads(request.body.decode("utf-8"))
+        return JsonResponse(data if isinstance(data, dict) else {})
+    except Exception:
+        return JsonResponse({})
+
+
+def echo_form(request):
+    return JsonResponse({k: v for k, v in request.POST.items()})
+
+
+def echo_multipart(request):
+    return JsonResponse({k: v for k, v in request.POST.items()})
+
+
 def serve_index(_request):
     with open(os.path.join(FRONTEND_DIR, "index.html"), "rb") as f:
         return HttpResponse(f.read(), content_type="text/html")
@@ -83,6 +107,11 @@ urlpatterns = [
     path("auth/register", register),
     path("api/v2/profile", profile),
     path("api/v2/orders", get_orders),
+    path("api/v2/orders/<str:order_id>", get_order_detail),
+    path("api/v2/echo/query", echo_query),
+    path("api/v2/echo/body", echo_body),
+    path("api/v2/echo/form", echo_form),
+    path("api/v2/echo/multipart", echo_multipart),
     path("", serve_index),
     re_path(r"^(?P<file_path>.+)$", serve_static),
 ]
@@ -151,6 +180,23 @@ ts.watch("/auth/register") \
 
 ts.watch("/api/v2/profile") \
     .body("is_admin", intent="Privilege Escalation")
+
+ts.watch("/api/v2/orders/<str:order_id>") \
+    .query("discount_code", default="NONE", intent="Coupon Tampering")
+
+ts.watch("/api/v2/echo/query") \
+    .query("honey_q", intent="Query Field Test") \
+    .query("role_q", default="user", intent="Query Default Test")
+
+ts.watch("/api/v2/echo/body") \
+    .body("honey_b", intent="Body Field Test") \
+    .body("role_b", default="user", intent="Body Default Test")
+
+ts.watch("/api/v2/echo/form") \
+    .body("honey_f", intent="Form Field Test")
+
+ts.watch("/api/v2/echo/multipart") \
+    .body("honey_m", intent="Multipart Field Test")
 
 
 def setup_opentelemetry():

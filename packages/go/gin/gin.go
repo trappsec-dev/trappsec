@@ -266,6 +266,20 @@ func (in *ginIntegration) watchMiddleware() gin.HandlerFunc {
 								core.ResetBody(c.Request, []byte(core.MapToQuery(sanitized)))
 							}
 						}
+					} else if strings.Contains(contentType, "multipart/form-data") {
+						form := core.ParseMultipartFields(c.Request)
+						if form != nil {
+							sanitized, f, touched := in.ts.DetectHoneyFields(form, watch.BodyFields, c)
+							if len(f) > 0 {
+								for i := range f {
+									f[i].Type = "body"
+								}
+								found = append(found, f...)
+							}
+							if touched {
+								core.RebuildMultipartBody(c.Request, sanitized)
+							}
+						}
 					}
 				}
 			}

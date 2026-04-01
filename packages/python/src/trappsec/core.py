@@ -231,12 +231,19 @@ class Sentry:
                 try:
                     if callable(expected):
                         expected = expected(request_obj)
-                    
-                    if expected is NO_DEFAULT or data[key] != expected:
+
+                    actual = data[key]
+                    # Normalize single-element lists to scalars for comparison.
+                    # parse_qs and framework MultiDicts represent query params as
+                    # lists; user-defined defaults are always scalars.
+                    if isinstance(actual, list) and len(actual) == 1:
+                        actual = actual[0]
+
+                    if expected is NO_DEFAULT or actual != expected:
                         found_fields.append({
                             "type": "body",
                             "field": key,
-                            "value": data[key],
+                            "value": actual,
                             "intent": rule_definition.get("intent", None),
                         })
                 except Exception as e:

@@ -83,8 +83,34 @@ async def get_orders():
         ]
     })
 
+@app.get("/api/v2/orders/{order_id}")
+async def get_order_detail(order_id: str):
+    return JSONResponse(content={"id": order_id, "item": "Laptop", "amount": 1200, "status": "shipped"})
+
+@app.get("/api/v2/echo/query")
+async def echo_query(request: Request):
+    return JSONResponse(content=dict(request.query_params))
+
+@app.post("/api/v2/echo/body")
+async def echo_body(request: Request):
+    try:
+        data = await request.json()
+        return JSONResponse(content=data if isinstance(data, dict) else {})
+    except Exception:
+        return JSONResponse(content={})
+
+@app.post("/api/v2/echo/form")
+async def echo_form(request: Request):
+    form = await request.form()
+    return JSONResponse(content={k: v for k, v in form.items() if isinstance(v, str)})
+
+@app.post("/api/v2/echo/multipart")
+async def echo_multipart(request: Request):
+    form = await request.form()
+    return JSONResponse(content={k: v for k, v in form.items() if isinstance(v, str)})
+
 #############################
-##  DECOY ROUTES 
+##  DECOY ROUTES
 #############################
 
 ts.trap("/deployment/config") \
@@ -122,6 +148,22 @@ ts.watch("/auth/register") \
 ts.watch("/api/v2/profile") \
     .body("is_admin", intent="Privilege Escalation")
 
+ts.watch("/api/v2/orders/{order_id}") \
+    .query("discount_code", default="NONE", intent="Coupon Tampering")
+
+ts.watch("/api/v2/echo/query") \
+    .query("honey_q", intent="Query Field Test") \
+    .query("role_q", default="user", intent="Query Default Test")
+
+ts.watch("/api/v2/echo/body") \
+    .body("honey_b", intent="Body Field Test") \
+    .body("role_b", default="user", intent="Body Default Test")
+
+ts.watch("/api/v2/echo/form") \
+    .body("honey_f", intent="Form Field Test")
+
+ts.watch("/api/v2/echo/multipart") \
+    .body("honey_m", intent="Multipart Field Test")
 
 # Mount the frontend static files (placed last to avoid shadowing API routes)
 FRONTEND_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'lure-frontend')
