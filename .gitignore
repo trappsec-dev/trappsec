@@ -219,3 +219,5 @@ GemFile.lock
 
 *.exe
 .claude/
+
+.gocache/
