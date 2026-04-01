@@ -99,6 +99,13 @@ class TornadoIntegration:
             path = getattr(matcher, "_path", None)
             watch = self.watch_map.get(path) if path else None
             if watch is None:
+                # Fallback for parameterized routes: Tornado replaces capture groups with %s
+                # in _path, so look up by the raw regex pattern (strip trailing $).
+                regex_attr = getattr(matcher, "regex", None)
+                if regex_attr is not None:
+                    normalized = regex_attr.pattern.rstrip("$")
+                    watch = self.watch_map.get(normalized)
+            if watch is None:
                 continue
 
             class_rules.setdefault(handler_cls, []).append((matcher, watch))
