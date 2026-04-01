@@ -48,6 +48,7 @@ export class Sentry {
     watch(path: string): WatchBuilder;
     add_webhook(url: string, options?: { secret?: string; headers?: any; heartbeat_interval?: number; template?: any; alerts_only?: boolean }): this;
     add_otel(): this;
+    add_slack(url: string, options?: { alerts_only?: boolean }): this;
     identify_user(callback: (req: any) => { user: string; role?: string } | null): this;
     override_source_ip(callback: (req: any) => string | null): this;
 }

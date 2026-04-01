@@ -116,6 +116,18 @@ class Sentry:
         self._handlers.append(OTELHandler())
         return self
 
+    def add_slack(self, url: str, alerts_only: bool = True):
+        from .handlers import SlackHandler
+        self._handlers.append(
+            SlackHandler(
+                url=url,
+                service=self.service,
+                environment=self.environment,
+                alerts_only=alerts_only,
+            )
+        )
+        return self
+
     def identify_user(self, callback: typing.Callable):
         self.identity.auth = callback
         return self

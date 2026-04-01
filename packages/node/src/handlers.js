@@ -73,6 +73,99 @@ class WebhookHandler {
     }
 }
 
+function stringify(value) {
+    if (value === null || value === undefined) return "-";
+    if (typeof value === "object") return JSON.stringify(value);
+    return String(value);
+}
+
+function truncate(value, limit = 180) {
+    if (value.length <= limit) return value;
+    if (limit <= 3) return value.slice(0, limit);
+    return `${value.slice(0, limit - 3)}...`;
+}
+
+function buildSlackPayload(event, { service = null, environment = null } = {}) {
+    const app = event?.app || {};
+    const eventName = event?.event || "trappsec.event";
+    const eventType = event?.type || "signal";
+    const severity = eventType === "alert" ? "ALERT" : "SIGNAL";
+    const emoji = eventType === "alert" ? ":rotating_light:" : ":large_blue_circle:";
+
+    const svc = app.service || service || "unknown-service";
+    const env = app.environment || environment || "unknown-env";
+    const host = app.hostname || "unknown-host";
+    const path = event?.path || "-";
+    const method = event?.method || "-";
+    const intent = event?.intent || "-";
+    const reason = event?.reason || "-";
+    const ip = event?.ip || "-";
+    const user = event?.user || "-";
+    const role = event?.role || "-";
+    const ua = truncate(stringify(event?.user_agent), 120);
+
+    const fields = [
+        { type: "mrkdwn", text: `*Severity*\n${severity}` },
+        { type: "mrkdwn", text: `*Event*\n\`${eventName}\`` },
+        { type: "mrkdwn", text: `*Service*\n\`${svc}\`` },
+        { type: "mrkdwn", text: `*Environment*\n\`${env}\`` },
+        { type: "mrkdwn", text: `*Method*\n\`${method}\`` },
+        { type: "mrkdwn", text: `*Path*\n\`${truncate(path, 80)}\`` },
+        { type: "mrkdwn", text: `*User*\n\`${truncate(user, 80)}\`` },
+        { type: "mrkdwn", text: `*Role*\n\`${truncate(role, 80)}\`` },
+        { type: "mrkdwn", text: `*IP*\n\`${truncate(ip, 80)}\`` },
+        { type: "mrkdwn", text: `*Host*\n\`${truncate(host, 80)}\`` },
+    ];
+
+    const blocks = [
+        { type: "header", text: { type: "plain_text", text: `${emoji} Trappsec ${severity}` } },
+        { type: "section", fields },
+        { type: "context", elements: [{ type: "mrkdwn", text: `*User-Agent:* \`${ua}\`` }] },
+    ];
+
+    if (eventName === "trappsec.watch_hit" && Array.isArray(event?.found_fields)) {
+        const lines = event.found_fields.slice(0, 8).map((f) => {
+            const fieldName = truncate(stringify(f?.field), 40);
+            const fieldType = truncate(stringify(f?.type), 20);
+            const fieldIntent = truncate(stringify(f?.intent), 50);
+            return `- \`${fieldType}\` \`${fieldName}\` (${fieldIntent})`;
+        });
+        if (lines.length > 0) {
+            blocks.push({ type: "section", text: { type: "mrkdwn", text: `*Triggered Fields*\n${lines.join("\n")}` } });
+        }
+    }
+
+    if (intent !== "-" || reason !== "-") {
+        blocks.push({
+            type: "section",
+            fields: [
+                { type: "mrkdwn", text: `*Intent*\n${truncate(intent, 120)}` },
+                { type: "mrkdwn", text: `*Reason*\n${truncate(reason, 120)}` },
+            ],
+        });
+    }
+
+    return {
+        text: `[${severity}] ${eventName} ${method} ${path} (${svc}/${env})`,
+        blocks,
+    };
+}
+
+class SlackHandler {
+    constructor(url, { service = null, environment = null, alerts_only = true } = {}) {
+        this.webhook = new WebhookHandler(url, {
+            service,
+            environment,
+            alerts_only,
+            template: (event) => buildSlackPayload(event, { service, environment }),
+        });
+    }
+
+    emit(event) {
+        this.webhook.emit(event);
+    }
+}
+
 class OTELHandler {
     constructor() {
         try {
@@ -118,4 +211,4 @@ class OTELHandler {
     }
 }
 
-module.exports = { LogHandler, WebhookHandler, OTELHandler };
+module.exports = { LogHandler, WebhookHandler, SlackHandler, OTELHandler };

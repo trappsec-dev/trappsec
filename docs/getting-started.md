@@ -228,6 +228,24 @@ ts.add_webhook("https://hooks.slack.com/services/...", { alerts_only: false });
 
 </div>
 
+### Slack
+Use a Slack incoming webhook with a presentation-optimized payload out of the box.
+
+<div class="lang-content" data-lang="python" markdown="1">
+
+```python
+ts.add_slack("https://hooks.slack.com/services/...")
+```
+
+</div>
+<div class="lang-content" data-lang="node" markdown="1">
+
+```javascript
+ts.add_slack("https://hooks.slack.com/services/...");
+```
+
+</div>
+
 ### OpenTelemetry
 Enrich your OTEL spans with trappsec metadata to track attacks in your existing observability platform (Jaeger, Honeycomb, Datadog).
 

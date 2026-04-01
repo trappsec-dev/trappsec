@@ -1,6 +1,6 @@
 const os = require('os');
 const { TrapBuilder, WatchBuilder, NO_DEFAULT } = require('./builders');
-const { LogHandler, WebhookHandler, OTELHandler } = require('./handlers');
+const { LogHandler, WebhookHandler, SlackHandler, OTELHandler } = require('./handlers');
 
 class Sentry {
     constructor(app, service, environment) {
@@ -66,6 +66,12 @@ class Sentry {
 
     add_otel() {
         this._handlers.push(new OTELHandler());
+        return this;
+    }
+
+    add_slack(url, { alerts_only = true } = {}) {
+        const handler = new SlackHandler(url, { alerts_only, service: this.service, environment: this.environment });
+        this._handlers.push(handler);
         return this;
     }
 

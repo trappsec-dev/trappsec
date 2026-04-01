@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"strings"
 	"time"
 )
 
@@ -39,6 +40,10 @@ type WebhookOptions struct {
 	AlertsOnly        *bool
 }
 
+type SlackOptions struct {
+	AlertsOnly *bool
+}
+
 type WebhookHandler struct {
 	url         string
 	secret      string
@@ -48,6 +53,10 @@ type WebhookHandler struct {
 	environment string
 	alertsOnly  bool
 	client      *http.Client
+}
+
+type SlackHandler struct {
+	webhook *WebhookHandler
 }
 
 func NewWebhookHandler(url string, opts *WebhookOptions) (*WebhookHandler, error) {
@@ -134,6 +143,141 @@ func (h *WebhookHandler) send(payload any) error {
 	}
 	defer resp.Body.Close()
 	return nil
+}
+
+func NewSlackHandler(url string, opts *SlackOptions) (*SlackHandler, error) {
+	if opts == nil {
+		opts = &SlackOptions{}
+	}
+
+	wh, err := NewWebhookHandler(url, &WebhookOptions{
+		AlertsOnly: opts.AlertsOnly,
+		Template:   buildSlackPayload,
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	return &SlackHandler{webhook: wh}, nil
+}
+
+func (h *SlackHandler) Emit(event TriggerContext) error {
+	return h.webhook.Emit(event)
+}
+
+func buildSlackPayload(event TriggerContext) any {
+	severity := "SIGNAL"
+	emoji := ":large_blue_circle:"
+	if strings.EqualFold(event.Type, "alert") {
+		severity = "ALERT"
+		emoji = ":rotating_light:"
+	}
+
+	eventName := event.Event
+	if eventName == "" {
+		eventName = "trappsec.event"
+	}
+	path := event.Path
+	if path == "" {
+		path = "-"
+	}
+	method := event.Method
+	if method == "" {
+		method = "-"
+	}
+	user := event.User
+	if user == "" {
+		user = "-"
+	}
+	role := event.Role
+	if role == "" {
+		role = "-"
+	}
+	ip := event.IP
+	if ip == "" {
+		ip = "-"
+	}
+	service := event.App.Service
+	if service == "" {
+		service = "unknown-service"
+	}
+	environment := event.App.Environment
+	if environment == "" {
+		environment = "unknown-env"
+	}
+	hostname := event.App.Hostname
+	if hostname == "" {
+		hostname = "unknown-host"
+	}
+	intent := event.Intent
+	if intent == "" {
+		intent = "-"
+	}
+	reason := event.Reason
+	if reason == "" {
+		reason = "-"
+	}
+	ua := event.UserAgent
+	if ua == "" {
+		ua = "-"
+	}
+
+	fields := []map[string]string{
+		{"type": "mrkdwn", "text": "*Severity*\n" + severity},
+		{"type": "mrkdwn", "text": "*Event*\n`" + eventName + "`"},
+		{"type": "mrkdwn", "text": "*Service*\n`" + service + "`"},
+		{"type": "mrkdwn", "text": "*Environment*\n`" + environment + "`"},
+		{"type": "mrkdwn", "text": "*Method*\n`" + method + "`"},
+		{"type": "mrkdwn", "text": "*Path*\n`" + path + "`"},
+		{"type": "mrkdwn", "text": "*User*\n`" + user + "`"},
+		{"type": "mrkdwn", "text": "*Role*\n`" + role + "`"},
+		{"type": "mrkdwn", "text": "*IP*\n`" + ip + "`"},
+		{"type": "mrkdwn", "text": "*Host*\n`" + hostname + "`"},
+	}
+
+	blocks := []any{
+		map[string]any{"type": "header", "text": map[string]any{"type": "plain_text", "text": emoji + " Trappsec " + severity}},
+		map[string]any{"type": "section", "fields": fields},
+		map[string]any{"type": "context", "elements": []any{map[string]any{"type": "mrkdwn", "text": "*User-Agent:* `" + ua + "`"}}},
+	}
+
+	if strings.EqualFold(event.Event, "trappsec.watch_hit") && len(event.Found) > 0 {
+		lines := make([]string, 0, len(event.Found))
+		limit := len(event.Found)
+		if limit > 8 {
+			limit = 8
+		}
+		for i := 0; i < limit; i++ {
+			f := event.Found[i]
+			lines = append(lines, "- `"+fallback(f.Type)+"` `"+fallback(f.Field)+"` ("+fallback(f.Intent)+")")
+		}
+		blocks = append(blocks, map[string]any{
+			"type": "section",
+			"text": map[string]any{"type": "mrkdwn", "text": "*Triggered Fields*\n" + strings.Join(lines, "\n")},
+		})
+	}
+
+	if intent != "-" || reason != "-" {
+		blocks = append(blocks, map[string]any{
+			"type": "section",
+			"fields": []map[string]string{
+				{"type": "mrkdwn", "text": "*Intent*\n" + intent},
+				{"type": "mrkdwn", "text": "*Reason*\n" + reason},
+			},
+		})
+	}
+
+	return map[string]any{
+		"text":   fmt.Sprintf("[%s] %s %s %s (%s/%s)", severity, eventName, method, path, service, environment),
+		"blocks": blocks,
+	}
+}
+
+func fallback(v string) string {
+	if v == "" {
+		return "-"
+	}
+	return v
 }
 
 type OTELHandler struct{}

@@ -30,6 +30,7 @@ type (
 	TriggerContext = core.TriggerContext
 	AppInfo        = core.AppInfo
 	WebhookOptions = core.WebhookOptions
+	SlackOptions   = core.SlackOptions
 	EventHandler   = core.EventHandler
 )
 
