@@ -8,6 +8,7 @@ permalink: /getting-started/
 <div class="lang-switcher">
   <button class="lang-btn active" onclick="switchLang('python')">Python</button>
   <button class="lang-btn" onclick="switchLang('node')">Node.js</button>
+  <button class="lang-btn" onclick="switchLang('go')">Go</button>
 </div>
 
 # Getting Started
@@ -31,6 +32,14 @@ npm install trappsec
 ```
 
 </div>
+<div class="lang-content" data-lang="go" markdown="1">
+
+```bash
+# Install the integration for your framework (gin, nethttp, or echo)
+go get github.com/trappsec-dev/trappsec/packages/go/gin
+```
+
+</div>
 
 ## initialization
 
@@ -51,6 +60,16 @@ ts = trappsec.Sentry(app, service="PaymentService", environment="Production")
 const { Sentry } = require('trappsec');
 // app is your Express instance
 const ts = new Sentry(app, "PaymentService", "Production");
+```
+
+</div>
+<div class="lang-content" data-lang="go" markdown="1">
+
+```go
+import trappsec "github.com/trappsec-dev/trappsec/packages/go/gin"
+
+// r is your *gin.Engine (swap import path for nethttp or echo)
+ts := trappsec.InstallSentry(r, "PaymentService", "Production")
 ```
 
 </div>
@@ -111,6 +130,32 @@ ts.trap("/deployment/metrics")
 ```
 
 </div>
+<div class="lang-content" data-lang="go" markdown="1">
+
+```go
+// Static response
+ts.Trap("/deployment/config").
+    Methods("GET").
+    Intent("Reconnaissance").
+    Respond(trappsec.ResponseConfig{Status: 200, Body: map[string]any{"region": "us-east-1", "deployment_type": "production"}}).
+    IfUnauthenticated(trappsec.ResponseConfig{Status: 401, Body: map[string]any{"error": "Login Required"}})
+
+// Dynamic response
+ts.Trap("/deployment/metrics").
+    Methods("GET").
+    Intent("Reconnaissance").
+    Respond(trappsec.ResponseConfig{
+        Status: 200,
+        Body: func(_ any) any {
+            return map[string]any{
+                "cpu":    fmt.Sprintf("%d%%", rand.Intn(91)+5),
+                "memory": fmt.Sprintf("%d%%", rand.Intn(71)+20),
+            }
+        },
+    })
+```
+
+</div>
 
 #### Response Templates
 You can define reusable templates for common responses (e.g., deprecated API errors).
@@ -130,6 +175,15 @@ ts.trap("/api/v1/users").methods("GET").respond(template="deprecated_api")
 ts.template("deprecated_api", 410, { "error": "Gone", "message": "API v1 is deprecated" });
 
 ts.trap("/api/v1/users").methods("GET").respond({ template: "deprecated_api" });
+```
+
+</div>
+<div class="lang-content" data-lang="go" markdown="1">
+
+```go
+ts.Template("deprecated_api", 410, map[string]any{"error": "Gone", "message": "API v1 is deprecated"}, "application/json")
+
+ts.Trap("/api/v1/users").Methods("GET").Respond(trappsec.ResponseConfig{Template: "deprecated_api"})
 ```
 
 </div>
@@ -161,6 +215,17 @@ ts.watch("/api/profile/update").body("role", { intent: "Privilege Escalation" })
 // Alert if 'role' is present AND not equal to 'user'
 ts.watch("/auth/register")
     .body("role", { defaultValue: "user", intent: "Role Tampering" });
+```
+
+</div>
+<div class="lang-content" data-lang="go" markdown="1">
+
+```go
+// Alert if 'role' is present (regardless of value)
+ts.Watch("/api/profile/update").Body("role", trappsec.NoDefault, "Privilege Escalation")
+
+// Alert if 'role' is present AND not equal to 'user'
+ts.Watch("/auth/register").Body("role", "user", "Role Tampering")
 ```
 
 </div>
@@ -202,6 +267,34 @@ ts.override_source_ip((req) => req.headers["x-real-ip"] || req.ip);
 ```
 
 </div>
+<div class="lang-content" data-lang="go" markdown="1">
+
+```go
+// Extract user info from your authentication middleware (e.g. JWT claims set on context)
+ts.IdentifyUser(func(req any) *trappsec.AuthContext {
+    c := req.(*gin.Context) // cast to your framework's request type
+    uid := c.GetHeader("x-user-id")
+    if uid == "" {
+        return nil
+    }
+    role := c.GetHeader("x-user-role")
+    if role == "" {
+        role = "user"
+    }
+    return &trappsec.AuthContext{User: uid, Role: role}
+})
+
+// Handle proxies / load balancers
+ts.OverrideSourceIP(func(req any) string {
+    c := req.(*gin.Context)
+    if ip := c.GetHeader("x-real-ip"); ip != "" {
+        return ip
+    }
+    return c.ClientIP()
+})
+```
+
+</div>
 
 ---
 
@@ -225,6 +318,17 @@ ts.add_webhook("https://hooks.slack.com/services/...", alerts_only=False)
 ```javascript
 ts.add_webhook("https://hooks.slack.com/services/...");
 ts.add_webhook("https://hooks.slack.com/services/...", { alerts_only: false });
+```
+
+</div>
+<div class="lang-content" data-lang="go" markdown="1">
+
+```go
+ts.AddWebhook("https://hooks.slack.com/services/...", nil)
+// Send all events (not just alerts)
+alertsOnly := false
+ts.AddWebhook("https://hooks.slack.com/services/...", &trappsec.WebhookOptions{AlertsOnly: &alertsOnly})
+```
 
 </div>
 
@@ -245,11 +349,20 @@ ts.add_slack("https://hooks.slack.com/services/...");
 ```
 
 </div>
+<div class="lang-content" data-lang="go" markdown="1">
+
+```go
+ts.AddSlack("https://hooks.slack.com/services/...", nil)
+```
+
+</div>
 
 ### OpenTelemetry
 Enrich your OTEL spans with trappsec metadata to track attacks in your existing observability platform (Jaeger, Honeycomb, Datadog).
 
 <div class="lang-content" data-lang="python" markdown="1">
+
+```python
 ts.add_otel()
 ```
 
@@ -258,6 +371,13 @@ ts.add_otel()
 
 ```javascript
 ts.add_otel();
+```
+
+</div>
+<div class="lang-content" data-lang="go" markdown="1">
+
+```go
+ts.AddOTEL()
 ```
 
 </div>
@@ -304,6 +424,17 @@ ts.default_responses["authenticated"] = {
     "response_body": { "status": "ok" },
     "mime_type": "application/json"
 };
+```
+
+</div>
+<div class="lang-content" data-lang="go" markdown="1">
+
+```go
+// Override default unauthenticated response
+ts.SetDefaultUnauthenticated(403, map[string]any{"error": "Access Denied", "code": 1001}, "application/json")
+
+// Override default authenticated response
+ts.SetDefaultAuthenticated(200, map[string]any{"status": "ok"}, "application/json")
 ```
 
 </div>

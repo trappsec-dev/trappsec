@@ -9,6 +9,7 @@ permalink: /api/
 <div class="lang-switcher">
   <button class="lang-btn active" onclick="switchLang('python')">Python</button>
   <button class="lang-btn" onclick="switchLang('node')">Node.js</button>
+  <button class="lang-btn" onclick="switchLang('go')">Go</button>
 </div>
 
 # API Reference
@@ -29,10 +30,20 @@ The main entry point for the library.
 ### `new Sentry(app, service, environment)`
 
 </div>
+<div class="lang-content" data-lang="go" markdown="1">
+
+### `InstallSentry(router, service, environment string) *Sentry`
+
+Import path varies by framework:
+- `github.com/trappsec-dev/trappsec/packages/go/gin`
+- `github.com/trappsec-dev/trappsec/packages/go/nethttp`
+- `github.com/trappsec-dev/trappsec/packages/go/echo`
+
+</div>
 
 Initializes the trappsec Sentry.
 
-*   **app**: The application instance (Flask/FastAPI/Express/NestJS).
+*   **app / router**: The application or router instance (Flask/FastAPI/Express/NestJS/gin.Engine/http.ServeMux/echo.Echo).
 *   **service**: Name of your service (e.g., "PaymentService").
 *   **environment**: Deployment environment (e.g., "Production", "Staging").
 
@@ -56,6 +67,13 @@ trap.methods("GET", "POST");
 ```
 
 </div>
+<div class="lang-content" data-lang="go" markdown="1">
+
+```go
+trap.Methods("GET", "POST")
+```
+
+</div>
 
 Specifies the HTTP methods this trap should accept. Defaults to `["GET", "POST"]`.
 
@@ -72,6 +90,13 @@ trap.intent("Credential Harvesting")
 
 ```javascript
 trap.intent("Credential Harvesting");
+```
+
+</div>
+<div class="lang-content" data-lang="go" markdown="1">
+
+```go
+trap.Intent("Credential Harvesting")
 ```
 
 </div>
@@ -98,6 +123,13 @@ trap.respond({ status: number, body: object | string | Function, mime_type: stri
 ```
 
 </div>
+<div class="lang-content" data-lang="go" markdown="1">
+
+```go
+trap.Respond(trappsec.ResponseConfig{Status: int, Body: any, MIMEType: string, Template: string})
+```
+
+</div>
 
 **Examples**
 
@@ -116,6 +148,15 @@ trap.respond(template="deprecated_api")
 trap.respond({ status: 200, body: { "status": "ok" } });
 trap.respond({ status: 403, body: "Access Denied", mime_type: "text/plain" });
 trap.respond({ template: "deprecated_api" });
+```
+
+</div>
+<div class="lang-content" data-lang="go" markdown="1">
+
+```go
+trap.Respond(trappsec.ResponseConfig{Status: 200, Body: map[string]any{"status": "ok"}})
+trap.Respond(trappsec.ResponseConfig{Status: 403, Body: "Access Denied", MIMEType: "text/plain"})
+trap.Respond(trappsec.ResponseConfig{Template: "deprecated_api"})
 ```
 
 </div>
@@ -145,6 +186,13 @@ trap.if_unauthenticated({ status: number, body: object | Function, mime_type: st
 ```
 
 </div>
+<div class="lang-content" data-lang="go" markdown="1">
+
+```go
+trap.IfUnauthenticated(trappsec.ResponseConfig{Status: int, Body: any, MIMEType: string, Template: string})
+```
+
+</div>
 
 **Example**
 
@@ -159,6 +207,13 @@ trap.if_unauthenticated(401, {"error": "Login Required"})
 
 ```javascript
 trap.if_unauthenticated({ status: 401, body: { "error": "Login Required" } });
+```
+
+</div>
+<div class="lang-content" data-lang="go" markdown="1">
+
+```go
+trap.IfUnauthenticated(trappsec.ResponseConfig{Status: 401, Body: map[string]any{"error": "Login Required"}})
 ```
 
 </div>
@@ -187,6 +242,13 @@ watch.body(name, { defaultValue: any, intent: string })
 ```
 
 </div>
+<div class="lang-content" data-lang="go" markdown="1">
+
+```go
+watch.Body(name string, defaultValue any, intent string)
+```
+
+</div>
 
 **Example**
 
@@ -204,9 +266,20 @@ watch.body("is_admin", { defaultValue: false, intent: "PrivEsc" });
 ```
 
 </div>
+<div class="lang-content" data-lang="go" markdown="1">
+
+```go
+// Alert on any presence of 'is_admin'
+watch.Body("is_admin", trappsec.NoDefault, "PrivEsc")
+
+// Alert only if value differs from default
+watch.Body("is_admin", false, "PrivEsc")
+```
+
+</div>
 
 *   **name**: The field name to watch.
-*   **default**: (Optional) If provided, alerts only if the value differs from this default. If omitted, alerts on any presence of the key.
+*   **default / defaultValue**: (Optional) If provided, alerts only if the value differs from this default. If omitted (or `trappsec.NoDefault` in Go), alerts on any presence of the key.
 *   **intent**: The intent label for the alert.
 
 ## Configuration
@@ -222,7 +295,7 @@ Registers a callback to extract user identity from the request.
 ```python
 # Extract user info from your authentication middleware (e.g. Flask-Login, JWT)
 ts.identify_user(lambda r: {
-    "id": getattr(r.user, "id", None), 
+    "id": getattr(r.user, "id", None),
     "role": getattr(r.user, "role", "guest")
 })
 ```
@@ -232,10 +305,24 @@ ts.identify_user(lambda r: {
 
 ```javascript
 // Extract user info from your authentication middleware (e.g. Passport, Clerk)
-ts.identify_user((req) => ({ 
+ts.identify_user((req) => ({
     "id": req.user?.id,
     "role": req.user?.role || "guest"
 }));
+```
+
+</div>
+<div class="lang-content" data-lang="go" markdown="1">
+
+```go
+ts.IdentifyUser(func(req any) *trappsec.AuthContext {
+    c := req.(*gin.Context) // cast to your framework's request type
+    uid := c.GetHeader("x-user-id")
+    if uid == "" {
+        return nil // unauthenticated
+    }
+    return &trappsec.AuthContext{User: uid, Role: c.GetHeader("x-user-role")}
+})
 ```
 
 </div>
@@ -258,6 +345,19 @@ ts.override_source_ip((req) => req.ip);
 ```
 
 </div>
+<div class="lang-content" data-lang="go" markdown="1">
+
+```go
+ts.OverrideSourceIP(func(req any) string {
+    c := req.(*gin.Context)
+    if ip := c.GetHeader("x-real-ip"); ip != "" {
+        return ip
+    }
+    return c.ClientIP()
+})
+```
+
+</div>
 
 ## `add_webhook`
 
@@ -276,6 +376,16 @@ ts.add_webhook("https://...", alerts_only=False)
 ```javascript
 ts.add_webhook("https://...");
 ts.add_webhook("https://...", { alerts_only: false });
+```
+
+</div>
+<div class="lang-content" data-lang="go" markdown="1">
+
+```go
+ts.AddWebhook("https://...", nil)
+// Send all events (not just alerts)
+alertsOnly := false
+ts.AddWebhook("https://...", &trappsec.WebhookOptions{AlertsOnly: &alertsOnly})
 ```
 
 </div>
@@ -303,6 +413,16 @@ ts.add_slack("https://hooks.slack.com/services/...", { alerts_only: false });
 ```
 
 </div>
+<div class="lang-content" data-lang="go" markdown="1">
+
+```go
+ts.AddSlack("https://hooks.slack.com/services/...", nil)
+// Send all events (not just alerts)
+alertsOnly := false
+ts.AddSlack("https://hooks.slack.com/services/...", &trappsec.SlackOptions{AlertsOnly: &alertsOnly})
+```
+
+</div>
 
 ## `add_otel`
 
@@ -319,6 +439,13 @@ ts.add_otel()
 
 ```javascript
 ts.add_otel();
+```
+
+</div>
+<div class="lang-content" data-lang="go" markdown="1">
+
+```go
+ts.AddOTEL()
 ```
 
 </div>

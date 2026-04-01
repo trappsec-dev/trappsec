@@ -1,4 +1,4 @@
-![Version 0.1](https://img.shields.io/badge/version-0.1-blue)
+![Version 0.2](https://img.shields.io/badge/version-0.2-blue)
 ## **trappsec** 
 
 trappsec is an open-source framework that helps developers detect attackers who probe API business logic. By embedding realistic decoy routes and honey fields that are difficult to distinguish from real API constructs, attackers are nudged to authenticate — converting reconnaissance into actionable security telemetry.
@@ -45,37 +45,33 @@ trappsec can integrate directly into your existing workflows. Events are written
     <tr>
       <th>Language</th>
       <th>Framework</th>
-      <th>Status</th>
     </tr>
   </thead>
   <tbody>
     <tr>
-      <td rowspan="2"><b>Python</b></td>
+      <td rowspan="7"><b>Python</b></td>
       <td>Flask</td>
-      <td>Stable</td>
     </tr>
+    <tr><td>FastAPI</td></tr>
+    <tr><td>Starlette</td></tr>
+    <tr><td>Litestar</td></tr>
+    <tr><td>Django</td></tr>
+    <tr><td>Sanic</td></tr>
+    <tr><td>Tornado</td></tr>
     <tr>
-      <td>FastAPI</td>
-      <td>Stable</td>
-    </tr>
-    <tr>
-      <td rowspan="2"><b>Node.js</b></td>
+      <td rowspan="5"><b>Node.js</b></td>
       <td>Express</td>
-      <td>Stable</td>
     </tr>
+    <tr><td>NestJS</td></tr>
+    <tr><td>Fastify</td></tr>
+    <tr><td>Hapi</td></tr>
+    <tr><td>Koa</td></tr>
     <tr>
-      <td>NestJS</td>
-      <td>Stable</td>
-    </tr>
-    <tr>
-      <td rowspan="2"><b>Go</b></td>
+      <td rowspan="3"><b>Go</b></td>
       <td>net/http</td>
-      <td>Planned</td>
     </tr>
-    <tr>
-      <td>Gin</td>
-      <td>Planned</td>
-    </tr>
+    <tr><td>Gin</td></tr>
+    <tr><td>Echo</td></tr>
   </tbody>
 </table>
 

@@ -3,7 +3,7 @@ function switchLang(lang) {
     document.querySelectorAll('.lang-btn').forEach(btn => {
         // Check if button text matches language (case-insensitive)
         const btnText = btn.textContent.toLowerCase();
-        const isMatch = lang === 'node' ? btnText.includes('node') : btnText.includes('python');
+        const isMatch = btnText.includes(lang);
 
         if (isMatch) {
             btn.classList.add('active');

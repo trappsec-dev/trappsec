@@ -6,7 +6,7 @@ nav_order: 1
 
 <img id="ts-flow-diagram" src="./assets/images/trappsec-flow.webp" width="70%" alt="trappsec flow">
 
-![Version 0.1](https://img.shields.io/badge/version-0.1-blue)
+![Version 0.2](https://img.shields.io/badge/version-0.2-blue)
 ## **Your code is now a security sensor** 
 
 **trappsec** is an open-source framework that helps developers detect attackers who probe API business logic. By embedding realistic decoy routes and honey fields that are difficult to distinguish from real API constructs, attackers are nudged to authenticate — converting reconnaissance into actionable security telemetry.
