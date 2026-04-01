@@ -92,7 +92,7 @@ class ExpressIntegration {
                         if (Object.keys(query_fields).length > 0 && req.query) {
                             const { data, found_fields, touched } = ts._detect_honey_fields(req.query, query_fields, req);
                             if (found_fields.length > 0) found.push(...found_fields);
-                            if (touched) req.query = data;
+                            if (touched) Object.defineProperty(req, 'query', { value: data, writable: true, configurable: true });
                         }
 
                         if (Object.keys(body_fields).length > 0 && req.body) {

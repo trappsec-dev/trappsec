@@ -15,6 +15,7 @@ class SanicIntegration:
         self.ts.request.user_agent = lambda r: r.headers.get("user-agent", "unknown")
         self.ts.request.method = lambda r: r.method
 
+        self._patch_request_accessors()
         self._patch_startup()
 
     def inject_traps(self):
@@ -66,10 +67,7 @@ class SanicIntegration:
                 if mod:
                     found_fields.extend(mod)
                 if touched:
-                    try:
-                        request.args = args_dict
-                    except Exception:
-                        pass
+                    setattr(request.ctx, "_trappsec_override_args", args_dict)
 
             if body_fields:
                 content_type = request.content_type or ""
@@ -78,10 +76,7 @@ class SanicIntegration:
                     if mod:
                         found_fields.extend(mod)
                     if touched:
-                        try:
-                            request._json = data
-                        except Exception:
-                            pass
+                        setattr(request.ctx, "_trappsec_override_json", data)
 
                 if request.form:
                     form_dict = dict(request.form)
@@ -89,10 +84,7 @@ class SanicIntegration:
                     if mod:
                         found_fields.extend(mod)
                     if touched:
-                        try:
-                            request.form = data
-                        except Exception:
-                            pass
+                        setattr(request.ctx, "_trappsec_override_form", data)
 
             if found_fields:
                 self.ts._trigger_watch_event(request, found_fields)
@@ -105,6 +97,33 @@ class SanicIntegration:
         if len(normalized) > 1:
             normalized = normalized.rstrip("/")
         return normalized
+
+    def _patch_request_accessors(self):
+        from sanic.request import Request
+
+        if getattr(Request, "_trappsec_overrides_patched", False):
+            return
+
+        def patch_property(name):
+            prop = getattr(Request, name, None)
+            if not isinstance(prop, property) or not prop.fget:
+                return
+
+            original_getter = prop.fget
+            marker = f"_trappsec_override_{name}"
+
+            def patched_getter(req, _orig=original_getter, _marker=marker):
+                ctx = getattr(req, "ctx", None)
+                if ctx is not None and hasattr(ctx, _marker):
+                    return getattr(ctx, _marker)
+                return _orig(req)
+
+            setattr(Request, name, property(patched_getter, prop.fset, prop.fdel, prop.__doc__))
+
+        patch_property("args")
+        patch_property("json")
+        patch_property("form")
+        Request._trappsec_overrides_patched = True
 
     def _patch_startup(self):
         @self.app.before_server_start

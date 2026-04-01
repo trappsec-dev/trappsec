@@ -69,6 +69,11 @@ func RebuildMultipartBody(r *http.Request, sanitized map[string]any) {
 	writer.Close()
 	ResetBody(r, buf.Bytes())
 	r.Header.Set("Content-Type", writer.FormDataContentType())
+	// Invalidate parsed form caches so downstream ParseMultipartForm/ParseForm
+	// re-parse from the rewritten body instead of returning stale values.
+	r.MultipartForm = nil
+	r.PostForm = nil
+	r.Form = nil
 }
 
 // MethodAllowed reports whether method is in the allowed list (case-insensitive).

@@ -141,7 +141,8 @@ class TornadoIntegration:
 
                 if query_fields and self.request.query_arguments:
                     q_dict = {
-                        k: [v.decode("utf-8", errors="ignore") for v in vals]
+                        k: vals[0].decode("utf-8", errors="ignore") if len(vals) == 1
+                        else [v.decode("utf-8", errors="ignore") for v in vals]
                         for k, vals in self.request.query_arguments.items()
                     }
                     # R4: unpack touched; use touched (not mod) to gate mutation
