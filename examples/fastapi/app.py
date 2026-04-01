@@ -201,7 +201,8 @@ if __name__ == "__main__":
         ts.add_otel()
     
     if args.webhook:
-        ts.add_webhook(url=args.webhook)
+        ts.add_webhook(url=args.webhook, alerts_only=False)
 
     print("Starting server on http://127.0.0.1:8000")
     uvicorn.run(app, host="127.0.0.1", port=8000)
+

@@ -23,7 +23,7 @@ class LogHandler(BaseHandler):
         self.logger.warning(json.dumps(event))
 
 class WebhookHandler(BaseHandler):
-    def __init__(self, url: str, secret: str = None, headers: dict = None, service: str = None, environment: str = None, heartbeat_interval: int = None, template: callable = None):
+    def __init__(self, url: str, secret: str = None, headers: dict = None, service: str = None, environment: str = None, heartbeat_interval: int = None, template: callable = None, alerts_only: bool = True):
         if requests is None: 
             raise ImportError("requests library required for WebhookHandler")
         
@@ -32,6 +32,7 @@ class WebhookHandler(BaseHandler):
         self.service = service
         self.environment = environment
         self.template = template
+        self.alerts_only = alerts_only
         self.logger = logging.getLogger("trappsec")
         
         self.headers = {"Content-Type": "application/json"}
@@ -44,6 +45,9 @@ class WebhookHandler(BaseHandler):
             threading.Thread(target=self._heartbeat_loop, args=(heartbeat_interval,), daemon=True).start()
     
     def emit(self, event: dict):
+        if self.alerts_only and event.get("type") != "alert":
+            return
+
         if self.template:
             try:
                 event = self.template(event)

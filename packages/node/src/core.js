@@ -58,8 +58,8 @@ class Sentry {
         return builder;
     }
 
-    add_webhook(url, { secret = null, headers = null, heartbeat_interval = null, template = null } = {}) {
-        const handler = new WebhookHandler(url, { secret, headers, service: this.service, environment: this.environment, heartbeat_interval, template });
+    add_webhook(url, { secret = null, headers = null, heartbeat_interval = null, template = null, alerts_only = true } = {}) {
+        const handler = new WebhookHandler(url, { secret, headers, service: this.service, environment: this.environment, heartbeat_interval, template, alerts_only });
         this._handlers.push(handler);
         return this;
     }

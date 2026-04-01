@@ -88,7 +88,15 @@ class Sentry:
         self._watches.append(builder)
         return builder
 
-    def add_webhook(self, url: str, secret: str = None, headers: dict = None, heartbeat_interval: int = None, template: typing.Callable = None):
+    def add_webhook(
+        self,
+        url: str,
+        secret: str = None,
+        headers: dict = None,
+        heartbeat_interval: int = None,
+        template: typing.Callable = None,
+        alerts_only: bool = True,
+    ):
         from .handlers import WebhookHandler
         handler = WebhookHandler(
             url=url, 
@@ -97,7 +105,8 @@ class Sentry:
             service=self.service, 
             environment=self.environment,
             heartbeat_interval=heartbeat_interval,
-            template=template
+            template=template,
+            alerts_only=alerts_only,
         )
         self._handlers.append(handler)
         return self

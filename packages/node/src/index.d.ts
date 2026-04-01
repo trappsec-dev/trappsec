@@ -46,7 +46,7 @@ export class Sentry {
     template(name: string, statusCode: number, responseBody: any, mimeType?: string): this;
     trap(path: string): TrapBuilder;
     watch(path: string): WatchBuilder;
-    add_webhook(url: string, options?: { secret?: string; headers?: any; heartbeat_interval?: number; template?: any }): this;
+    add_webhook(url: string, options?: { secret?: string; headers?: any; heartbeat_interval?: number; template?: any; alerts_only?: boolean }): this;
     add_otel(): this;
     identify_user(callback: (req: any) => { user: string; role?: string } | null): this;
     override_source_ip(callback: (req: any) => string | null): this;

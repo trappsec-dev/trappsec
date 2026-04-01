@@ -12,12 +12,13 @@ class LogHandler {
 }
 
 class WebhookHandler {
-    constructor(url, { secret = null, headers = null, service = null, environment = null, heartbeat_interval = null, template = null } = {}) {
+    constructor(url, { secret = null, headers = null, service = null, environment = null, heartbeat_interval = null, template = null, alerts_only = true } = {}) {
         this.url = url;
         this.secret = secret;
         this.service = service;
         this.environment = environment;
         this.template = template;
+        this.alerts_only = alerts_only;
         this.logger = console; // Default logger
 
         this.headers = { "Content-Type": "application/json" };
@@ -31,6 +32,10 @@ class WebhookHandler {
     }
 
     emit(event) {
+        if (this.alerts_only && event?.type !== "alert") {
+            return;
+        }
+
         if (this.template) {
             try {
                 event = this.template(event);

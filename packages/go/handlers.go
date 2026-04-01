@@ -36,6 +36,7 @@ type WebhookOptions struct {
 	Template          func(TriggerContext) any
 	Service           string
 	Environment       string
+	AlertsOnly        *bool
 }
 
 type WebhookHandler struct {
@@ -45,6 +46,7 @@ type WebhookHandler struct {
 	template    func(TriggerContext) any
 	service     string
 	environment string
+	alertsOnly  bool
 	client      *http.Client
 }
 
@@ -55,6 +57,10 @@ func NewWebhookHandler(url string, opts *WebhookOptions) (*WebhookHandler, error
 	if opts == nil {
 		opts = &WebhookOptions{}
 	}
+	alertsOnly := true
+	if opts.AlertsOnly != nil {
+		alertsOnly = *opts.AlertsOnly
+	}
 
 	h := &WebhookHandler{
 		url:         url,
@@ -63,6 +69,7 @@ func NewWebhookHandler(url string, opts *WebhookOptions) (*WebhookHandler, error
 		template:    opts.Template,
 		service:     opts.Service,
 		environment: opts.Environment,
+		alertsOnly:  alertsOnly,
 		client:      &http.Client{Timeout: 5 * time.Second},
 	}
 	for k, v := range opts.Headers {
@@ -77,6 +84,10 @@ func NewWebhookHandler(url string, opts *WebhookOptions) (*WebhookHandler, error
 }
 
 func (h *WebhookHandler) Emit(event TriggerContext) error {
+	if h.alertsOnly && event.Type != "alert" {
+		return nil
+	}
+
 	payload := any(event)
 	if h.template != nil {
 		payload = h.template(event)

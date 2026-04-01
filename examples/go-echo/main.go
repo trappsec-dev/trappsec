@@ -188,7 +188,8 @@ func main() {
 		app.AddOTEL()
 	}
 	if *webhookURL != "" {
-		app.AddWebhook(*webhookURL, nil)
+		alertsOnly := false
+		app.AddWebhook(*webhookURL, &trappsec.WebhookOptions{AlertsOnly: &alertsOnly})
 	}
 
 	addr := "127.0.0.1:" + *port

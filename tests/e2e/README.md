@@ -10,3 +10,5 @@ When running an example program as part of the E2E test flow, make sure to inclu
 ```bash
 --webhook=http://localhost:5050/webhook
 ```
+
+The E2E suite validates both `alert` and `signal` webhook events. If you run against a custom app config, ensure webhook integration is created with `alerts_only=False`.

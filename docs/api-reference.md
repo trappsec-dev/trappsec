@@ -267,6 +267,7 @@ Adds a webhook destination for alerts.
 
 ```python
 ts.add_webhook("https://...")
+ts.add_webhook("https://...", alerts_only=False)
 ```
 
 </div>
@@ -274,9 +275,13 @@ ts.add_webhook("https://...")
 
 ```javascript
 ts.add_webhook("https://...");
+ts.add_webhook("https://...", { alerts_only: false });
 ```
 
 </div>
+
+By default, webhook integration is `alerts_only=true`, so only events with `type="alert"` are delivered.
+Set `alerts_only` to `false` in `add_webhook` options to forward both alert and signal events.
 
 ## `add_otel`
 
