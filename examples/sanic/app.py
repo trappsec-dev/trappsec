@@ -72,6 +72,35 @@ async def get_orders(_request):
     })
 
 
+@app.get("/api/v2/orders/<order_id>")
+async def get_order_detail(_request, order_id):
+    return json_response({"id": order_id, "item": "Laptop", "amount": 1200, "status": "shipped"})
+
+
+@app.get("/api/v2/echo/query")
+async def echo_query(request):
+    return json_response({k: v[0] if isinstance(v, list) and v else v for k, v in request.args.items()})
+
+
+@app.post("/api/v2/echo/body")
+async def echo_body(request):
+    try:
+        data = request.json
+        return json_response(data if isinstance(data, dict) else {})
+    except Exception:
+        return json_response({})
+
+
+@app.post("/api/v2/echo/form")
+async def echo_form(request):
+    return json_response({k: v[0] if isinstance(v, list) and v else v for k, v in request.form.items()})
+
+
+@app.post("/api/v2/echo/multipart")
+async def echo_multipart(request):
+    return json_response({k: v[0] if isinstance(v, list) and v else v for k, v in request.form.items()})
+
+
 @app.get("/")
 async def serve_index(_request):
     frontend_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'lure-frontend')
@@ -119,6 +148,23 @@ ts.watch("/auth/register") \
 
 ts.watch("/api/v2/profile") \
     .body("is_admin", intent="Privilege Escalation")
+
+ts.watch("/api/v2/orders/<order_id>") \
+    .query("discount_code", default="NONE", intent="Coupon Tampering")
+
+ts.watch("/api/v2/echo/query") \
+    .query("honey_q", intent="Query Field Test") \
+    .query("role_q", default="user", intent="Query Default Test")
+
+ts.watch("/api/v2/echo/body") \
+    .body("honey_b", intent="Body Field Test") \
+    .body("role_b", default="user", intent="Body Default Test")
+
+ts.watch("/api/v2/echo/form") \
+    .body("honey_f", intent="Form Field Test")
+
+ts.watch("/api/v2/echo/multipart") \
+    .body("honey_m", intent="Multipart Field Test")
 
 
 def setup_opentelemetry(application):

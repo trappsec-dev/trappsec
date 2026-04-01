@@ -54,6 +54,15 @@ app.get("/api/v2/orders", (req, res) => {
     });
 });
 
+app.get("/api/v2/orders/:id", (req, res) => {
+    res.json({ "id": req.params.id, "item": "Laptop", "amount": 1200, "status": "shipped" });
+});
+
+app.get("/api/v2/echo/query", (req, res) => res.json(req.query));
+app.post("/api/v2/echo/body", (req, res) => res.json(req.body || {}));
+app.post("/api/v2/echo/form", (req, res) => res.json(req.body || {}));
+app.post("/api/v2/echo/multipart", (req, res) => res.json({ supported: false }));
+
 // Traps
 ts.trap("/deployment/config")
     .methods("GET")
@@ -91,6 +100,22 @@ ts.watch("/auth/register")
 ts.watch("/api/v2/profile")
     .body("is_admin", { intent: "Privilege Escalation" });
 
+ts.watch("/api/v2/orders/:id")
+    .query("discount_code", { defaultValue: "NONE", intent: "Coupon Tampering" });
+
+ts.watch("/api/v2/echo/query")
+    .query("honey_q", { intent: "Query Field Test" })
+    .query("role_q", { defaultValue: "user", intent: "Query Default Test" });
+
+ts.watch("/api/v2/echo/body")
+    .body("honey_b", { intent: "Body Field Test" })
+    .body("role_b", { defaultValue: "user", intent: "Body Default Test" });
+
+ts.watch("/api/v2/echo/form")
+    .body("honey_f", { intent: "Form Field Test" });
+
+ts.watch("/api/v2/echo/multipart")
+    .body("honey_m", { intent: "Multipart Field Test" });
 
 
 const { parseArgs } = require('node:util');

@@ -18,8 +18,11 @@ async function bootstrap() {
     if (values.fastify) {
         app = await NestFactory.create<NestFastifyApplication>(
             AppModule,
-            new FastifyAdapter()
+            new FastifyAdapter({ trustProxy: false })
         );
+        await app.register(require('@fastify/multipart'), {
+            attachFieldsToBody: 'keyValues',
+        });
     } else {
         app = await NestFactory.create<NestExpressApplication>(AppModule);
     }
@@ -100,6 +103,25 @@ async function bootstrap() {
     // 5.2 /api/v2/profile
     ts.watch("/api/v2/profile")
         .body("is_admin", { intent: "Privilege Escalation" });
+
+    // 5.3 /api/v2/orders/:id
+    ts.watch("/api/v2/orders/:id")
+        .query("discount_code", { defaultValue: "NONE", intent: "Coupon Tampering" });
+
+    // 5.4 Echo routes for field stripping verification
+    ts.watch("/api/v2/echo/query")
+        .query("honey_q", { intent: "Query Field Test" })
+        .query("role_q", { defaultValue: "user", intent: "Query Default Test" });
+
+    ts.watch("/api/v2/echo/body")
+        .body("honey_b", { intent: "Body Field Test" })
+        .body("role_b", { defaultValue: "user", intent: "Body Default Test" });
+
+    ts.watch("/api/v2/echo/form")
+        .body("honey_f", { intent: "Form Field Test" });
+
+    ts.watch("/api/v2/echo/multipart")
+        .body("honey_m", { intent: "Multipart Field Test" });
 
     await app.listen(8000, '0.0.0.0');
     console.log(`NestJSApp listening on port 8000 (Driver: ${values.fastify ? 'Fastify' : 'Express'})`);

@@ -83,6 +83,59 @@ func main() {
 		})
 	})
 
+	app.GET("/api/v2/orders/:id", func(c echo.Context) error {
+		return c.JSON(http.StatusOK, map[string]any{
+			"id":     c.Param("id"),
+			"item":   "Laptop",
+			"amount": 1200,
+			"status": "shipped",
+		})
+	})
+
+	app.GET("/api/v2/echo/query", func(c echo.Context) error {
+		result := map[string]string{}
+		for k, v := range c.QueryParams() {
+			if len(v) > 0 {
+				result[k] = v[0]
+			}
+		}
+		return c.JSON(http.StatusOK, result)
+	})
+
+	app.POST("/api/v2/echo/body", func(c echo.Context) error {
+		var body map[string]any
+		if err := c.Bind(&body); err != nil || body == nil {
+			return c.JSON(http.StatusOK, map[string]any{})
+		}
+		return c.JSON(http.StatusOK, body)
+	})
+
+	app.POST("/api/v2/echo/form", func(c echo.Context) error {
+		result := map[string]string{}
+		if err := c.Request().ParseForm(); err == nil {
+			for k, v := range c.Request().PostForm {
+				if len(v) > 0 {
+					result[k] = v[0]
+				}
+			}
+		}
+		return c.JSON(http.StatusOK, result)
+	})
+
+	app.POST("/api/v2/echo/multipart", func(c echo.Context) error {
+		result := map[string]string{}
+		if err := c.Request().ParseMultipartForm(32 << 20); err == nil {
+			if c.Request().MultipartForm != nil {
+				for k, v := range c.Request().MultipartForm.Value {
+					if len(v) > 0 {
+						result[k] = v[0]
+					}
+				}
+			}
+		}
+		return c.JSON(http.StatusOK, result)
+	})
+
 	frontendDir := filepath.Join("..", "lure-frontend")
 	app.GET("/", func(c echo.Context) error {
 		return c.File(filepath.Join(frontendDir, "index.html"))
@@ -125,6 +178,11 @@ func main() {
 
 	app.Watch("/auth/register").Body("role", "user", "Privilege Escalation (role)").Body("credits", 0, "Credit Manipulation")
 	app.Watch("/api/v2/profile").Body("is_admin", trappsec.NoDefault, "Privilege Escalation")
+	app.Watch("/api/v2/orders/:id").Query("discount_code", "NONE", "Coupon Tampering")
+	app.Watch("/api/v2/echo/query").Query("honey_q", trappsec.NoDefault, "Query Field Test").Query("role_q", "user", "Query Default Test")
+	app.Watch("/api/v2/echo/body").Body("honey_b", trappsec.NoDefault, "Body Field Test").Body("role_b", "user", "Body Default Test")
+	app.Watch("/api/v2/echo/form").Body("honey_f", trappsec.NoDefault, "Form Field Test")
+	app.Watch("/api/v2/echo/multipart").Body("honey_m", trappsec.NoDefault, "Multipart Field Test")
 
 	if *otelEnabled {
 		app.AddOTEL()

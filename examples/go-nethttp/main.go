@@ -59,6 +59,56 @@ func main() {
 		}})
 	})
 
+	app.HandleFunc("GET /api/v2/orders/{id}", func(w http.ResponseWriter, r *http.Request) {
+		id := r.PathValue("id")
+		writeJSON(w, http.StatusOK, map[string]any{"id": id, "item": "Laptop", "amount": 1200, "status": "shipped"})
+	})
+
+	app.HandleFunc("GET /api/v2/echo/query", func(w http.ResponseWriter, r *http.Request) {
+		result := map[string]string{}
+		for k, v := range r.URL.Query() {
+			if len(v) > 0 {
+				result[k] = v[0]
+			}
+		}
+		writeJSON(w, http.StatusOK, result)
+	})
+
+	app.HandleFunc("POST /api/v2/echo/body", func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body == nil {
+			writeJSON(w, http.StatusOK, map[string]any{})
+			return
+		}
+		writeJSON(w, http.StatusOK, body)
+	})
+
+	app.HandleFunc("POST /api/v2/echo/form", func(w http.ResponseWriter, r *http.Request) {
+		result := map[string]string{}
+		if err := r.ParseForm(); err == nil {
+			for k, v := range r.PostForm {
+				if len(v) > 0 {
+					result[k] = v[0]
+				}
+			}
+		}
+		writeJSON(w, http.StatusOK, result)
+	})
+
+	app.HandleFunc("POST /api/v2/echo/multipart", func(w http.ResponseWriter, r *http.Request) {
+		result := map[string]string{}
+		if err := r.ParseMultipartForm(32 << 20); err == nil {
+			if r.MultipartForm != nil {
+				for k, v := range r.MultipartForm.Value {
+					if len(v) > 0 {
+						result[k] = v[0]
+					}
+				}
+			}
+		}
+		writeJSON(w, http.StatusOK, result)
+	})
+
 	frontendDir := filepath.Join("..", "lure-frontend")
 	app.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasPrefix(r.URL.Path, "/api/") || strings.HasPrefix(r.URL.Path, "/auth/") || strings.HasPrefix(r.URL.Path, "/deployment/") {
@@ -142,6 +192,11 @@ func main() {
 
 	app.Watch("/auth/register").Body("role", "user", "Privilege Escalation (role)").Body("credits", 0, "Credit Manipulation")
 	app.Watch("/api/v2/profile").Body("is_admin", trappsec.NoDefault, "Privilege Escalation")
+	app.Watch("/api/v2/orders/{id}").Query("discount_code", "NONE", "Coupon Tampering")
+	app.Watch("/api/v2/echo/query").Query("honey_q", trappsec.NoDefault, "Query Field Test").Query("role_q", "user", "Query Default Test")
+	app.Watch("/api/v2/echo/body").Body("honey_b", trappsec.NoDefault, "Body Field Test").Body("role_b", "user", "Body Default Test")
+	app.Watch("/api/v2/echo/form").Body("honey_f", trappsec.NoDefault, "Form Field Test")
+	app.Watch("/api/v2/echo/multipart").Body("honey_m", trappsec.NoDefault, "Multipart Field Test")
 
 	if *otelFlag {
 		app.AddOTEL()

@@ -64,6 +64,15 @@ async function bootstrap() {
         };
     });
 
+    router.get('/api/v2/orders/:id', (ctx) => {
+        ctx.body = { id: ctx.params.id, item: 'Laptop', amount: 1200, status: 'shipped' };
+    });
+
+    router.get('/api/v2/echo/query', (ctx) => { ctx.body = ctx.query; });
+    router.post('/api/v2/echo/body', (ctx) => { ctx.body = ctx.request.body || {}; });
+    router.post('/api/v2/echo/form', (ctx) => { ctx.body = ctx.request.body || {}; });
+    router.post('/api/v2/echo/multipart', (ctx) => { ctx.body = { supported: false }; });
+
     app.use(router.routes());
     app.use(router.allowedMethods());
 
@@ -109,6 +118,23 @@ async function bootstrap() {
 
     ts.watch('/api/v2/profile')
         .body('is_admin', { intent: 'Privilege Escalation' });
+
+    ts.watch('/api/v2/orders/:id')
+        .query('discount_code', { defaultValue: 'NONE', intent: 'Coupon Tampering' });
+
+    ts.watch('/api/v2/echo/query')
+        .query('honey_q', { intent: 'Query Field Test' })
+        .query('role_q', { defaultValue: 'user', intent: 'Query Default Test' });
+
+    ts.watch('/api/v2/echo/body')
+        .body('honey_b', { intent: 'Body Field Test' })
+        .body('role_b', { defaultValue: 'user', intent: 'Body Default Test' });
+
+    ts.watch('/api/v2/echo/form')
+        .body('honey_f', { intent: 'Form Field Test' });
+
+    ts.watch('/api/v2/echo/multipart')
+        .body('honey_m', { intent: 'Multipart Field Test' });
 
     if (values.otel) {
         ts.add_otel();

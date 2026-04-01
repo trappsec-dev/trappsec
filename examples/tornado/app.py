@@ -58,6 +58,43 @@ class OrdersHandler(tornado.web.RequestHandler):
         })
 
 
+class OrderDetailHandler(tornado.web.RequestHandler):
+    def get(self, order_id):
+        self.write({"id": order_id, "item": "Laptop", "amount": 1200, "status": "shipped"})
+
+
+class EchoQueryHandler(tornado.web.RequestHandler):
+    def get(self):
+        result = {}
+        for k in self.request.query_arguments:
+            result[k] = self.get_query_argument(k)
+        self.write(result)
+
+
+class EchoBodyHandler(tornado.web.RequestHandler):
+    def post(self):
+        try:
+            data = json.loads(self.request.body.decode("utf-8"))
+            self.write(data if isinstance(data, dict) else {})
+        except Exception:
+            self.write({})
+
+
+class EchoFormHandler(tornado.web.RequestHandler):
+    def post(self):
+        parsed = parse_qs(self.request.body.decode("utf-8")) if self.request.body else {}
+        self.write({k: v[0] if v else "" for k, v in parsed.items()})
+
+
+class EchoMultipartHandler(tornado.web.RequestHandler):
+    def post(self):
+        result = {}
+        for k, v_list in self.request.body_arguments.items():
+            if v_list:
+                result[k] = v_list[0].decode("utf-8")
+        self.write(result)
+
+
 class IndexHandler(tornado.web.RequestHandler):
     def get(self):
         frontend_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'lure-frontend')
@@ -91,6 +128,11 @@ def make_app():
         (r"/auth/register", RegisterHandler),
         (r"/api/v2/profile", ProfileHandler),
         (r"/api/v2/orders", OrdersHandler),
+        (r"/api/v2/orders/([^/]+)", OrderDetailHandler),
+        (r"/api/v2/echo/query", EchoQueryHandler),
+        (r"/api/v2/echo/body", EchoBodyHandler),
+        (r"/api/v2/echo/form", EchoFormHandler),
+        (r"/api/v2/echo/multipart", EchoMultipartHandler),
         (r"/", IndexHandler),
         (r"/(.*)", StaticHandler),
     ])
@@ -141,6 +183,23 @@ def make_app():
 
     ts.watch("/api/v2/profile") \
         .body("is_admin", intent="Privilege Escalation")
+
+    ts.watch("/api/v2/orders/([^/]+)") \
+        .query("discount_code", default="NONE", intent="Coupon Tampering")
+
+    ts.watch("/api/v2/echo/query") \
+        .query("honey_q", intent="Query Field Test") \
+        .query("role_q", default="user", intent="Query Default Test")
+
+    ts.watch("/api/v2/echo/body") \
+        .body("honey_b", intent="Body Field Test") \
+        .body("role_b", default="user", intent="Body Default Test")
+
+    ts.watch("/api/v2/echo/form") \
+        .body("honey_f", intent="Form Field Test")
+
+    ts.watch("/api/v2/echo/multipart") \
+        .body("honey_m", intent="Multipart Field Test")
 
     return app, ts
 

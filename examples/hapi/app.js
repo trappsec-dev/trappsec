@@ -19,6 +19,7 @@ async function bootstrap() {
             payload: {
                 parse: true,
                 output: 'data',
+                multipart: true,
                 allow: ['application/json', 'application/x-www-form-urlencoded', 'multipart/form-data']
             }
         }
@@ -85,6 +86,43 @@ async function bootstrap() {
         })
     });
 
+    server.route({
+        method: 'GET',
+        path: '/api/v2/orders/{id}',
+        handler: (request) => ({
+            id: request.params.id, item: 'Laptop', amount: 1200, status: 'shipped'
+        })
+    });
+
+    server.route({
+        method: 'GET',
+        path: '/api/v2/echo/query',
+        handler: (request) => request.query
+    });
+
+    server.route({
+        method: 'POST',
+        path: '/api/v2/echo/body',
+        handler: (request) => request.payload || {}
+    });
+
+    server.route({
+        method: 'POST',
+        path: '/api/v2/echo/form',
+        handler: (request) => request.payload || {}
+    });
+
+    server.route({
+        method: 'POST',
+        path: '/api/v2/echo/multipart',
+        handler: (request) => {
+            const payload = request.payload || {};
+            return Object.fromEntries(
+                Object.entries(payload).filter(([, v]) => typeof v === 'string')
+            );
+        }
+    });
+
     // Static lure frontend
     server.route({
         method: 'GET',
@@ -136,6 +174,23 @@ async function bootstrap() {
 
     ts.watch('/api/v2/profile')
         .body('is_admin', { intent: 'Privilege Escalation' });
+
+    ts.watch('/api/v2/orders/{id}')
+        .query('discount_code', { defaultValue: 'NONE', intent: 'Coupon Tampering' });
+
+    ts.watch('/api/v2/echo/query')
+        .query('honey_q', { intent: 'Query Field Test' })
+        .query('role_q', { defaultValue: 'user', intent: 'Query Default Test' });
+
+    ts.watch('/api/v2/echo/body')
+        .body('honey_b', { intent: 'Body Field Test' })
+        .body('role_b', { defaultValue: 'user', intent: 'Body Default Test' });
+
+    ts.watch('/api/v2/echo/form')
+        .body('honey_f', { intent: 'Form Field Test' });
+
+    ts.watch('/api/v2/echo/multipart')
+        .body('honey_m', { intent: 'Multipart Field Test' });
 
     if (values.otel) {
         ts.add_otel();
