@@ -4,7 +4,7 @@ import hmac
 import hashlib
 import threading
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 
 try:
     import requests
@@ -97,69 +97,123 @@ def _truncate(value: str, limit: int = 180) -> str:
     return value[: limit - 3] + "..."
 
 
+_EVENT_LABELS = {
+    "trappsec.watch_hit": "Honey Field Accessed",
+    "trappsec.trap_hit": "Decoy Route Triggered",
+    "trappsec.rule_hit": "Security Rule Triggered",
+}
+
+
+def _slack_date_token(timestamp) -> str:
+    try:
+        seconds = int(float(timestamp))
+    except Exception:
+        return "-"
+    if seconds <= 0:
+        return "-"
+    fallback = datetime.fromtimestamp(seconds, timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+    return f"<!date^{seconds}^{{date_short_pretty}} at {{time_secs}}|{fallback}>"
+
+
+def _notification_text(event_name: str, severity: str, svc: str, user: str, path: str, method: str, found_fields: list) -> str:
+    actor = user or "An unauthenticated request"
+    if event_name == "trappsec.watch_hit":
+        if found_fields:
+            names = ", ".join(f.get("field", "unknown") for f in found_fields[:3] if isinstance(f, dict))
+            suffix = f" ({names})" if names else ""
+            return f"[{severity}] {actor} accessed a monitored field{suffix} on {svc}"
+        return f"[{severity}] {actor} accessed a monitored field on {svc}"
+    if event_name == "trappsec.trap_hit":
+        return f"[{severity}] Honeypot endpoint hit on {svc} - {method} {path}"
+    if event_name == "trappsec.rule_hit":
+        return f"[{severity}] Security rule triggered on {svc} - {method} {path}"
+    return f"[{severity}] {event_name} on {svc}"
+
+
+def _kv_line(key: str, value) -> str:
+    if value in (None, ""):
+        return None
+    rendered = str(value)
+    return f"*{key}:* {rendered}"
+
+
+def _compact_lines(lines: list) -> list:
+    return [line for line in lines if line]
+
+
 def _build_slack_payload(event: dict, service: str = None, environment: str = None) -> dict:
     app = event.get("app") or {}
     event_name = event.get("event", "trappsec.event")
     event_type = event.get("type", "signal")
-    severity = "ALERT" if event_type == "alert" else "SIGNAL"
-    emoji = ":rotating_light:" if event_type == "alert" else ":large_blue_circle:"
-
+    level = "alert" if event_type == "alert" else "signal"
+    color = "#CC0000" if level == "alert" else "#0066CC"
     svc = app.get("service") or service or "unknown-service"
     env = app.get("environment") or environment or "unknown-env"
-    host = app.get("hostname") or "unknown-host"
+    host = app.get("hostname") or None
     path = event.get("path") or "-"
     method = event.get("method") or "-"
-    intent = event.get("intent") or "-"
-    reason = event.get("reason") or "-"
-    ip = event.get("ip") or "-"
-    user = event.get("user") or "-"
-    role = event.get("role") or "-"
-    ua = _truncate(_stringify(event.get("user_agent")), 120)
-    timestamp = event.get("timestamp")
-    when = "-"
-    if timestamp:
-        try:
-            when = datetime.utcfromtimestamp(float(timestamp)).isoformat() + "Z"
-        except Exception:
-            when = _stringify(timestamp)
+    intent = event.get("intent") or None
+    reason = event.get("reason") or None
+    ip = event.get("ip") or None
+    user = event.get("user") or None
+    role = event.get("role") or None
+    ua_raw = event.get("user_agent")
+    ua = _truncate(_stringify(ua_raw), 120) if ua_raw is not None else None
+    when = _slack_date_token(event.get("timestamp"))
+    found_fields = event.get("found_fields") if isinstance(event.get("found_fields"), list) else []
 
-    fields = [
-        {"type": "mrkdwn", "text": f"*Severity*\n{severity}"},
-        {"type": "mrkdwn", "text": f"*Event*\n`{event_name}`"},
-        {"type": "mrkdwn", "text": f"*Service*\n`{svc}`"},
-        {"type": "mrkdwn", "text": f"*Environment*\n`{env}`"},
-        {"type": "mrkdwn", "text": f"*Method*\n`{method}`"},
-        {"type": "mrkdwn", "text": f"*Path*\n`{_truncate(path, 80)}`"},
-        {"type": "mrkdwn", "text": f"*User*\n`{_truncate(user, 80)}`"},
-        {"type": "mrkdwn", "text": f"*Role*\n`{_truncate(role, 80)}`"},
-        {"type": "mrkdwn", "text": f"*IP*\n`{_truncate(ip, 80)}`"},
-        {"type": "mrkdwn", "text": f"*Time (UTC)*\n`{when}`"},
-    ]
+    route = "-" if method == "-" and path == "-" else f"{method} {path}".strip()
+
+    event_lines = _compact_lines([
+        _kv_line("Event", _EVENT_LABELS.get(event_name, event_name)),
+        _kv_line("Timestamp", when),
+        _kv_line("Service", svc),
+        _kv_line("Environment", env),
+        _kv_line("Host", host),
+    ])
+    request_lines = _compact_lines([
+        _kv_line("IP", ip),
+        _kv_line("Route", route),
+        _kv_line("User Agent", ua),
+        _kv_line("User", user),
+        _kv_line("Role", role),
+    ])
 
     blocks = [
-        {"type": "header", "text": {"type": "plain_text", "text": f"{emoji} Trappsec {severity}"}},
-        {"type": "section", "fields": fields},
-        {"type": "context", "elements": [{"type": "mrkdwn", "text": f"*Host:* `{host}` | *User-Agent:* `{ua}`"}]},
+        {"type": "section", "text": {"type": "mrkdwn", "text": "\n".join(event_lines)}},
     ]
+    if request_lines:
+        blocks.append({"type": "divider"})
+        blocks.append({"type": "section", "text": {"type": "mrkdwn", "text": "\n".join(request_lines)}})
 
-    if event_name == "trappsec.watch_hit" and isinstance(event.get("found_fields"), list):
-        lines = []
-        for f in event["found_fields"][:8]:
-            field_name = _truncate(_stringify(f.get("field")), 40)
-            field_type = _truncate(_stringify(f.get("type")), 20)
-            field_intent = _truncate(_stringify(f.get("intent")), 50)
-            lines.append(f"- `{field_type}` `{field_name}` ({field_intent})")
-        if lines:
-            blocks.append({"type": "section", "text": {"type": "mrkdwn", "text": "*Triggered Fields*\n" + "\n".join(lines)}})
+    if event_name == "trappsec.watch_hit" and found_fields:
+        field_lines = []
+        for idx, f in enumerate(found_fields[:8], start=1):
+            name = _stringify(f.get("field"))
+            ftype = _stringify(f.get("type"))
+            fintent = _stringify(f.get("intent"))
+            parts = [name]
+            if ftype != "-":
+                parts.append(f"[{ftype}]")
+            if fintent != "-":
+                parts.append(f"- {fintent}")
+            field_lines.append(_kv_line(f"Triggered Field {idx}", " ".join(parts)))
+        if field_lines:
+            blocks.append({"type": "divider"})
+            blocks.append({"type": "section", "text": {"type": "mrkdwn", "text": "\n".join(field_lines)}})
 
-    if reason != "-" or intent != "-":
-        blocks.append({"type": "section", "fields": [
-            {"type": "mrkdwn", "text": f"*Intent*\n{_truncate(intent, 120)}"},
-            {"type": "mrkdwn", "text": f"*Reason*\n{_truncate(reason, 120)}"},
-        ]})
+    details = []
+    if intent:
+        details.append(_kv_line("Intent", _truncate(intent, 120)))
+    if reason:
+        details.append(_kv_line("Reason", _truncate(reason, 120)))
+    details = _compact_lines(details)
+    if details:
+        blocks.append({"type": "divider"})
+        blocks.append({"type": "section", "text": {"type": "mrkdwn", "text": "\n".join(details)}})
 
-    text = f"[{severity}] {event_name} {method} {path} ({svc}/{env})"
-    return {"text": text, "blocks": blocks}
+    text = ""
+    return {"text": text, "attachments": [{"color": color, "blocks": blocks}]}
 
 
 class SlackHandler(BaseHandler):
