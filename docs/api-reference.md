@@ -32,7 +32,7 @@ The main entry point for the library.
 </div>
 <div class="lang-content" data-lang="go" markdown="1">
 
-### `InstallSentry(router, service, environment string) *Sentry`
+### `InstallSentry(router, service, environment string) *App`
 
 Import path varies by framework:
 - `github.com/trappsec-dev/trappsec/packages/go/gin`
@@ -43,7 +43,7 @@ Import path varies by framework:
 
 Initializes the trappsec Sentry.
 
-*   **app / router**: The application or router instance (Flask/FastAPI/Express/NestJS/gin.Engine/http.ServeMux/echo.Echo).
+*   **app / router**: The application or router instance (Flask/FastAPI/Express/NestJS/*gin.Engine/*http.ServeMux/*echo.Echo).
 *   **service**: Name of your service (e.g., "PaymentService").
 *   **environment**: Deployment environment (e.g., "Production", "Staging").
 
