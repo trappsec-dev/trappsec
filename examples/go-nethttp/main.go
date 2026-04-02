@@ -233,7 +233,7 @@ func writeJSON(w http.ResponseWriter, status int, body any) {
 }
 
 func setupOpenTelemetry() {
-	exporter, err := stdouttrace.New(stdouttrace.WithPrettyPrint())
+	exporter, err := stdouttrace.New()
 	if err != nil {
 		log.Fatalf("failed to initialize OTEL stdout exporter: %v", err)
 	}

@@ -189,7 +189,7 @@ func main() {
 }
 
 func setupOpenTelemetry() {
-	exporter, err := stdouttrace.New(stdouttrace.WithPrettyPrint())
+	exporter, err := stdouttrace.New()
 	if err != nil {
 		log.Fatalf("failed to initialize OTEL stdout exporter: %v", err)
 	}

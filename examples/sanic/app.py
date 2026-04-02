@@ -173,7 +173,7 @@ def setup_opentelemetry(application):
     from opentelemetry.sdk.trace.export import BatchSpanProcessor, ConsoleSpanExporter
 
     provider = TracerProvider()
-    processor = BatchSpanProcessor(ConsoleSpanExporter())
+    processor = BatchSpanProcessor(ConsoleSpanExporter(formatter=lambda span: span.to_json(indent=None) + "\n"))
     provider.add_span_processor(processor)
     trace.set_tracer_provider(provider)
 
