@@ -7,6 +7,10 @@
   "scripts": {
     "test": "node --test"
   },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/trappsec-dev/trappsec"
+  },
   "dependencies": {
     "axios": "^1.6.0"
   },
