@@ -10,6 +10,7 @@
 package trappsecnethttp
 
 import (
+	"context"
 	"encoding/json"
 	core "github.com/trappsec-dev/trappsec/packages/go"
 	"net"
@@ -93,6 +94,13 @@ func InstallSentry(mux *http.ServeMux, service, environment string) *App {
 			return ""
 		}
 		return r.Method
+	}
+	s.Request.Context = func(req any) context.Context {
+		r, _ := req.(*http.Request)
+		if r == nil {
+			return context.Background()
+		}
+		return r.Context()
 	}
 
 	return &App{Sentry: s, ServeMux: mux, integration: in}

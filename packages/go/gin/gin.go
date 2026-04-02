@@ -10,6 +10,7 @@
 package trappsecgin
 
 import (
+	"context"
 	"encoding/json"
 	"github.com/gin-gonic/gin"
 	core "github.com/trappsec-dev/trappsec/packages/go"
@@ -81,6 +82,12 @@ func InstallSentry(engine *gin.Engine, service, environment string) *App {
 		}
 		return ""
 	}
+	s.Request.Context = func(req any) context.Context {
+		if c, ok := req.(*gin.Context); ok && c.Request != nil {
+			return c.Request.Context()
+		}
+		return context.Background()
+	}
 
 	s.SetBodyResolver(func(body any, req any) any {
 		if fn, ok := body.(func(*gin.Context) any); ok {
@@ -128,6 +135,12 @@ func Use(s *core.Sentry, app *gin.Engine) {
 			return c.Request.Method
 		}
 		return ""
+	}
+	s.Request.Context = func(req any) context.Context {
+		if c, ok := req.(*gin.Context); ok && c.Request != nil {
+			return c.Request.Context()
+		}
+		return context.Background()
 	}
 
 	s.SetBodyResolver(func(body any, req any) any {

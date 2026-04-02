@@ -10,6 +10,7 @@
 package trappsececho
 
 import (
+	"context"
 	"encoding/json"
 	"github.com/labstack/echo/v4"
 	core "github.com/trappsec-dev/trappsec/packages/go"
@@ -81,6 +82,12 @@ func InstallSentry(e *echo.Echo, service, environment string) *App {
 		}
 		return ""
 	}
+	s.Request.Context = func(req any) context.Context {
+		if c, ok := req.(echo.Context); ok && c.Request() != nil {
+			return c.Request().Context()
+		}
+		return context.Background()
+	}
 
 	s.SetBodyResolver(func(body any, req any) any {
 		if fn, ok := body.(func(echo.Context) any); ok {
@@ -129,6 +136,12 @@ func Use(s *core.Sentry, app *echo.Echo) {
 			return c.Request().Method
 		}
 		return ""
+	}
+	s.Request.Context = func(req any) context.Context {
+		if c, ok := req.(echo.Context); ok && c.Request() != nil {
+			return c.Request().Context()
+		}
+		return context.Background()
 	}
 
 	s.SetBodyResolver(func(body any, req any) any {
