@@ -1,6 +1,6 @@
 {
   "name": "trappsec",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "deception as a developer tool",
   "main": "src/index.js",
   "types": "src/index.d.ts",
