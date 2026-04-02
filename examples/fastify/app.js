@@ -1,16 +1,21 @@
-const path = require('path');
 const { parseArgs } = require('node:util');
+
+const options = {
+    otel: { type: 'boolean' },
+    webhook: { type: 'string' },
+};
+
+const { values } = parseArgs({ options, strict: false });
+
+if (values.otel) {
+    require('./otel').setupOpentelemetry();
+}
+
+const path = require('path');
 const fastify = require('fastify')({ logger: false });
 const trappsec = require('../../packages/node/src/index');
 
 async function bootstrap() {
-    const options = {
-        otel: { type: 'boolean' },
-        webhook: { type: 'string' },
-    };
-
-    const { values } = parseArgs({ options, strict: false });
-
     await fastify.register(require('@fastify/formbody'));
     await fastify.register(require('@fastify/multipart'), {
         attachFieldsToBody: 'keyValues',

@@ -1,7 +1,3 @@
-import { NestFactory } from '@nestjs/core';
-import { FastifyAdapter, NestFastifyApplication } from '@nestjs/platform-fastify';
-import { NestExpressApplication } from '@nestjs/platform-express';
-import { AppModule } from './app.module';
 import trappsec from '../../../packages/node/src/index';
 import { parseArgs } from 'node:util';
 
@@ -14,9 +10,18 @@ async function bootstrap() {
 
     const { values } = parseArgs({ options, strict: false });
 
-    let app;
+    if (values.otel) {
+        const { setupOpentelemetry } = await import('./otel');
+        setupOpentelemetry(Boolean(values.fastify));
+    }
+
+    const { NestFactory } = await import('@nestjs/core');
+    const { AppModule } = await import('./app.module');
+
+    let app: any;
     if (values.fastify) {
-        app = await NestFactory.create<NestFastifyApplication>(
+        const { FastifyAdapter } = await import('@nestjs/platform-fastify');
+        app = await NestFactory.create(
             AppModule,
             new FastifyAdapter({ trustProxy: false })
         );
@@ -24,7 +29,7 @@ async function bootstrap() {
             attachFieldsToBody: 'keyValues',
         });
     } else {
-        app = await NestFactory.create<NestExpressApplication>(AppModule);
+        app = await NestFactory.create(AppModule);
     }
 
     // trappsec initialization

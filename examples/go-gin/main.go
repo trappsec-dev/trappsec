@@ -11,6 +11,10 @@ import (
 
 	"github.com/gin-gonic/gin"
 	trappsec "github.com/trappsec-dev/trappsec/packages/go/gin"
+	"go.opentelemetry.io/contrib/instrumentation/github.com/gin-gonic/gin/otelgin"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/exporters/stdout/stdouttrace"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 )
 
 type registerPayload struct {
@@ -26,6 +30,12 @@ func main() {
 	r.Use(gin.Recovery())
 	app := trappsec.InstallSentry(r, "GoGinApp", "Development")
 	app.SetDefaultUnauthenticated(401, gin.H{"error": "authentication required"}, "application/json")
+
+	if *otelEnabled {
+		setupOpenTelemetry()
+		app.Use(otelgin.Middleware("GoGinApp"))
+		app.AddOTEL()
+	}
 
 	app.IdentifyUser(func(req any) *trappsec.AuthContext {
 		c, ok := req.(*gin.Context)
@@ -167,9 +177,6 @@ func main() {
 	app.Watch("/api/v2/echo/form").Body("honey_f", trappsec.NoDefault, "Form Field Test")
 	app.Watch("/api/v2/echo/multipart").Body("honey_m", trappsec.NoDefault, "Multipart Field Test")
 
-	if *otelEnabled {
-		app.AddOTEL()
-	}
 	if *webhookURL != "" {
 		alertsOnly := false
 		app.AddWebhook(*webhookURL, &trappsec.WebhookOptions{AlertsOnly: &alertsOnly})
@@ -179,4 +186,16 @@ func main() {
 	if err := app.Run("127.0.0.1:8000"); err != nil {
 		log.Fatal(err)
 	}
+}
+
+func setupOpenTelemetry() {
+	exporter, err := stdouttrace.New(stdouttrace.WithPrettyPrint())
+	if err != nil {
+		log.Fatalf("failed to initialize OTEL stdout exporter: %v", err)
+	}
+	tp := sdktrace.NewTracerProvider(
+		sdktrace.WithBatcher(exporter),
+		sdktrace.WithSampler(sdktrace.AlwaysSample()),
+	)
+	otel.SetTracerProvider(tp)
 }

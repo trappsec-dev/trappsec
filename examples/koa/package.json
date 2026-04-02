@@ -6,6 +6,11 @@
   },
   "dependencies": {
     "@koa/router": "^12.0.1",
+    "@opentelemetry/api": "^1.9.0",
+    "@opentelemetry/instrumentation-http": "^0.55.0",
+    "@opentelemetry/instrumentation-koa": "^0.46.0",
+    "@opentelemetry/sdk-node": "^0.55.0",
+    "@opentelemetry/sdk-trace-node": "^1.28.0",
     "koa": "^2.15.3",
     "koa-bodyparser": "^4.4.1",
     "koa-static": "^5.0.0"

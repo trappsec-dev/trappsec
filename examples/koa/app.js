@@ -1,22 +1,27 @@
+const { parseArgs } = require('node:util');
+
+const options = {
+    otel: { type: 'boolean' },
+    webhook: { type: 'string' },
+};
+
+const { values } = parseArgs({ options, strict: false });
+
+if (values.otel) {
+    require('./otel').setupOpentelemetry();
+}
+
 const Koa = require('koa');
 const Router = require('@koa/router');
 const bodyParser = require('koa-bodyparser');
 const serve = require('koa-static');
 const path = require('path');
-const { parseArgs } = require('node:util');
 const trappsec = require('../../packages/node/src/index');
 
 const app = new Koa();
 const router = new Router();
 
 async function bootstrap() {
-    const options = {
-        otel: { type: 'boolean' },
-        webhook: { type: 'string' },
-    };
-
-    const { values } = parseArgs({ options, strict: false });
-
     app.use(bodyParser());
 
     const ts = new trappsec.Sentry(app, 'KoaApp', 'Development');

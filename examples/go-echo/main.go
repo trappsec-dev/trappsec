@@ -12,6 +12,10 @@ import (
 
 	"github.com/labstack/echo/v4"
 	trappsec "github.com/trappsec-dev/trappsec/packages/go/echo"
+	"go.opentelemetry.io/contrib/instrumentation/github.com/labstack/echo/otelecho"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/exporters/stdout/stdouttrace"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 )
 
 type registerPayload struct {
@@ -32,6 +36,12 @@ func main() {
 
 	app := trappsec.InstallSentry(e, "GoEchoApp", "Development")
 	app.SetDefaultUnauthenticated(401, map[string]any{"error": "authentication required"}, "application/json")
+
+	if *otelEnabled {
+		setupOpenTelemetry()
+		app.Use(otelecho.Middleware("GoEchoApp"))
+		app.AddOTEL()
+	}
 
 	app.IdentifyUser(func(req any) *trappsec.AuthContext {
 		c, ok := req.(echo.Context)
@@ -184,9 +194,6 @@ func main() {
 	app.Watch("/api/v2/echo/form").Body("honey_f", trappsec.NoDefault, "Form Field Test")
 	app.Watch("/api/v2/echo/multipart").Body("honey_m", trappsec.NoDefault, "Multipart Field Test")
 
-	if *otelEnabled {
-		app.AddOTEL()
-	}
 	if *webhookURL != "" {
 		alertsOnly := false
 		app.AddWebhook(*webhookURL, &trappsec.WebhookOptions{AlertsOnly: &alertsOnly})
@@ -197,4 +204,16 @@ func main() {
 	if err := app.Start(addr); err != nil && err != http.ErrServerClosed {
 		log.Fatal(err)
 	}
+}
+
+func setupOpenTelemetry() {
+	exporter, err := stdouttrace.New(stdouttrace.WithPrettyPrint())
+	if err != nil {
+		log.Fatalf("failed to initialize OTEL stdout exporter: %v", err)
+	}
+	tp := sdktrace.NewTracerProvider(
+		sdktrace.WithBatcher(exporter),
+		sdktrace.WithSampler(sdktrace.AlwaysSample()),
+	)
+	otel.SetTracerProvider(tp)
 }
