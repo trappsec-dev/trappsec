@@ -13,6 +13,10 @@ import (
 	"strings"
 
 	trappsec "github.com/trappsec-dev/trappsec/packages/go/nethttp"
+	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/exporters/stdout/stdouttrace"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 )
 
 func main() {
@@ -23,7 +27,20 @@ func main() {
 	mux := http.NewServeMux()
 	app := trappsec.InstallSentry(mux, "GoNetHTTPApp", "Development")
 
-	app.HandleFunc("POST /auth/register", func(w http.ResponseWriter, r *http.Request) {
+	if *otelFlag {
+		setupOpenTelemetry()
+		app.AddOTEL()
+	}
+
+	register := func(pattern string, handler http.HandlerFunc) {
+		if *otelFlag {
+			app.Handle(pattern, otelhttp.NewHandler(http.HandlerFunc(handler), pattern))
+			return
+		}
+		app.HandleFunc(pattern, handler)
+	}
+
+	register("POST /auth/register", func(w http.ResponseWriter, r *http.Request) {
 
 		email := ""
 		ct := r.Header.Get("Content-Type")
@@ -42,29 +59,29 @@ func main() {
 		writeJSON(w, http.StatusOK, map[string]any{"status": "registered", "email": email})
 	})
 
-	app.HandleFunc("GET /api/v2/profile", func(w http.ResponseWriter, r *http.Request) {
+	register("GET /api/v2/profile", func(w http.ResponseWriter, r *http.Request) {
 		name := r.Header.Get("x-user-id")
 		writeJSON(w, http.StatusOK, map[string]any{"name": name, "is_admin": false})
 	})
 
-	app.HandleFunc("POST /api/v2/profile", func(w http.ResponseWriter, r *http.Request) {
+	register("POST /api/v2/profile", func(w http.ResponseWriter, r *http.Request) {
 		name := r.Header.Get("x-user-id")
 		writeJSON(w, http.StatusOK, map[string]any{"name": name, "status": "updated"})
 	})
 
-	app.HandleFunc("GET /api/v2/orders", func(w http.ResponseWriter, r *http.Request) {
+	register("GET /api/v2/orders", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{"orders": []map[string]any{
 			{"id": "ord-123", "item": "Laptop", "amount": 1200},
 			{"id": "ord-124", "item": "Mouse", "amount": 45},
 		}})
 	})
 
-	app.HandleFunc("GET /api/v2/orders/{id}", func(w http.ResponseWriter, r *http.Request) {
+	register("GET /api/v2/orders/{id}", func(w http.ResponseWriter, r *http.Request) {
 		id := r.PathValue("id")
 		writeJSON(w, http.StatusOK, map[string]any{"id": id, "item": "Laptop", "amount": 1200, "status": "shipped"})
 	})
 
-	app.HandleFunc("GET /api/v2/echo/query", func(w http.ResponseWriter, r *http.Request) {
+	register("GET /api/v2/echo/query", func(w http.ResponseWriter, r *http.Request) {
 		result := map[string]string{}
 		for k, v := range r.URL.Query() {
 			if len(v) > 0 {
@@ -74,7 +91,7 @@ func main() {
 		writeJSON(w, http.StatusOK, result)
 	})
 
-	app.HandleFunc("POST /api/v2/echo/body", func(w http.ResponseWriter, r *http.Request) {
+	register("POST /api/v2/echo/body", func(w http.ResponseWriter, r *http.Request) {
 		var body map[string]any
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body == nil {
 			writeJSON(w, http.StatusOK, map[string]any{})
@@ -83,7 +100,7 @@ func main() {
 		writeJSON(w, http.StatusOK, body)
 	})
 
-	app.HandleFunc("POST /api/v2/echo/form", func(w http.ResponseWriter, r *http.Request) {
+	register("POST /api/v2/echo/form", func(w http.ResponseWriter, r *http.Request) {
 		result := map[string]string{}
 		if err := r.ParseForm(); err == nil {
 			for k, v := range r.PostForm {
@@ -95,7 +112,7 @@ func main() {
 		writeJSON(w, http.StatusOK, result)
 	})
 
-	app.HandleFunc("POST /api/v2/echo/multipart", func(w http.ResponseWriter, r *http.Request) {
+	register("POST /api/v2/echo/multipart", func(w http.ResponseWriter, r *http.Request) {
 		result := map[string]string{}
 		if err := r.ParseMultipartForm(32 << 20); err == nil {
 			if r.MultipartForm != nil {
@@ -110,7 +127,7 @@ func main() {
 	})
 
 	frontendDir := filepath.Join("..", "lure-frontend")
-	app.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+	register("/", func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasPrefix(r.URL.Path, "/api/") || strings.HasPrefix(r.URL.Path, "/auth/") || strings.HasPrefix(r.URL.Path, "/deployment/") {
 			w.WriteHeader(http.StatusNotFound)
 			return
@@ -198,9 +215,6 @@ func main() {
 	app.Watch("/api/v2/echo/form").Body("honey_f", trappsec.NoDefault, "Form Field Test")
 	app.Watch("/api/v2/echo/multipart").Body("honey_m", trappsec.NoDefault, "Multipart Field Test")
 
-	if *otelFlag {
-		app.AddOTEL()
-	}
 	if *webhook != "" {
 		alertsOnly := false
 		app.AddWebhook(*webhook, &trappsec.WebhookOptions{AlertsOnly: &alertsOnly})
@@ -216,4 +230,16 @@ func writeJSON(w http.ResponseWriter, status int, body any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(body)
+}
+
+func setupOpenTelemetry() {
+	exporter, err := stdouttrace.New()
+	if err != nil {
+		log.Fatalf("failed to initialize OTEL stdout exporter: %v", err)
+	}
+	tp := sdktrace.NewTracerProvider(
+		sdktrace.WithBatcher(exporter),
+		sdktrace.WithSampler(sdktrace.AlwaysSample()),
+	)
+	otel.SetTracerProvider(tp)
 }

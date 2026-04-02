@@ -1,6 +1,7 @@
 package trappsec
 
 import (
+	"context"
 	"encoding/json"
 	"log"
 	"os"
@@ -44,6 +45,7 @@ type RequestContext struct {
 	Path      func(any) string
 	UserAgent func(any) string
 	Method    func(any) string
+	Context   func(any) context.Context
 }
 
 type IdentityContext struct {
@@ -85,6 +87,7 @@ func NewSentry(service, environment string) *Sentry {
 			Path:      func(_ any) string { return "" },
 			UserAgent: func(_ any) string { return "" },
 			Method:    func(_ any) string { return "" },
+			Context:   func(_ any) context.Context { return context.Background() },
 		},
 		defaultResponses: map[string]ResponseTemplate{
 			"authenticated": {
@@ -257,7 +260,7 @@ func (s *Sentry) Trigger(req any, reason, intent string, metadata any) {
 		ctx.User = identity.User
 		ctx.Role = identity.Role
 	}
-	s.emit(ctx)
+	s.emit(ctx, s.getContext(req))
 }
 
 // TriggerTrapEvent emits a trap_hit event and returns the response body and config.
@@ -284,7 +287,7 @@ func (s *Sentry) TriggerTrapEvent(req any, trap TrapConfig) ([]byte, ResponseTem
 		key = "response.authenticated"
 	}
 
-	s.emit(ctx)
+	s.emit(ctx, s.getContext(req))
 	cfg := trap.ResponseUnauthenticated
 	if key == "response.authenticated" {
 		cfg = trap.ResponseAuthenticated
@@ -314,7 +317,7 @@ func (s *Sentry) TriggerWatchEvent(req any, found []FoundField) {
 		ctx.User = identity.User
 		ctx.Role = identity.Role
 	}
-	s.emit(ctx)
+	s.emit(ctx, s.getContext(req))
 }
 
 // DetectHoneyFields scans data for fields matching the watch rules and returns
@@ -385,7 +388,22 @@ func (s *Sentry) getRequest(req any) extractedRequest {
 	}
 }
 
-func (s *Sentry) emit(ctx TriggerContext) {
+func (s *Sentry) getContext(req any) context.Context {
+	if s.Request.Context == nil {
+		return context.Background()
+	}
+	ctx := s.Request.Context(req)
+	if ctx == nil {
+		return context.Background()
+	}
+	return ctx
+}
+
+type contextEventHandler interface {
+	EmitWithContext(context.Context, TriggerContext) error
+}
+
+func (s *Sentry) emit(ctx TriggerContext, reqCtx context.Context) {
 	ctx.App = AppInfo{Service: s.service, Environment: s.environment, Hostname: s.hostname}
 
 	s.mu.RLock()
@@ -393,6 +411,12 @@ func (s *Sentry) emit(ctx TriggerContext) {
 	s.mu.RUnlock()
 
 	for _, h := range handlers {
+		if ch, ok := h.(contextEventHandler); ok {
+			if err := ch.EmitWithContext(reqCtx, ctx); err != nil {
+				s.logger.Printf("error invoking handler: %v", err)
+			}
+			continue
+		}
 		if err := h.Emit(ctx); err != nil {
 			s.logger.Printf("error invoking handler: %v", err)
 		}

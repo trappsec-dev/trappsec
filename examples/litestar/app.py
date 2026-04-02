@@ -195,7 +195,7 @@ def setup_opentelemetry(application):
     from opentelemetry.instrumentation.asgi import OpenTelemetryMiddleware
 
     provider = TracerProvider()
-    provider.add_span_processor(BatchSpanProcessor(ConsoleSpanExporter()))
+    provider.add_span_processor(BatchSpanProcessor(ConsoleSpanExporter(formatter=lambda span: span.to_json(indent=None) + "\n")))
     trace.set_tracer_provider(provider)
 
     application.asgi_handler = OpenTelemetryMiddleware(application.asgi_handler)

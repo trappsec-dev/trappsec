@@ -177,7 +177,7 @@ def setup_opentelemetry(app):
     from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
 
     provider = TracerProvider()
-    processor = BatchSpanProcessor(ConsoleSpanExporter())
+    processor = BatchSpanProcessor(ConsoleSpanExporter(formatter=lambda span: span.to_json(indent=None) + "\n"))
     provider.add_span_processor(processor)
     trace.set_tracer_provider(provider)
 

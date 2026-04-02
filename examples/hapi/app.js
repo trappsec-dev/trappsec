@@ -1,17 +1,22 @@
+const { parseArgs } = require('node:util');
+
+const options = {
+    otel: { type: 'boolean' },
+    webhook: { type: 'string' },
+};
+
+const { values } = parseArgs({ options, strict: false });
+
+if (values.otel) {
+    require('./otel').setupOpentelemetry();
+}
+
 const Hapi = require('@hapi/hapi');
 const Path = require('path');
 const Inert = require('@hapi/inert');
-const { parseArgs } = require('node:util');
 const trappsec = require('../../packages/node/src/index');
 
 async function bootstrap() {
-    const options = {
-        otel: { type: 'boolean' },
-        webhook: { type: 'string' },
-    };
-
-    const { values } = parseArgs({ options, strict: false });
-
     const server = Hapi.server({
         port: 8000,
         host: '0.0.0.0',

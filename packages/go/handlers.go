@@ -2,12 +2,16 @@ package trappsec
 
 import (
 	"bytes"
+	"context"
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
 	"log"
+	"math"
 	"net/http"
 	"strings"
 	"time"
@@ -340,8 +344,120 @@ func fallback(v string) string {
 
 type OTELHandler struct{}
 
-func (h *OTELHandler) Emit(_ TriggerContext) error {
-	// OTEL enrichment in Go requires request context propagation through trigger events.
-	// This placeholder keeps API compatibility; integration can pass context-aware events in a follow-up.
+func (h *OTELHandler) EmitWithContext(ctx context.Context, event TriggerContext) error {
+	if ctx == nil {
+		return nil
+	}
+	span := trace.SpanFromContext(ctx)
+	if !span.IsRecording() {
+		return nil
+	}
+
+	attrs := []attribute.KeyValue{
+		attribute.Bool("trappsec.detected", true),
+		attribute.String("trappsec.event", event.Event),
+		attribute.String("trappsec.type", event.Type),
+	}
+	if event.User != "" {
+		attrs = append(attrs, attribute.String("trappsec.user", event.User))
+	}
+	if event.Role != "" {
+		attrs = append(attrs, attribute.String("trappsec.role", event.Role))
+	}
+	if event.IP != "" {
+		attrs = append(attrs, attribute.String("trappsec.ip", event.IP))
+	}
+	if event.Intent != "" && (event.Event == "trappsec.trap_hit" || event.Event == "trappsec.rule_hit") {
+		attrs = append(attrs, attribute.String("trappsec.intent", event.Intent))
+	}
+	if event.Reason != "" && event.Event == "trappsec.rule_hit" {
+		attrs = append(attrs, attribute.String("trappsec.reason", event.Reason))
+	}
+	span.SetAttributes(attrs...)
+
+	if event.Event == "trappsec.watch_hit" {
+		for _, field := range event.Found {
+			span.AddEvent("watch_hit", trace.WithAttributes(
+				attribute.String("type", field.Type),
+				attribute.String("field", field.Field),
+				attribute.String("intent", field.Intent),
+				toAttribute("value", field.Value),
+			))
+		}
+	}
+
+	if metadata, ok := event.Metadata.(map[string]any); ok {
+		metadataAttrs := make([]attribute.KeyValue, 0, len(metadata))
+		for k, v := range metadata {
+			metadataAttrs = append(metadataAttrs, toAttribute("metadata."+k, v))
+		}
+		if len(metadataAttrs) > 0 {
+			span.SetAttributes(metadataAttrs...)
+		}
+	}
+
 	return nil
+}
+
+func (h *OTELHandler) Emit(event TriggerContext) error {
+	// Backwards-compatible fallback when no request context is available.
+	return h.EmitWithContext(context.Background(), event)
+}
+
+func toAttribute(key string, value any) attribute.KeyValue {
+	switch v := value.(type) {
+	case string:
+		return attribute.String(key, v)
+	case bool:
+		return attribute.Bool(key, v)
+	case int:
+		return attribute.Int64(key, int64(v))
+	case int8:
+		return attribute.Int64(key, int64(v))
+	case int16:
+		return attribute.Int64(key, int64(v))
+	case int32:
+		return attribute.Int64(key, int64(v))
+	case int64:
+		return attribute.Int64(key, v)
+	case uint:
+		return attribute.Int64(key, int64(v))
+	case uint8:
+		return attribute.Int64(key, int64(v))
+	case uint16:
+		return attribute.Int64(key, int64(v))
+	case uint32:
+		return attribute.Int64(key, int64(v))
+	case uint64:
+		if v > uint64(math.MaxInt64) {
+			return attribute.String(key, fmt.Sprintf("%v", v))
+		}
+		return attribute.Int64(key, int64(v))
+	case float32:
+		return attribute.Float64(key, float64(v))
+	case float64:
+		return attribute.Float64(key, v)
+	case []string:
+		return attribute.StringSlice(key, v)
+	case []bool:
+		return attribute.BoolSlice(key, v)
+	case []int:
+		out := make([]int64, len(v))
+		for i := range v {
+			out[i] = int64(v[i])
+		}
+		return attribute.Int64Slice(key, out)
+	case []int64:
+		return attribute.Int64Slice(key, v)
+	case []float64:
+		return attribute.Float64Slice(key, v)
+	case []float32:
+		out := make([]float64, len(v))
+		for i := range v {
+			out[i] = float64(v[i])
+		}
+		return attribute.Float64Slice(key, out)
+	default:
+		return attribute.String(key, fmt.Sprintf("%v", v))
+	}
 }

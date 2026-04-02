@@ -206,7 +206,7 @@ def setup_opentelemetry():
     from opentelemetry.instrumentation.django import DjangoInstrumentor
 
     provider = TracerProvider()
-    provider.add_span_processor(BatchSpanProcessor(ConsoleSpanExporter()))
+    provider.add_span_processor(BatchSpanProcessor(ConsoleSpanExporter(formatter=lambda span: span.to_json(indent=None) + "\n")))
     trace.set_tracer_provider(provider)
 
     DjangoInstrumentor().instrument()

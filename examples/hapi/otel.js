@@ -1,8 +1,8 @@
 function setupOpentelemetry() {
     const { NodeSDK } = require('@opentelemetry/sdk-node');
     const { ExportResultCode, hrTimeToMicroseconds } = require('@opentelemetry/core');
-    const { ExpressInstrumentation } = require('@opentelemetry/instrumentation-express');
     const { HttpInstrumentation } = require('@opentelemetry/instrumentation-http');
+    const { HapiInstrumentation } = require('@opentelemetry/instrumentation-hapi');
 
     class CompactConsoleSpanExporter {
         export(spans, resultCallback) {
@@ -41,7 +41,7 @@ function setupOpentelemetry() {
         traceExporter: new CompactConsoleSpanExporter(),
         instrumentations: [
             new HttpInstrumentation(),
-            new ExpressInstrumentation(),
+            new HapiInstrumentation(),
         ],
     });
 
