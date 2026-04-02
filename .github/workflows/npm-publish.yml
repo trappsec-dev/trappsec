@@ -22,6 +22,8 @@ jobs:
 
   publish-npm:
     needs: build
+    permissions: 
+      id-token: write
     runs-on: ubuntu-latest
     defaults:
       run:
