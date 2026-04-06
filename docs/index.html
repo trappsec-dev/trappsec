@@ -1,0 +1,2568 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+<!-- Primary Meta -->
+<title>trappsec — Business Logic Deception</title>
+<meta name="description" content="trappsec is an open-source framework that embeds decoy routes and honey fields in your application code, detecting API reconnaissance and privilege escalation attempts before the perimeter is crossed.">
+<meta name="keywords" content="API security, business logic deception, honeypot, decoy routes, honey fields, application security, deception technology, API reconnaissance detection, privilege escalation detection, open source security">
+<meta name="author" content="Nikhil Salgaonkar">
+<link rel="canonical" href="https://trappsec.dev">
+
+<!-- Favicon -->
+<link rel="icon" href="/favicon.ico" sizes="any">
+<link rel="icon" href="/favicon.ico" type="image/x-icon">
+
+<!-- Open Graph / Social -->
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://trappsec.dev">
+<meta property="og:title" content="trappsec — Business Logic Deception">
+<meta property="og:description" content="Detect attackers while they're still mapping your APIs. trappsec embeds decoy routes and honey fields directly in your application code — catching adversaries before a single perimeter is crossed.">
+<meta property="og:image" content="https://trappsec.dev/assets/images/trappsec-og.png">
+<meta property="og:site_name" content="trappsec">
+
+<!-- Twitter / X -->
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:url" content="https://trappsec.dev">
+<meta name="twitter:title" content="trappsec — Business Logic Deception">
+<meta name="twitter:description" content="Detect attackers while they're still mapping your APIs. Open-source SDK for Python, Node.js, and Go.">
+<meta name="twitter:image" content="https://trappsec.dev/assets/images/trappsec-og.png">
+
+<!-- Structured Data -->
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "SoftwareApplication",
+  "name": "trappsec",
+  "description": "An open-source framework that embeds deception directly in your application code to detect API reconnaissance and business logic attacks before exploitation.",
+  "url": "https://trappsec.dev",
+  "downloadUrl": "https://github.com/trappsec-dev/trappsec",
+  "applicationCategory": "SecurityApplication",
+  "operatingSystem": "Linux, macOS, Windows",
+  "license": "https://opensource.org/licenses/MIT",
+  "version": "0.2.0",
+  "author": {
+    "@type": "Person",
+    "name": "Nikhil Salgaonkar",
+    "email": "nikhil@ftfy.co"
+  },
+  "offers": {
+    "@type": "Offer",
+    "price": "0",
+    "priceCurrency": "USD"
+  },
+  "programmingLanguage": ["Python", "JavaScript", "Go"],
+  "codeRepository": "https://github.com/trappsec-dev/trappsec"
+}
+</script>
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:ital,wght@0,300;0,400;0,500;0,600;1,300&family=DM+Serif+Display:ital@0;1&family=DM+Sans:opsz,wght@9..40,300;9..40,400;9..40,500&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --cream:    #f0ece3;
+    --cream-dk: #e4dfd3;
+    --coral:    #d94f36;
+    --coral-lt: #e8705c;
+    --navy:     #1b2b3a;
+    --navy-lt:  #2e4259;
+    --muted:    #6b7a8a;
+    --border:   #c9c3b5;
+    --mono:     'IBM Plex Mono', monospace;
+    --serif:    'DM Serif Display', serif;
+    --sans:     'DM Sans', sans-serif;
+  }
+
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  html { scroll-behavior: smooth; }
+
+  body {
+    background: var(--cream);
+    color: var(--navy);
+    font-family: var(--sans);
+    font-size: 16px;
+    line-height: 1.6;
+    overflow-x: hidden;
+  }
+
+  /* Blueprint grid overlay */
+  body::before {
+    content: '';
+    position: fixed;
+    inset: 0;
+    background-image:
+      linear-gradient(rgba(100,120,140,.06) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(100,120,140,.06) 1px, transparent 1px);
+    background-size: 40px 40px;
+    pointer-events: none;
+    z-index: 0;
+  }
+
+  /* ── NAV ─────────────────────────────────────────── */
+  nav {
+    position: fixed;
+    top: 0; left: 0; right: 0;
+    z-index: 100;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 18px 48px;
+    background: rgba(240,236,227,.92);
+    backdrop-filter: blur(12px);
+    border-bottom: 1px solid var(--border);
+  }
+
+  .nav-logo {
+    font-family: var(--mono);
+    font-weight: 600;
+    font-size: 18px;
+    letter-spacing: -.5px;
+    color: var(--coral);
+    text-decoration: none;
+  }
+
+  .nav-links {
+    display: flex;
+    gap: 36px;
+    list-style: none;
+  }
+
+  .nav-links a {
+    font-family: var(--mono);
+    font-size: 12px;
+    letter-spacing: .08em;
+    text-transform: uppercase;
+    color: var(--muted);
+    text-decoration: none;
+    transition: color .2s;
+  }
+
+  .nav-links a:hover { color: var(--navy); }
+
+  .nav-cta {
+    font-family: var(--mono);
+    font-size: 12px;
+    letter-spacing: .06em;
+    text-transform: uppercase;
+    color: var(--cream);
+    background: var(--coral);
+    border: none;
+    padding: 10px 22px;
+    cursor: pointer;
+    text-decoration: none;
+    transition: background .2s;
+  }
+  .nav-cta:hover { background: var(--coral-lt); }
+
+  /* ── SECTIONS GENERAL ────────────────────────────── */
+  section { position: relative; z-index: 1; }
+
+  .container {
+    max-width: 1140px;
+    margin: 0 auto;
+    padding: 0 48px;
+  }
+
+  /* ── HERO ────────────────────────────────────────── */
+  #hero {
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    padding-top: 88px;
+    overflow: hidden;
+  }
+
+  .hero-inner {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 64px;
+    align-items: center;
+    max-width: 1140px;
+    margin: 0 auto;
+    padding: 0 48px;
+  }
+
+  .hero-eyebrow {
+    font-family: var(--mono);
+    font-size: 11px;
+    letter-spacing: .18em;
+    text-transform: uppercase;
+    color: var(--coral);
+    margin-bottom: 20px;
+    opacity: 0;
+    animation: fadeUp .6s .2s forwards;
+  }
+
+  .hero-title {
+    font-family: var(--serif);
+    font-size: clamp(42px, 5vw, 68px);
+    line-height: 1.05;
+    color: var(--navy);
+    opacity: 0;
+    animation: fadeUp .7s .35s forwards;
+  }
+
+  .hero-title em {
+    font-style: italic;
+    color: var(--coral);
+  }
+
+  .hero-sub {
+    margin-top: 28px;
+    font-size: 17px;
+    color: var(--muted);
+    line-height: 1.65;
+    max-width: 460px;
+    opacity: 0;
+    animation: fadeUp .7s .5s forwards;
+  }
+
+  .hero-actions {
+    margin-top: 40px;
+    display: flex;
+    gap: 16px;
+    align-items: center;
+    opacity: 0;
+    animation: fadeUp .7s .65s forwards;
+  }
+
+  .btn-primary {
+    font-family: var(--mono);
+    font-size: 13px;
+    letter-spacing: .06em;
+    text-transform: uppercase;
+    color: var(--cream);
+    background: var(--navy);
+    padding: 14px 32px;
+    text-decoration: none;
+    transition: background .2s;
+    display: inline-block;
+  }
+  .btn-primary:hover { background: var(--navy-lt); }
+
+  .btn-ghost {
+    font-family: var(--mono);
+    font-size: 13px;
+    letter-spacing: .06em;
+    text-transform: uppercase;
+    color: var(--muted);
+    text-decoration: none;
+    border-bottom: 1px solid var(--border);
+    padding-bottom: 2px;
+    transition: color .2s, border-color .2s;
+  }
+  .btn-ghost:hover { color: var(--navy); border-color: var(--navy); }
+
+  /* Terminal card */
+  .hero-terminal {
+    background: var(--navy);
+    border: 1px solid rgba(255,255,255,.08);
+    padding: 28px 32px;
+    font-family: var(--mono);
+    font-size: 13px;
+    line-height: 1.8;
+    color: rgba(255,255,255,.75);
+    position: relative;
+    opacity: 0;
+    animation: fadeIn .8s .6s forwards;
+  }
+
+  .terminal-bar {
+    display: flex;
+    gap: 7px;
+    margin-bottom: 22px;
+  }
+  .terminal-dot {
+    width: 11px; height: 11px;
+    border-radius: 50%;
+  }
+  .terminal-dot:nth-child(1) { background: #e05c44; }
+  .terminal-dot:nth-child(2) { background: #e6b84c; }
+  .terminal-dot:nth-child(3) { background: #4cae7a; }
+
+  .t-comment { color: rgba(255,255,255,.3); }
+  .t-keyword { color: #e8705c; }
+  .t-str     { color: #7ec8a0; }
+  .t-attr    { color: #8bc8e8; }
+  .t-val     { color: #e6b84c; }
+
+  .terminal-label {
+    position: absolute;
+    bottom: -1px; right: 24px;
+    font-size: 10px;
+    letter-spacing: .1em;
+    text-transform: uppercase;
+    color: var(--coral);
+    background: var(--cream);
+    padding: 4px 12px;
+    border: 1px solid var(--border);
+    border-bottom: none;
+  }
+
+  /* ── DIVIDER ─────────────────────────────────────── */
+  .rule {
+    border: none;
+    border-top: 1px solid var(--border);
+    margin: 0;
+  }
+
+  /* ── STAT BAR ────────────────────────────────────── */
+  .stat-bar {
+    padding: 40px 0;
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 0;
+    border-top: 1px solid var(--border);
+    border-bottom: 1px solid var(--border);
+  }
+
+  .stat-item {
+    padding: 0 48px;
+    text-align: center;
+  }
+  .stat-item + .stat-item {
+    border-left: 1px solid var(--border);
+  }
+
+  .stat-num {
+    font-family: var(--serif);
+    font-size: 48px;
+    line-height: 1;
+    color: var(--coral);
+  }
+
+  .stat-label {
+    font-family: var(--mono);
+    font-size: 11px;
+    letter-spacing: .1em;
+    text-transform: uppercase;
+    color: var(--muted);
+    margin-top: 8px;
+  }
+
+  /* ── PROBLEM SECTION ─────────────────────────────── */
+  #problem {
+    padding: 120px 0;
+  }
+
+  .section-tag {
+    font-family: var(--mono);
+    font-size: 11px;
+    letter-spacing: .16em;
+    text-transform: uppercase;
+    color: var(--coral);
+    margin-bottom: 16px;
+    display: block;
+  }
+
+  .section-title {
+    font-family: var(--serif);
+    font-size: clamp(32px, 4vw, 52px);
+    line-height: 1.1;
+    color: var(--navy);
+    max-width: 640px;
+  }
+
+  .section-title em {
+    font-style: italic;
+    color: var(--coral);
+  }
+
+  .section-body {
+    font-size: 16px;
+    color: var(--muted);
+    line-height: 1.75;
+    max-width: 560px;
+    margin-top: 20px;
+  }
+
+  /* request stream */
+  .problem-layout {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 2px;
+    margin-top: 56px;
+    align-items: stretch;
+  }
+
+  .request-stream-panel {
+    background: var(--navy);
+    padding: 32px;
+    position: relative;
+    overflow: hidden;
+    min-height: 420px;
+    display: flex;
+    flex-direction: column;
+  }
+
+  .panel-label {
+    font-family: var(--mono);
+    font-size: 10px;
+    letter-spacing: .14em;
+    text-transform: uppercase;
+    color: rgba(255,255,255,.3);
+    margin-bottom: 20px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .panel-label-dot {
+    width: 7px; height: 7px;
+    border-radius: 50%;
+    background: rgba(255,255,255,.2);
+    display: inline-block;
+  }
+
+  .panel-label-dot.green { background: #4cae7a; }
+  .panel-label-dot.red   { background: #e05c44; }
+
+  .log-stream {
+    display: flex;
+    flex-direction: column;
+    gap: 0;
+    font-family: var(--mono);
+    font-size: 12px;
+    flex: 1;
+    overflow: hidden;
+  }
+
+  .log-entry {
+    display: flex;
+    gap: 12px;
+    padding: 7px 0;
+    border-bottom: 1px solid rgba(255,255,255,.05);
+    opacity: 0;
+    transform: translateY(-6px);
+    transition: opacity .3s, transform .3s;
+    align-items: center;
+  }
+
+  .log-entry.visible { opacity: 1; transform: none; }
+
+  .log-method {
+    font-size: 10px;
+    letter-spacing: .05em;
+    padding: 2px 7px;
+    flex-shrink: 0;
+    width: 42px;
+    text-align: center;
+  }
+  .log-method.get  { background: rgba(76,174,122,.15); color: #4cae7a; }
+  .log-method.post { background: rgba(139,200,232,.15); color: #8bc8e8; }
+  .log-method.put  { background: rgba(230,184,76,.15); color: #e6b84c; }
+  .log-method.del  { background: rgba(232,112,92,.15); color: #e8705c; }
+  .log-method.patch { background: rgba(180,140,220,.15); color: #c89ce8; }
+
+  .log-path {
+    color: rgba(255,255,255,.55);
+    flex: 1;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .log-status {
+    font-size: 11px;
+    flex-shrink: 0;
+  }
+  .log-status.ok  { color: #4cae7a; }
+  .log-status.bad { color: #e8705c; }
+
+  .log-entry.recon .log-path { color: rgba(255,255,255,.85); }
+  .log-entry.recon { background: rgba(217,79,54,.08); padding-left: 8px; padding-right: 8px; margin: 0 -8px; border-radius: 2px; }
+
+  .recon-tag {
+    font-size: 10px;
+    letter-spacing: .06em;
+    color: var(--coral);
+    flex-shrink: 0;
+    background: rgba(217,79,54,.15);
+    padding: 2px 7px;
+    border: 1px solid rgba(217,79,54,.3);
+  }
+
+  .waf-miss-tag {
+    font-size: 10px;
+    letter-spacing: .06em;
+    color: rgba(255,255,255,.3);
+    flex-shrink: 0;
+  }
+
+  .stream-footnote {
+    margin-top: 20px;
+    font-family: var(--mono);
+    font-size: 11px;
+    color: rgba(255,255,255,.3);
+    line-height: 1.6;
+    border-top: 1px solid rgba(255,255,255,.07);
+    padding-top: 16px;
+    flex-shrink: 0;
+  }
+
+  .stream-footnote strong { color: var(--coral); font-weight: 400; }
+
+  /* problem explainer */
+  .problem-explainer {
+    background: white;
+    border: 1px solid var(--border);
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+  }
+
+  .problem-points {
+    display: flex;
+    flex-direction: column;
+  }
+
+  .problem-point {
+    padding: 28px 32px;
+    border-bottom: 1px solid var(--border);
+    position: relative;
+  }
+
+  .problem-point:last-child { border-bottom: none; }
+
+  .problem-point-num {
+    font-family: var(--mono);
+    font-size: 9px;
+    letter-spacing: .18em;
+    text-transform: uppercase;
+    color: var(--coral);
+    margin-bottom: 10px;
+    display: block;
+    opacity: .8;
+  }
+
+  .problem-point h3 {
+    font-family: var(--sans);
+    font-size: 15px;
+    font-weight: 600;
+    line-height: 1.3;
+    color: var(--navy);
+    margin-bottom: 8px;
+    letter-spacing: -.1px;
+  }
+
+  .problem-point p {
+    font-size: 13.5px;
+    color: var(--muted);
+    line-height: 1.65;
+    margin: 0;
+  }
+
+  /* ── HOW IT WORKS ─────────────────────────────────── */
+  #how {
+    padding: 120px 0;
+    background: var(--navy);
+    color: white;
+  }
+
+  #how .section-tag { color: var(--coral-lt); }
+  #how .section-title { color: white; }
+  #how .section-body { color: rgba(255,255,255,.5); }
+
+  /* attacker/defender split */
+  .perspective-split {
+    margin-top: 56px;
+    border: 1px solid rgba(255,255,255,.1);
+    overflow: hidden;
+  }
+
+  .perspective-header {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    border-bottom: 1px solid rgba(255,255,255,.1);
+  }
+
+  .perspective-col-label {
+    font-family: var(--mono);
+    font-size: 11px;
+    letter-spacing: .12em;
+    text-transform: uppercase;
+    padding: 14px 28px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+
+  .perspective-col-label.attacker {
+    color: rgba(255,255,255,.35);
+    border-right: 1px solid rgba(255,255,255,.1);
+  }
+
+  .perspective-col-label.defender {
+    color: var(--coral-lt);
+  }
+
+  .pcl-icon {
+    width: 8px; height: 8px;
+    border-radius: 50%;
+    flex-shrink: 0;
+  }
+  .pcl-icon.grey  { background: rgba(255,255,255,.25); }
+  .pcl-icon.coral { background: var(--coral); }
+
+  .perspective-body {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .perspective-side {
+    padding: 28px;
+    font-family: var(--mono);
+    font-size: 13px;
+    line-height: 1;
+  }
+
+  .perspective-side.attacker {
+    border-right: 1px solid rgba(255,255,255,.1);
+  }
+
+  .api-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 0 12px;
+    border-radius: 3px;
+    margin-bottom: 4px;
+    position: relative;
+    height: 40px;
+    box-sizing: border-box;
+  }
+
+  .api-row .api-method {
+    font-size: 10px;
+    padding: 2px 7px;
+    flex-shrink: 0;
+    width: 38px;
+    text-align: center;
+  }
+
+  .api-row .api-path {
+    color: rgba(255,255,255,.6);
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  /* Attacker side — all looks the same */
+  .perspective-side.attacker .api-row { background: rgba(255,255,255,.03); }
+  .perspective-side.attacker .api-row:hover { background: rgba(255,255,255,.06); }
+
+  /* Defender side — labels reveal traps */
+  .perspective-side.defender .api-row { background: rgba(255,255,255,.03); }
+  .perspective-side.defender .api-row.is-trap {
+    background: rgba(217,79,54,.1);
+    outline: 1px solid rgba(217,79,54,.25);
+    outline-offset: -1px;
+  }
+  .perspective-side.defender .api-row.is-trap .api-path { color: rgba(255,255,255,.85); }
+
+  .trap-label {
+    font-size: 10px;
+    letter-spacing: .06em;
+    color: var(--coral);
+    background: rgba(217,79,54,.15);
+    border: 1px solid rgba(217,79,54,.3);
+    padding: 2px 8px;
+    white-space: nowrap;
+    flex-shrink: 0;
+  }
+
+  .honey-label {
+    font-size: 10px;
+    letter-spacing: .06em;
+    color: #e6b84c;
+    background: rgba(230,184,76,.1);
+    border: 1px solid rgba(230,184,76,.25);
+    padding: 2px 8px;
+    white-space: nowrap;
+    flex-shrink: 0;
+  }
+
+  .normal-label {
+    font-size: 10px;
+    color: rgba(255,255,255,.2);
+    flex-shrink: 0;
+  }
+
+  .split-caption {
+    padding: 14px 28px;
+    border-top: 1px solid rgba(255,255,255,.08);
+    font-family: var(--mono);
+    font-size: 11px;
+    color: rgba(255,255,255,.3);
+    text-align: center;
+    letter-spacing: .04em;
+  }
+
+  /* primitives */
+  .primitives-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 2px;
+    margin-top: 56px;
+  }
+
+  .primitive-card {
+    background: rgba(255,255,255,.04);
+    border: 1px solid rgba(255,255,255,.1);
+    padding: 40px;
+  }
+
+  .primitive-badge {
+    font-family: var(--mono);
+    font-size: 13px;
+    color: var(--coral-lt);
+    background: rgba(232,112,92,.12);
+    border: 1px solid rgba(232,112,92,.25);
+    display: inline-block;
+    padding: 4px 12px;
+    margin-bottom: 24px;
+  }
+
+  .primitive-title {
+    font-family: var(--serif);
+    font-size: 28px;
+    color: white;
+    margin-bottom: 12px;
+  }
+
+  .primitive-desc {
+    font-size: 14px;
+    color: rgba(255,255,255,.5);
+    line-height: 1.75;
+    margin-bottom: 28px;
+  }
+
+  .primitive-example {
+    background: rgba(0,0,0,.25);
+    border: 1px solid rgba(255,255,255,.08);
+    padding: 18px 20px;
+    font-family: var(--mono);
+    font-size: 12px;
+    line-height: 1.8;
+    margin-bottom: 20px;
+    border-left: 2px solid var(--coral);
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .primitive-mechanic {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .mechanic-item {
+    display: flex;
+    gap: 10px;
+    align-items: flex-start;
+    font-family: var(--mono);
+    font-size: 12px;
+    color: rgba(255,255,255,.4);
+  }
+
+  .mechanic-item::before {
+    content: '→';
+    color: var(--coral-lt);
+    flex-shrink: 0;
+  }
+
+  /* attribution steps */
+  .attribution-row {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 2px;
+    margin-top: 56px;
+  }
+
+  .attribution-step {
+    background: rgba(255,255,255,.04);
+    border: 1px solid rgba(255,255,255,.08);
+    padding: 28px 24px;
+    position: relative;
+  }
+
+  .step-num {
+    font-family: var(--mono);
+    font-size: 11px;
+    letter-spacing: .1em;
+    color: rgba(255,255,255,.2);
+    margin-bottom: 20px;
+    display: block;
+  }
+
+  .step-signal {
+    width: 32px; height: 32px;
+    border-radius: 50%;
+    margin-bottom: 16px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-family: var(--mono);
+    font-size: 13px;
+    flex-shrink: 0;
+  }
+
+  .step-signal.grey  { background: rgba(255,255,255,.08); color: rgba(255,255,255,.4); }
+  .step-signal.blue  { background: rgba(100,160,220,.12); color: #8bc8e8; }
+  .step-signal.amber { background: rgba(230,184,76,.12); color: #e6b84c; }
+  .step-signal.coral { background: rgba(217,79,54,.2); color: var(--coral-lt); }
+
+  .step-title {
+    font-family: var(--sans);
+    font-weight: 500;
+    font-size: 14px;
+    color: white;
+    margin-bottom: 8px;
+  }
+
+  .step-desc {
+    font-size: 13px;
+    color: rgba(255,255,255,.4);
+    line-height: 1.6;
+  }
+
+  .step-arrow {
+    position: absolute;
+    right: -13px;
+    top: 50%;
+    transform: translateY(-50%);
+    font-family: var(--mono);
+    font-size: 16px;
+    color: rgba(255,255,255,.2);
+    z-index: 2;
+    background: var(--navy);
+    padding: 2px;
+  }
+
+  /* ── ALERT ────────────────────────────────────────── */
+  #alert {
+    padding: 80px 0;
+    background: var(--cream-dk);
+    color: var(--navy);
+  }
+
+  .alert-header {
+    display: flex;
+    align-items: baseline;
+    gap: 24px;
+    margin-bottom: 40px;
+    flex-wrap: wrap;
+  }
+
+  .alert-header h2 {
+    font-family: var(--serif);
+    font-size: clamp(26px, 3vw, 40px);
+    line-height: 1.1;
+    color: var(--navy);
+    margin: 0;
+  }
+
+  .alert-header p {
+    font-size: 15px;
+    color: var(--muted);
+    margin: 0;
+    max-width: 440px;
+    line-height: 1.6;
+  }
+
+  .alert-layout {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 0;
+    border: 1px solid var(--border);
+  }
+
+  .alert-code {
+    background: var(--navy);
+    padding: 32px 36px;
+    font-family: var(--mono);
+    font-size: 13px;
+    line-height: 2;
+    color: rgba(255,255,255,.6);
+    border-right: 1px solid rgba(255,255,255,.1);
+  }
+
+  .alert-code-label {
+    font-size: 10px;
+    letter-spacing: .12em;
+    text-transform: uppercase;
+    color: var(--coral);
+    margin-bottom: 20px;
+    display: block;
+    font-family: var(--mono);
+  }
+
+  .alert-line { display: flex; align-items: center; }
+  .alert-line.hl-intent .t-str { color: #e8705c; font-weight: 600; }
+  .alert-line.hl-intent { background: rgba(232,112,92,.08); margin: 0 -36px; padding: 0 36px; }
+  .alert-line.hl-user   { background: rgba(139,200,232,.07); margin: 0 -36px; padding: 0 36px; }
+  .alert-line.hl-status { background: rgba(76,174,122,.07); margin: 0 -36px; padding: 0 36px; }
+  .alert-line.hl-status .t-str { color: #4cae7a; }
+
+  .alert-annotations {
+    display: flex;
+    flex-direction: column;
+    background: white;
+  }
+
+  .alert-annotation {
+    flex: 1;
+    padding: 24px 28px;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    gap: 6px;
+  }
+
+  .alert-annotation:last-child { border-bottom: none; }
+
+  .ann-field {
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--muted);
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .ann-field code {
+    background: rgba(27,43,58,.06);
+    border: 1px solid var(--border);
+    color: var(--muted);
+    padding: 1px 7px;
+    font-size: 11px;
+    font-family: var(--mono);
+  }
+
+  .ann-title {
+    font-family: var(--sans);
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--navy);
+  }
+
+  .ann-desc {
+    font-size: 13px;
+    color: var(--muted);
+    line-height: 1.55;
+  }
+
+  .ann-swatch {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    flex-shrink: 0;
+  }
+  .ann-swatch.coral  { background: #e8705c; }
+  .ann-swatch.blue   { background: #8bc8e8; }
+  .ann-swatch.green  { background: #4cae7a; }
+
+  /* ── INTEGRATION ─────────────────────────────────── */
+  #integration {
+    padding: 120px 0;
+  }
+
+  .integration-grid {
+    display: grid;
+    grid-template-columns: 5fr 4fr;
+    gap: 64px;
+    align-items: start;
+    margin-top: 56px;
+  }
+
+  .code-block {
+    background: var(--navy);
+    padding: 36px;
+    font-family: var(--mono);
+    font-size: 13px;
+    line-height: 1.9;
+    color: rgba(255,255,255,.7);
+    border-left: 3px solid var(--coral);
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .integration-targets {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+  }
+
+  .integration-target {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    padding: 20px 24px;
+    border: 1px solid var(--border);
+    background: white;
+    transition: border-color .2s, transform .2s;
+  }
+  .integration-target:hover {
+    border-color: var(--coral);
+    transform: translateX(4px);
+  }
+
+  .target-icon {
+    font-size: 22px;
+    flex-shrink: 0;
+  }
+
+  .target-info h4 {
+    font-family: var(--mono);
+    font-size: 13px;
+    color: var(--navy);
+    margin-bottom: 3px;
+  }
+
+  .target-info p {
+    font-size: 12px;
+    color: var(--muted);
+  }
+
+  .target-tag {
+    margin-left: auto;
+    font-family: var(--mono);
+    font-size: 10px;
+    letter-spacing: .08em;
+    text-transform: uppercase;
+    color: var(--coral);
+    background: rgba(217,79,54,.08);
+    padding: 3px 10px;
+    border: 1px solid rgba(217,79,54,.2);
+    flex-shrink: 0;
+  }
+
+  /* new int-card styles */
+  .int-col-label {
+    font-family: var(--mono);
+    font-size: 10px;
+    letter-spacing: .14em;
+    text-transform: uppercase;
+    color: var(--muted);
+    margin-bottom: 12px;
+  }
+
+  .int-cards {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .int-card {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    padding: 14px 18px;
+    background: white;
+    border: 1px solid var(--border);
+    transition: border-color .18s, box-shadow .18s;
+  }
+
+  .int-card:hover {
+    border-color: var(--coral);
+    box-shadow: 2px 2px 0 rgba(217,79,54,.08);
+  }
+
+  .int-card-icon {
+    width: 36px;
+    height: 36px;
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .int-card-icon--emoji {
+    font-size: 20px;
+  }
+
+  .int-card-info {
+    flex: 1;
+    min-width: 0;
+  }
+
+  .int-card-info h4 {
+    font-family: var(--sans);
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--navy);
+    margin-bottom: 2px;
+    letter-spacing: -.1px;
+  }
+
+  .int-card-info p {
+    font-size: 12px;
+    color: var(--muted);
+    line-height: 1.5;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .int-card-tag {
+    font-family: var(--mono);
+    font-size: 10px;
+    letter-spacing: .08em;
+    text-transform: uppercase;
+    color: var(--coral);
+    background: rgba(217,79,54,.07);
+    padding: 3px 10px;
+    border: 1px solid rgba(217,79,54,.22);
+    flex-shrink: 0;
+    white-space: nowrap;
+  }
+
+  /* ── COMPARE TABLE ────────────────────────────────── */
+  #compare {
+    padding: 80px 0 120px;
+    background: var(--cream-dk);
+  }
+
+  .compare-table {
+    width: 100%;
+    border-collapse: collapse;
+    margin-top: 48px;
+    font-size: 14px;
+  }
+
+  .compare-table th {
+    font-family: var(--mono);
+    font-size: 11px;
+    letter-spacing: .1em;
+    text-transform: uppercase;
+    padding: 16px 24px;
+    text-align: left;
+    border-bottom: 2px solid var(--border);
+    color: var(--muted);
+  }
+
+  .compare-table th:last-child {
+    color: var(--coral);
+    border-bottom-color: var(--coral);
+  }
+
+  .compare-table td {
+    padding: 16px 24px;
+    border-bottom: 1px solid var(--border);
+    color: var(--navy);
+  }
+
+  .compare-table td:first-child {
+    font-family: var(--mono);
+    font-size: 12px;
+    color: var(--muted);
+    width: 140px;
+    white-space: nowrap;
+  }
+
+  .compare-table td:last-child {
+    background: rgba(217,79,54,.04);
+    color: var(--coral);
+    font-weight: 500;
+  }
+
+  .compare-table tbody tr:hover td { background: rgba(0,0,0,.02); }
+  .compare-table tbody tr:hover td:last-child { background: rgba(217,79,54,.07); }
+
+  /* ── CTA ──────────────────────────────────────────── */
+  #cta {
+    padding: 120px 0;
+    background: var(--navy);
+    text-align: center;
+    position: relative;
+    overflow: hidden;
+  }
+
+  #cta::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background: radial-gradient(ellipse 800px 600px at 50% 50%, rgba(217,79,54,.12), transparent);
+    pointer-events: none;
+  }
+
+  #cta .section-title {
+    color: white;
+    max-width: 720px;
+    margin: 0 auto;
+    text-align: center;
+  }
+
+  .cta-sub {
+    font-size: 17px;
+    color: rgba(255,255,255,.45);
+    margin: 20px auto 0;
+    max-width: 480px;
+    text-align: center;
+    line-height: 1.65;
+  }
+
+  .cta-actions {
+    display: flex;
+    gap: 16px;
+    justify-content: center;
+    margin-top: 48px;
+  }
+
+  .btn-cta-primary {
+    font-family: var(--mono);
+    font-size: 13px;
+    letter-spacing: .06em;
+    text-transform: uppercase;
+    color: var(--navy);
+    background: white;
+    padding: 16px 40px;
+    text-decoration: none;
+    transition: background .2s, color .2s;
+    display: inline-block;
+  }
+  .btn-cta-primary:hover { background: var(--coral); color: white; }
+
+  .btn-cta-ghost {
+    font-family: var(--mono);
+    font-size: 13px;
+    letter-spacing: .06em;
+    text-transform: uppercase;
+    color: rgba(255,255,255,.45);
+    text-decoration: none;
+    padding: 16px 40px;
+    border: 1px solid rgba(255,255,255,.15);
+    transition: border-color .2s, color .2s;
+    display: inline-block;
+  }
+  .btn-cta-ghost:hover { border-color: rgba(255,255,255,.5); color: white; }
+
+  /* ── FOOTER ───────────────────────────────────────── */
+  footer {
+    padding: 32px 48px;
+    border-top: 1px solid rgba(255,255,255,.08);
+    background: var(--navy);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    position: relative;
+    z-index: 1;
+  }
+
+  .footer-logo {
+    font-family: var(--mono);
+    font-weight: 600;
+    color: var(--coral);
+    font-size: 15px;
+    letter-spacing: -.3px;
+  }
+
+  .footer-copy {
+    font-family: var(--mono);
+    font-size: 11px;
+    color: rgba(255,255,255,.25);
+  }
+
+
+  /* ── IDENTITY GATE SECTION ───────────────────────── */
+  #identity { padding: 80px 0; background: var(--cream); }
+
+  .identity-split {
+    display: grid;
+    grid-template-columns: 1fr auto 1fr;
+    gap: 32px;
+    align-items: start;
+    margin-top: 48px;
+  }
+
+  .identity-path {
+    border: 1px solid var(--border);
+    background: white;
+    padding: 32px;
+  }
+
+  .identity-path.active {
+    border-color: var(--coral);
+    background: rgba(217,79,54,.03);
+  }
+
+  .identity-path-header {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 24px;
+    padding-bottom: 16px;
+    border-bottom: 1px solid var(--border);
+  }
+  .identity-path.active .identity-path-header { border-bottom-color: rgba(217,79,54,.2); }
+
+  .identity-path-badge {
+    font-family: var(--mono);
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: .1em;
+    text-transform: uppercase;
+    padding: 3px 10px;
+    border: 1px solid var(--border);
+    color: var(--muted);
+    flex-shrink: 0;
+  }
+  .identity-path.active .identity-path-badge {
+    color: var(--coral);
+    border-color: rgba(217,79,54,.35);
+    background: rgba(217,79,54,.06);
+  }
+
+  .identity-path-title {
+    font-family: var(--sans);
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--muted);
+  }
+  .identity-path.active .identity-path-title { color: var(--navy); }
+
+  .identity-steps { display: flex; flex-direction: column; }
+
+  .identity-step {
+    display: flex;
+    gap: 14px;
+    align-items: flex-start;
+    padding: 14px 0;
+    border-bottom: 1px solid var(--border);
+  }
+  .identity-step:last-child { border-bottom: none; }
+
+  .istep-signal {
+    width: 30px; height: 30px;
+    border-radius: 50%;
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-family: var(--mono);
+    font-size: 11px;
+    font-weight: 600;
+    margin-top: 2px;
+  }
+  .istep-signal.grey  { background: var(--cream-dk); color: var(--muted); border: 1px solid var(--border); }
+  .istep-signal.blue  { background: rgba(59,130,246,.1); color: #2563eb; border: 1px solid rgba(59,130,246,.2); }
+  .istep-signal.amber { background: rgba(230,184,76,.12); color: #a16207; border: 1px solid rgba(230,184,76,.3); }
+  .istep-signal.coral { background: rgba(217,79,54,.12); color: var(--coral); border: 1px solid rgba(217,79,54,.25); }
+
+  .istep-body strong {
+    display: block;
+    font-size: 13.5px;
+    font-weight: 600;
+    color: var(--navy);
+    margin-bottom: 3px;
+  }
+  .istep-body p { font-size: 13px; color: var(--muted); line-height: 1.55; margin: 0; }
+
+  .identity-outcome {
+    margin-top: 20px;
+    padding: 14px 16px;
+    border: 1px solid var(--border);
+    background: var(--cream-dk);
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+  .identity-outcome.alert-outcome {
+    border-color: rgba(217,79,54,.3);
+    background: rgba(217,79,54,.04);
+  }
+
+  .outcome-badge {
+    font-family: var(--mono);
+    font-size: 10px;
+    letter-spacing: .1em;
+    text-transform: uppercase;
+    padding: 3px 10px;
+    flex-shrink: 0;
+    font-weight: 600;
+  }
+  .outcome-badge.signal { color: var(--muted); background: var(--cream); border: 1px solid var(--border); }
+  .outcome-badge.alert  { color: var(--coral); background: rgba(217,79,54,.08); border: 1px solid rgba(217,79,54,.25); }
+
+  .outcome-text { font-size: 13px; color: var(--muted); }
+  .outcome-code { font-family: var(--mono); font-size: 11px; color: var(--coral); line-height: 1.5; }
+
+  .identity-divider {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-family: var(--mono);
+    font-size: 11px;
+    letter-spacing: .08em;
+    text-transform: uppercase;
+    color: var(--border);
+    margin-top: 60px;
+  }
+
+
+  /* ── HALL OF MIRRORS MOBILE TOGGLE ─────────────────── */
+  .mirror-toggle {
+    display: none;
+  }
+
+  @media (max-width: 900px) {
+    .perspective-split { margin-top: 0; border-top: none; }
+    .mirror-toggle {
+      display: flex;
+      gap: 2px;
+      margin-bottom: 0;
+      border-bottom: none;
+    }
+
+    .mirror-tab {
+      flex: 1;
+      font-family: var(--mono);
+      font-size: 11px;
+      letter-spacing: .08em;
+      text-transform: uppercase;
+      padding: 12px 16px;
+      background: rgba(255,255,255,.04);
+      border: 1px solid rgba(255,255,255,.1);
+      border-bottom: none;
+      color: rgba(255,255,255,.4);
+      cursor: pointer;
+      text-align: center;
+      transition: background .15s, color .15s;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+    }
+
+    .mirror-tab .mtab-dot {
+      width: 6px; height: 6px;
+      border-radius: 50%;
+      flex-shrink: 0;
+    }
+
+    .mirror-tab.active {
+      background: rgba(255,255,255,.09);
+      color: white;
+      border-color: rgba(255,255,255,.25);
+    }
+
+    .mirror-tab.active-coral {
+      background: rgba(217,79,54,.15);
+      color: var(--coral-lt);
+      border-color: rgba(217,79,54,.35);
+    }
+
+    /* Hide the desktop split header on mobile */
+    .perspective-split .perspective-header { display: none; }
+
+    /* The perspective body becomes single-column — only the active side shows */
+    .perspective-body { display: block; }
+    .perspective-side { transition: opacity .25s, transform .25s; }
+    .perspective-side.mobile-hidden {
+      display: none;
+    }
+    .perspective-side.attacker { border-right: none; }
+  }
+
+  /* ── COMPARE CARDS (mobile) ──────────────────────────── */
+  .compare-cards {
+    display: none;
+  }
+
+  @media (max-width: 900px) {
+    /* Hide table, show cards */
+    .compare-table-wrap { display: none; }
+    .compare-cards { display: flex; flex-direction: column; gap: 2px; margin-top: 32px; }
+  }
+
+  .compare-card {
+    border: 1px solid var(--border);
+    border-top: none;
+    overflow: hidden;
+    background: white;
+  }
+
+  .compare-card:first-of-type {
+    border-top: 1px solid var(--border);
+  }
+
+  .compare-card-label {
+    font-family: var(--mono);
+    font-size: 9px;
+    letter-spacing: .14em;
+    text-transform: uppercase;
+    color: var(--muted);
+    padding: 8px 14px;
+    background: var(--cream-dk);
+    border-bottom: 1px solid var(--border);
+  }
+
+  .compare-card-row {
+    display: flex;
+  }
+
+  .compare-card-cell {
+    padding: 14px 16px;
+    font-size: 13px;
+    line-height: 1.5;
+    flex: 1;
+    display: flex;
+    align-items: center;
+  }
+
+  .compare-card-cell:first-child {
+    color: var(--muted);
+    border-right: 1px solid var(--border);
+    background: white;
+  }
+
+  .compare-card-cell:last-child {
+    color: var(--coral);
+    background: rgba(217,79,54,.03);
+    font-weight: 500;
+  }
+
+  .compare-card-col-headers {
+    display: flex;
+    margin-top: 32px;
+    margin-bottom: 0;
+    border: 1px solid var(--border);
+    border-bottom: none;
+    background: var(--navy);
+  }
+
+  .compare-col-head {
+    font-family: var(--mono);
+    font-size: 10px;
+    letter-spacing: .1em;
+    text-transform: uppercase;
+    padding: 12px 14px;
+    flex: 1;
+  }
+
+  .compare-col-head:first-child { color: rgba(255,255,255,.35); }
+  .compare-col-head:last-child  { color: var(--coral-lt); border-left: 1px solid rgba(255,255,255,.1); }
+
+  /* ── ANIMATIONS ───────────────────────────────────── */
+  @keyframes fadeUp {
+    from { opacity: 0; transform: translateY(16px); }
+    to   { opacity: 1; transform: translateY(0); }
+  }
+  @keyframes fadeIn {
+    from { opacity: 0; }
+    to   { opacity: 1; }
+  }
+
+  .reveal {
+    opacity: 0;
+    transform: translateY(24px);
+    transition: opacity .65s ease, transform .65s ease;
+  }
+  .reveal.visible {
+    opacity: 1;
+    transform: none;
+  }
+
+  /* typing cursor */
+  .cursor {
+    display: inline-block;
+    width: 7px;
+    height: 14px;
+    background: var(--coral-lt);
+    vertical-align: middle;
+    animation: blink .9s infinite;
+    margin-left: 2px;
+  }
+  @keyframes blink {
+    0%,49% { opacity: 1; }
+    50%,100% { opacity: 0; }
+  }
+
+  /* ── RESPONSIVE ───────────────────────────────────── */
+
+  /* Tablet */
+  @media (max-width: 1024px) {
+    .integration-grid { grid-template-columns: 1fr 1fr; gap: 40px; }
+    .hero-title { font-size: clamp(36px, 5vw, 56px); }
+  }
+
+  /* Mobile + Tablet */
+  @media (max-width: 900px) {
+    /* NAV */
+    nav { padding: 14px 20px; }
+    .logo-badge { display: none; }
+
+    /* GLOBAL SPACING */
+    .container { padding: 0 20px; }
+    #problem, #how, #identity, #alert,
+    #integration, #cta { padding: 64px 0; }
+
+    /* HERO */
+    #hero { min-height: unset; padding-top: 80px; padding-bottom: 20px; }
+    .hero-inner { grid-template-columns: 1fr; padding: 0 20px; gap: 32px; }
+    .hero-terminal { display: none; }
+    .hero-eyebrow { display: none; }
+    .hero-title { font-size: clamp(32px, 8vw, 48px); }
+    .hero-sub { font-size: 15px; }
+    .hero-actions { flex-direction: column; align-items: flex-start; gap: 12px; }
+    .btn-primary, .btn-ghost { width: 100%; text-align: center; box-sizing: border-box; }
+
+    /* STAT BAR — hidden on mobile */
+    .stat-bar-wrap, .stat-bar { display: none; }
+
+    /* SECTION TITLES */
+    .section-title { font-size: clamp(26px, 6vw, 40px); }
+
+    /* PROBLEM */
+    .problem-layout { grid-template-columns: 1fr; gap: 0; }
+    .request-stream-panel { min-height: 320px; height: 320px; border-right: none; border-bottom: 1px solid var(--border); }
+    .problem-explainer { border-left: 3px solid var(--coral); }
+
+    /* HOW IT WORKS — PERSPECTIVE SPLIT */
+    .perspective-body { display: block; }
+    .perspective-header { display: none; } /* replaced by toggle tabs */
+    .perspective-side { padding: 16px 12px; font-size: 11px; }
+    .perspective-side.attacker { border-right: none; }
+
+    /* IDENTITY GATE — hide A/B path cards, keep heading */
+    .identity-split { display: none; }
+
+    /* PRIMITIVES — hidden on mobile */
+    #primitives { display: none; }
+
+    /* ALERT — hide annotations, full-width code block */
+    .alert-header { flex-direction: column; gap: 12px; }
+    .alert-annotations { display: none; }
+    .alert-layout { display: block; }
+    .alert-code { border: none; padding: 24px 20px; }
+    .alert-line { font-size: 12px; }
+    .alert-line.hl-intent,
+    .alert-line.hl-user,
+    .alert-line.hl-status { margin: 0 -20px; padding: 0 20px; }
+
+    /* INTEGRATION */
+    .integration-grid { grid-template-columns: 1fr; gap: 40px; }
+    #integration { padding: 64px 0; }
+
+    /* COMPARE SECTION — hidden on mobile */
+    #compare { display: none; }
+
+    /* CTA */
+    .cta-actions { flex-direction: column; align-items: center; }
+    .btn-cta-primary, .btn-cta-ghost { width: 100%; max-width: 320px; text-align: center; }
+
+    /* FOOTER */
+    footer { flex-direction: column; gap: 12px; text-align: center; padding: 24px 20px; }
+
+    /* HIDE decorative step arrows */
+    .step-arrow { display: none; }
+  }
+
+  /* Small mobile */
+  @media (max-width: 480px) {
+    nav { padding: 10px 16px; }
+    .nav-logo { font-size: 15px; }
+    .nav-cta { padding: 8px 14px; font-size: 11px; }
+    .container { padding: 0 16px; }
+    #problem, #how, #identity, #primitives, #alert,
+    #integration, #compare, #cta { padding: 48px 0; }
+
+    .hero-inner { padding: 0 16px; }
+    .hero-title { font-size: clamp(28px, 9vw, 38px); }
+
+    /* Stat bar: 3 across squished → stacked */
+    .stat-num { font-size: 18px; }
+    .stat-label { font-size: 8px; }
+    .stat-item { padding: 16px 6px; }
+
+    /* Problem stream panel tighter */
+    .request-stream-panel { min-height: 280px; height: 280px; }
+    .log-entry { font-size: 11px; }
+    .log-method { width: 34px; font-size: 9px; }
+
+/* Perspective split caption */
+    .split-caption { font-size: 10px; padding: 12px 16px; }
+
+    /* Int cards */
+    .int-card-info p { white-space: normal; }
+
+    /* Code block tabs */
+    #integration .code-block { font-size: 11px; padding: 20px 16px; line-height: 1.7; }
+
+    /* Section titles */
+    .section-title { font-size: clamp(24px, 7vw, 32px); }
+    .section-body { font-size: 14px; }
+
+    /* Alert section */
+    .alert-header h2 { font-size: clamp(22px, 7vw, 32px); }
+    .ann-desc { font-size: 12px; }
+
+    /* Identity gate */
+    .identity-path { padding: 24px 20px; }
+    .istep-body strong { font-size: 13px; }
+
+    /* Primitive cards */
+    .primitive-card { padding: 28px 20px; }
+    .primitive-title { font-size: 22px; }
+
+    /* CTA */
+    #cta .section-title { font-size: clamp(22px, 7vw, 36px); }
+    .cta-sub { font-size: 15px; }
+  }
+</style>
+</head>
+<body>
+
+<!-- NAV -->
+<nav>
+  <a href="#" class="nav-logo">trappsec</a>
+  <a href="https://github.com/trappsec-dev/trappsec" target="_blank" class="nav-cta">GitHub ↗</a>
+</nav>
+
+<!-- HERO -->
+<section id="hero">
+  <div class="hero-inner">
+    <div>
+      <span class="hero-eyebrow">// Open Source · MIT License · v0.2.0</span>
+      <h1 class="hero-title">
+        Detect the Intent.<br>
+        <em>Before the Exploit.</em>
+      </h1>
+      <p class="hero-sub">
+        Trappsec embeds deception directly in your application code — catching adversaries while they're still mapping your APIs, before a single perimeter is crossed.
+      </p>
+      <div class="hero-actions">
+        <a href="https://trappsec.dev/getting-started/" target="_blank" class="btn-primary">Get Started</a>
+        <a href="https://github.com/trappsec-dev/trappsec" target="_blank" class="btn-ghost">View on GitHub ↗</a>
+      </div>
+    </div>
+
+    <div class="hero-terminal">
+      <div class="terminal-bar">
+        <div class="terminal-dot"></div>
+        <div class="terminal-dot"></div>
+        <div class="terminal-dot"></div>
+      </div>
+      <div>
+        <span class="t-comment"># pip install trappsec</span><br>
+        <span class="t-keyword">import</span> trappsec<br><br>
+        <span class="t-comment"># 1. Initialize once per service</span><br>
+        <span class="t-keyword">ts</span> = trappsec.<span class="t-attr">Sentry</span>(<span class="t-str">app</span>, service=<span class="t-str">'PaymentService'</span>, environment=<span class="t-str">'Production'</span>)<br><br>
+        <span class="t-comment"># 2. Decoy route — catches API enumeration</span><br>
+        ts.<span class="t-attr">trap</span>(<span class="t-str">'/api/v1/payouts'</span>)<span style="color:rgba(255,255,255,.3)"> \</span><br>
+        &nbsp;&nbsp;.<span class="t-attr">intent</span>(<span class="t-str">'financial_fraud'</span>)<br><br>
+        <span class="t-comment"># 3. Honey field — catches privilege escalation</span><br>
+        ts.<span class="t-attr">watch</span>(<span class="t-str">'/profile'</span>).<span class="t-attr">body</span>(<span class="t-str">'is_admin'</span>, intent=<span class="t-str">'PrivEsc'</span>)<br><br>
+        <span class="t-comment"># ✓ event: trappsec.trap_hit</span><br>
+        <span class="t-comment"># ✓ intent: privilege_escalation</span><br>
+        <span class="t-comment"># ✓ user: uid_8849 | role: standard</span><br>
+        <span class="cursor"></span>
+      </div>
+      <div class="terminal-label">Python · Node.js · Go</div>
+    </div>
+  </div>
+
+  <!-- Stat bar -->
+  <div class="stat-bar-wrap" style="max-width:1140px;margin:64px auto 0;padding:0 48px;">
+    <div class="stat-bar">
+      <div class="stat-item">
+        <div class="stat-num">Pre&#8209;exploit</div>
+        <div class="stat-label">Detection</div>
+      </div>
+      <div class="stat-item">
+        <div class="stat-num">Zero</div>
+        <div class="stat-label">Infra Changes</div>
+      </div>
+      <div class="stat-item">
+        <div class="stat-num">MIT</div>
+        <div class="stat-label">OSS License</div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- PROBLEM -->
+<section id="problem">
+  <div class="container">
+    <span class="section-tag reveal">// The Detection Blindspot</span>
+    <h2 class="section-title reveal">Attackers don't break in. <em>They look around first.</em></h2>
+
+
+    <div class="problem-layout reveal">
+      <!-- Animated request stream -->
+      <div class="request-stream-panel">
+        <div class="panel-label">
+          <span class="panel-label-dot green"></span>
+          Live request log — what your WAF sees
+        </div>
+        <div class="log-stream" id="logStream"></div>
+      </div>
+
+      <!-- Three-point explainer -->
+      <div class="problem-explainer">
+        <div class="problem-points">
+          <div class="problem-point">
+            <span class="problem-point-num">01 — The Reality</span>
+            <h3>Attackers map before they exploit.</h3>
+            <p>Probing your API structure, testing parameters, tracing workflows — all through valid requests that look identical to real user traffic.</p>
+          </div>
+          <div class="problem-point">
+            <span class="problem-point-num">02 — The Blindspot</span>
+            <h3>WAFs catch signatures. They can't catch intent.</h3>
+            <p>Most security programs optimize for what's easy to monitor — known patterns at the perimeter. They have no model of your business logic, so reconnaissance traffic passes through clean.</p>
+          </div>
+          <div class="problem-point">
+            <span class="problem-point-num">03 — The Cost</span>
+            <h3>Traditional honeypots fire after the fact.</h3>
+            <p>Disconnected from real application paths, they only trigger post-breach — when the attacker already knows your system. That's a post-compromise signal, not pre-exploitation detection.</p>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- HOW IT WORKS -->
+<section id="how">
+  <div class="container">
+    <span class="section-tag reveal">// The Solution</span>
+    <h2 class="section-title reveal">The Hall of Mirrors</h2>
+    <p class="section-body reveal">
+      Trappsec embeds decoy routes and honey fields directly in your application code. The API surface looks completely uniform to an attacker. Only you can see what's real — and what's a trap.
+    </p>
+
+    <!-- Attacker / Defender split -->
+    <!-- Mobile tab toggle (hidden on desktop via CSS) -->
+    <div class="mirror-toggle reveal" id="mirrorToggle" style="margin-top:40px;">
+      <button class="mirror-tab active" onclick="setMirrorView('attacker')" id="mtab-attacker">
+        <span class="mtab-dot" style="background:rgba(255,255,255,.3)"></span>
+        Attacker's view
+      </button>
+      <button class="mirror-tab" onclick="setMirrorView('defender')" id="mtab-defender">
+        <span class="mtab-dot" style="background:var(--coral)"></span>
+        Defender's view
+      </button>
+    </div>
+    <div class="perspective-split reveal">
+      <div class="perspective-header">
+        <div class="perspective-col-label attacker">
+          <span class="pcl-icon grey"></span>
+          Attacker's view — everything looks real
+        </div>
+        <div class="perspective-col-label defender">
+          <span class="pcl-icon coral"></span>
+          Defender's view
+        </div>
+      </div>
+      <div class="perspective-body">
+        <!-- Attacker side: all routes look identical -->
+        <div class="perspective-side attacker">
+          <div class="api-row">
+            <span class="api-method get">GET</span>
+            <span class="api-path">/api/v2/users</span>
+            <span class="normal-label">200</span>
+          </div>
+          <div class="api-row">
+            <span class="api-method get">GET</span>
+            <span class="api-path">/api/v1/users</span>
+            <span class="normal-label">200</span>
+          </div>
+          <div class="api-row">
+            <span class="api-method post">POST</span>
+            <span class="api-path">/api/v2/roles</span>
+            <span class="normal-label">200</span>
+          </div>
+          <div class="api-row">
+            <span class="api-method get">GET</span>
+            <span class="api-path">/api/v1/admin/config</span>
+            <span class="normal-label">200</span>
+          </div>
+          <div class="api-row">
+            <span class="api-method put">PUT</span>
+            <span class="api-path">/profile {"username":"x","is_admin":true}</span>
+            <span class="normal-label">200</span>
+          </div>
+          <div class="api-row">
+            <span class="api-method get">GET</span>
+            <span class="api-path">/api/v2/transactions</span>
+            <span class="normal-label">200</span>
+          </div>
+          <div class="api-row">
+            <span class="api-method del">DEL</span>
+            <span class="api-path">/api/v1/payouts/export</span>
+            <span class="normal-label">200</span>
+          </div>
+        </div>
+        <!-- Defender side: traps are visible -->
+        <div class="perspective-side defender">
+          <div class="api-row">
+            <span class="api-method get">GET</span>
+            <span class="api-path">/api/v2/users</span>
+            <span class="normal-label" style="color:rgba(255,255,255,.3);">real</span>
+          </div>
+          <div class="api-row is-trap">
+            <span class="api-method get">GET</span>
+            <span class="api-path">/api/v1/users</span>
+            <span class="trap-label">Decoy Route</span>
+          </div>
+          <div class="api-row is-trap">
+            <span class="api-method post">POST</span>
+            <span class="api-path">/api/v2/roles</span>
+            <span class="trap-label">Decoy Route</span>
+          </div>
+          <div class="api-row is-trap">
+            <span class="api-method get">GET</span>
+            <span class="api-path">/api/v1/admin/config</span>
+            <span class="trap-label">Decoy Route</span>
+          </div>
+          <div class="api-row is-trap">
+            <span class="api-method put">PUT</span>
+            <span class="api-path">/profile <span style="color:#e6b84c">is_admin</span></span>
+            <span class="honey-label">Honey Field</span>
+          </div>
+          <div class="api-row">
+            <span class="api-method get">GET</span>
+            <span class="api-path">/api/v2/transactions</span>
+            <span class="normal-label" style="color:rgba(255,255,255,.3);">real</span>
+          </div>
+          <div class="api-row is-trap">
+            <span class="api-method del">DEL</span>
+            <span class="api-path">/api/v1/payouts/export</span>
+            <span class="trap-label">Decoy Route</span>
+          </div>
+        </div>
+      </div>
+      <div class="split-caption">
+        Every trap triggers a high-fidelity alert enriched with the attacker's identity and intent — before a single real endpoint is exploited.
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- IDENTITY GATE -->
+<section id="identity">
+  <div class="container">
+    <span class="section-tag reveal">// The Identity Gate</span>
+    <h2 class="section-title reveal">No identity,<br><em>no alert.</em></h2>
+    <p class="section-body reveal">Unauthenticated probes — bots, scanners, fuzzers — get a 401 and are logged as signals. Only an attacker who returns with credentials triggers an alert. This single requirement eliminates all scanner noise and ensures every alert carries a real identity.</p>
+
+    <div class="identity-split reveal">
+      <div class="identity-path">
+        <div class="identity-path-header">
+          <span class="identity-path-badge">A — noise</span>
+          <span class="identity-path-title">Anonymous probe</span>
+        </div>
+        <div class="identity-steps">
+          <div class="identity-step">
+            <div class="istep-signal grey">⊙</div>
+            <div class="istep-body">
+              <strong>Scanner hits a decoy endpoint</strong>
+              <p>No credentials. Indistinguishable from a thousand other probes you receive daily.</p>
+            </div>
+          </div>
+          <div class="identity-step">
+            <div class="istep-signal blue">401</div>
+            <div class="istep-body">
+              <strong>Trappsec returns 401 Unauthorized</strong>
+              <p>A convincing response — identical to what your real protected endpoints return. The scanner sees nothing unusual.</p>
+            </div>
+          </div>
+          <div class="identity-step">
+            <div class="istep-signal grey">→</div>
+            <div class="istep-body">
+              <strong>Scanner moves on</strong>
+              <p>Logged as a low-priority signal. No alert fires. No noise in your queue.</p>
+            </div>
+          </div>
+        </div>
+        <div class="identity-outcome">
+          <span class="outcome-badge signal">Signal</span>
+          <span class="outcome-text">Logged quietly. No action required.</span>
+        </div>
+      </div>
+
+      <div class="identity-divider" style="writing-mode:initial;">vs</div>
+
+      <div class="identity-path active">
+        <div class="identity-path-header">
+          <span class="identity-path-badge">B — threat</span>
+          <span class="identity-path-title">Targeted attacker</span>
+        </div>
+        <div class="identity-steps">
+          <div class="identity-step">
+            <div class="istep-signal grey">⊙</div>
+            <div class="istep-body">
+              <strong>Attacker hits the same decoy endpoint</strong>
+              <p>No credentials — gets the same 401. But unlike the scanner, they <em>care</em> about this endpoint.</p>
+            </div>
+          </div>
+          <div class="identity-step">
+            <div class="istep-signal amber">↩</div>
+            <div class="istep-body">
+              <strong>Returns with credentials</strong>
+              <p>The 401 signals "this exists and needs auth." A targeted attacker treats that as confirmation — and authenticates.</p>
+            </div>
+          </div>
+          <div class="identity-step">
+            <div class="istep-signal coral">!</div>
+            <div class="istep-body">
+              <strong>Alert fires with full identity</strong>
+              <p>User ID, role, IP, and the intent you declared on the trap — captured at the moment of contact.</p>
+            </div>
+          </div>
+        </div>
+        <div class="identity-outcome alert-outcome">
+          <span class="outcome-badge alert">Alert</span>
+          <code class="outcome-code">uid_8849 &nbsp;·&nbsp; role: standard &nbsp;·&nbsp; intent: privilege_escalation</code>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- PRIMITIVES -->
+<section id="primitives" style="padding:80px 0 120px;background:var(--navy);color:white;">
+  <div class="container">
+    <span class="section-tag reveal" style="color:var(--coral-lt);">// The Primitives</span>
+    <h2 class="section-title reveal" style="color:white;margin-bottom:40px;">Plant the traps.<br><em>Let attackers find them.</em></h2>
+
+    <div class="primitives-grid reveal">
+      <div class="primitive-card">
+        <div class="primitive-badge">ts.trap( )</div>
+        <h3 class="primitive-title">Decoy Routes</h3>
+        <p class="primitive-desc">
+          Ghost endpoints that mirror your real API structure. An attacker doing path discovery can't distinguish them from live routes. When accessed, they intercept the request, return a convincing dummy response, and fire an alert.
+        </p>
+        <div class="primitive-example">
+          <span class="t-comment"># A trap that looks like a real payouts endpoint</span><br>
+          ts.<span class="t-attr">trap</span>(<span class="t-str">"/api/v1/payouts/export"</span>)<span style="color:rgba(255,255,255,.2)"> \</span><br>
+          &nbsp;&nbsp;.<span class="t-attr">methods</span>(<span class="t-str">"GET"</span>)<span style="color:rgba(255,255,255,.2)"> \</span><br>
+          &nbsp;&nbsp;.<span class="t-attr">intent</span>(<span class="t-str">"financial_fraud"</span>)<span style="color:rgba(255,255,255,.2)"> \</span><br>
+          &nbsp;&nbsp;.<span class="t-attr">respond</span>(<span class="t-val">200</span>, {<span class="t-str">"records"</span>: []})<br>
+        </div>
+        <div class="primitive-mechanic">
+          <div class="mechanic-item">Unauthenticated → 401 bounce, zero noise</div>
+          <div class="mechanic-item">Authenticated → realistic response + covert alert</div>
+          <div class="mechanic-item">Alert includes user, role, IP, and declared intent</div>
+        </div>
+      </div>
+
+      <div class="primitive-card">
+        <div class="primitive-badge">ts.watch( )</div>
+        <h3 class="primitive-title">Honey Fields</h3>
+        <p class="primitive-desc">
+          Non-functional parameters baked into your real API responses. A regular user never touches <code style="color:var(--coral-lt)">"is_admin": false</code>. An attacker probing privilege escalation will try to flip it. That's the trigger.
+        </p>
+        <div class="primitive-example">
+          <span class="t-comment"># Watch for tampering with is_admin in /profile</span><br>
+          ts.<span class="t-attr">watch</span>(<span class="t-str">"/profile"</span>)<span style="color:rgba(255,255,255,.2)"> \</span><br>
+          &nbsp;&nbsp;.<span class="t-attr">body</span>(<span class="t-str">"is_admin"</span>, intent=<span class="t-str">"PrivEsc"</span>)<br><br>
+          <span class="t-comment"># App logic runs normally — alert fires silently</span>
+        </div>
+        <div class="primitive-mechanic">
+          <div class="mechanic-item">Application logic proceeds uninterrupted</div>
+          <div class="mechanic-item">Bait via GET response: <span style="color:#e6b84c">"is_admin": false</span></div>
+          <div class="mechanic-item">Covert alert on any POST/PUT that mutates the field</div>
+        </div>
+      </div>
+    </div>
+
+  </div>
+</section>
+
+
+<!-- ALERT -->
+<section id="alert">
+  <div class="container">
+    <div class="alert-header reveal">
+      <h2>Open the alert.<br>Start responding.</h2>
+      <p>Every event arrives pre-classified with intent and identity. No triage overhead, no log pivoting — everything you need to act is in the payload.</p>
+    </div>
+
+    <div class="alert-layout reveal">
+      <div class="alert-code">
+        <span class="alert-code-label">// trappsec.trap_hit</span>
+        <div>
+          <div class="alert-line"><span style="color:rgba(255,255,255,.3)">{</span></div>
+          <div class="alert-line">&nbsp;&nbsp;<span class="t-attr">"event"</span>: <span class="t-str">"trappsec.trap_hit"</span>,</div>
+          <div class="alert-line hl-status">&nbsp;&nbsp;<span class="t-attr">"type"</span>: <span class="t-str">"alert"</span>,</div>
+          <div class="alert-line hl-intent">&nbsp;&nbsp;<span class="t-attr">"intent"</span>: <span class="t-str">"privilege_escalation"</span>,</div>
+          <div class="alert-line hl-user">&nbsp;&nbsp;<span class="t-attr">"user"</span>: <span class="t-str">"uid_8849"</span>,</div>
+          <div class="alert-line hl-user">&nbsp;&nbsp;<span class="t-attr">"role"</span>: <span class="t-str">"standard"</span>,</div>
+          <div class="alert-line">&nbsp;&nbsp;<span class="t-attr">"ip"</span>: <span class="t-str">"192.168.1.42"</span>,</div>
+          <div class="alert-line">&nbsp;&nbsp;<span class="t-attr">"path"</span>: <span class="t-str">"/api/v1/admin/config"</span>,</div>
+          <div class="alert-line">&nbsp;&nbsp;<span class="t-attr">"service"</span>: <span class="t-str">"PaymentService"</span></div>
+          <div class="alert-line"><span style="color:rgba(255,255,255,.3)">}</span></div>
+        </div>
+      </div>
+
+      <div class="alert-annotations">
+        <div class="alert-annotation">
+          <div class="ann-field">
+            <span class="ann-swatch coral"></span>
+            <code>"intent"</code>
+          </div>
+          <div class="ann-title">Pre-mapped intent</div>
+          <div class="ann-desc">Classified at capture time by you — privilege escalation, financial fraud, reconnaissance. No manual triage to name what happened.</div>
+        </div>
+        <div class="alert-annotation">
+          <div class="ann-field">
+            <span class="ann-swatch blue"></span>
+            <code>"user"</code> &nbsp;<code>"role"</code>
+          </div>
+          <div class="ann-title">Identity attribution</div>
+          <div class="ann-desc">User ID and role extracted via framework hooks. You know who it was — not just which IP hit the endpoint.</div>
+        </div>
+        <div class="alert-annotation">
+          <div class="ann-field">
+            <span class="ann-swatch green"></span>
+            <code>"type": "alert"</code>
+          </div>
+          <div class="ann-title">Confirmed actor, not a scanner</div>
+          <div class="ann-desc">Unauthenticated probes are logged as signals — only authenticated contacts become alerts. Every alert in your queue is a real person - or AI agent.</div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- INTEGRATION -->
+<section id="integration">
+  <div class="container">
+    <span class="section-tag reveal">// Integration</span>
+    <h2 class="section-title reveal">Native Integration.<br><em>Zero Friction.</em></h2>
+    <p class="section-body reveal">Trappsec operates as a lightweight SDK inside your applications. Events route to standard handlers by default, or pipe directly into your existing observability stack.</p>
+
+    <div class="integration-grid reveal">
+      <div>
+        <div style="display:flex;gap:2px;margin-bottom:2px;">
+          <button onclick="switchTab('py')" id="tab-py" style="font-family:var(--mono);font-size:11px;letter-spacing:.08em;text-transform:uppercase;padding:8px 16px;border:1px solid var(--border);background:var(--navy);color:var(--coral);cursor:pointer;border-bottom:none;">Python</button>
+          <button onclick="switchTab('node')" id="tab-node" style="font-family:var(--mono);font-size:11px;letter-spacing:.08em;text-transform:uppercase;padding:8px 16px;border:1px solid var(--border);background:var(--cream-dk);color:var(--muted);cursor:pointer;border-bottom:none;">Node.js</button>
+          <button onclick="switchTab('go')" id="tab-go" style="font-family:var(--mono);font-size:11px;letter-spacing:.08em;text-transform:uppercase;padding:8px 16px;border:1px solid var(--border);background:var(--cream-dk);color:var(--muted);cursor:pointer;border-bottom:none;">Go</button>
+        </div>
+        <div id="code-py" class="code-block">
+          <span class="t-comment"># pip install trappsec</span><br><br>
+          <span class="t-keyword">import</span> trappsec<br><br>
+          <span class="t-comment"># Initialize once per service</span><br>
+          <span class="t-keyword">ts</span> = trappsec.<span class="t-attr">Sentry</span>(<span class="t-str">app</span>, service=<span class="t-str">"PaymentService"</span>, environment=<span class="t-str">"Production"</span>)<br><br>
+          <span class="t-comment"># Decoy route — catches API enumeration</span><br>
+          ts.<span class="t-attr">trap</span>(<span class="t-str">"/api/v1/payouts"</span>)<span style="color:rgba(0,0,0,.3)"> \</span><br>
+          &nbsp;&nbsp;.<span class="t-attr">intent</span>(<span class="t-str">"financial_fraud"</span>)<br><br>
+          <span class="t-comment"># Honey field — catches privilege escalation</span><br>
+          ts.<span class="t-attr">watch</span>(<span class="t-str">"/profile"</span>).<span class="t-attr">body</span>(<span class="t-str">"is_admin"</span>, intent=<span class="t-str">"PrivEsc"</span>)
+        </div>
+        <div id="code-node" class="code-block" style="display:none;">
+          <span class="t-comment">// npm install trappsec</span><br><br>
+          <span class="t-keyword">const</span> { <span class="t-attr">Sentry</span> } = <span class="t-attr">require</span>(<span class="t-str">'trappsec'</span>)<br><br>
+          <span class="t-comment">// Initialize once per service</span><br>
+          <span class="t-keyword">const</span> ts = <span class="t-keyword">new</span> <span class="t-attr">Sentry</span>(<span class="t-str">app</span>, <span class="t-str">"PaymentService"</span>, <span class="t-str">"Production"</span>)<br><br>
+          <span class="t-comment">// Decoy route</span><br>
+          ts.<span class="t-attr">trap</span>(<span class="t-str">"/api/v1/payouts"</span>)<br>
+          &nbsp;&nbsp;.<span class="t-attr">intent</span>(<span class="t-str">"financial_fraud"</span>)<br><br>
+          <span class="t-comment">// Honey field</span><br>
+          ts.<span class="t-attr">watch</span>(<span class="t-str">"/profile"</span>).<span class="t-attr">body</span>(<span class="t-str">"is_admin"</span>, { intent: <span class="t-str">"PrivEsc"</span> })
+        </div>
+        <div id="code-go" class="code-block" style="display:none;">
+          <span class="t-comment">// go get github.com/trappsec-dev/trappsec/packages/go/gin</span><br><br>
+          <span class="t-keyword">import</span> trappsec <span class="t-str">"github.com/trappsec-dev/trappsec/packages/go/gin"</span><br><br>
+          <span class="t-comment">// Initialize (swap import for nethttp or echo)</span><br>
+          ts := trappsec.<span class="t-attr">InstallSentry</span>(<span class="t-str">r</span>, <span class="t-str">"PaymentService"</span>, <span class="t-str">"Production"</span>)<br><br>
+          <span class="t-comment">// Decoy route</span><br>
+          ts.<span class="t-attr">Trap</span>(<span class="t-str">"/api/v1/payouts"</span>).<span class="t-attr">Intent</span>(<span class="t-str">"financial_fraud"</span>)<br><br>
+          <span class="t-comment">// Honey field</span><br>
+          ts.<span class="t-attr">Watch</span>(<span class="t-str">"/profile"</span>).<span class="t-attr">Body</span>(<span class="t-str">"is_admin"</span>, <span class="t-str">"PrivEsc"</span>)
+        </div>
+      </div>
+
+      <div>
+        <p class="int-col-label">Supported Frameworks</p>
+        <div class="int-cards">
+
+          <div class="int-card">
+            <div class="int-card-icon">
+              <!-- Python logo -->
+              <svg viewBox="0 0 48 48" width="32" height="32" xmlns="http://www.w3.org/2000/svg">
+                <linearGradient id="pyA" x1="0%" y1="0%" x2="100%" y2="100%">
+                  <stop offset="0%" stop-color="#387EB8"/>
+                  <stop offset="100%" stop-color="#366994"/>
+                </linearGradient>
+                <linearGradient id="pyB" x1="0%" y1="0%" x2="100%" y2="100%">
+                  <stop offset="0%" stop-color="#FFE052"/>
+                  <stop offset="100%" stop-color="#FFC331"/>
+                </linearGradient>
+                <path fill="url(#pyA)" d="M24 4C13.5 4 14 8.8 14 8.8V14h10.3v1.5H9.4S4 14.9 4 25.5s4.7 10.3 4.7 10.3H12v-5s-.2-4.7 4.6-4.7H27s4.4.1 4.4-4.3V9.3S32.2 4 24 4zm-5.3 3.2c1 0 1.7.8 1.7 1.7s-.8 1.7-1.7 1.7-1.7-.8-1.7-1.7.7-1.7 1.7-1.7z"/>
+                <path fill="url(#pyB)" d="M24.1 44c10.5 0 10-4.8 10-4.8V34H23.8v-1.5h14.8S44 33.5 44 22.9s-4.7-10.3-4.7-10.3H36v5s.2 4.7-4.6 4.7H20.8s-4.4-.1-4.4 4.3v9.2S15.6 44 24.1 44zm5.2-3.2c-1 0-1.7-.8-1.7-1.7s.8-1.7 1.7-1.7 1.7.8 1.7 1.7-.8 1.7-1.7 1.7z"/>
+              </svg>
+            </div>
+            <div class="int-card-info">
+              <h4>Python</h4>
+              <p>Flask, FastAPI, Django, Starlette, Sanic, Litestar</p>
+            </div>
+            <span class="int-card-tag">pip install</span>
+          </div>
+
+          <div class="int-card">
+            <div class="int-card-icon">
+              <!-- Node.js logo -->
+              <svg viewBox="0 0 48 48" width="32" height="32" xmlns="http://www.w3.org/2000/svg">
+                <rect width="48" height="48" rx="8" fill="#539E43"/>
+                <path fill="white" d="M24 8L9 16.5v15L24 40l15-8.5v-15L24 8zm0 3.2l11.8 6.8v13.6L24 37.1 12.2 31.6V18L24 11.2z"/>
+                <path fill="white" d="M24 14.5l-7.5 4.3v8.5l7.5 4.3 7.5-4.3v-8.5L24 14.5z"/>
+              </svg>
+            </div>
+            <div class="int-card-info">
+              <h4>Node.js</h4>
+              <p>Express, Fastify, Hapi, Koa, NestJS</p>
+            </div>
+            <span class="int-card-tag">npm install</span>
+          </div>
+
+          <div class="int-card">
+            <div class="int-card-icon">
+              <!-- Go logo -->
+              <svg viewBox="0 0 48 48" width="32" height="32" xmlns="http://www.w3.org/2000/svg">
+                <circle cx="24" cy="24" r="22" fill="#00ACD7"/>
+                <path fill="white" d="M12 20h6v2h-6zm0 4h4v2h-4zm18-4h6v2h-6zm0 4h4v2h-4z"/>
+                <path fill="white" d="M20 18h8v12h-8z" opacity=".15"/>
+                <text x="24" y="29" font-family="Arial" font-weight="bold" font-size="13" fill="white" text-anchor="middle">Go</text>
+              </svg>
+            </div>
+            <div class="int-card-info">
+              <h4>Go</h4>
+              <p>Gin, net/http, Echo</p>
+            </div>
+            <span class="int-card-tag">go get</span>
+          </div>
+
+        </div>
+
+        <p class="int-col-label" style="margin-top:28px;">Routes Events To</p>
+        <div class="int-cards">
+
+          <div class="int-card">
+            <div class="int-card-icon int-card-icon--emoji">📋</div>
+            <div class="int-card-info">
+              <h4>Standard Logging</h4>
+              <p>JSON events to your existing log pipeline</p>
+            </div>
+            <span class="int-card-tag">Default</span>
+          </div>
+
+          <div class="int-card">
+            <div class="int-card-icon int-card-icon--emoji" style="color:#e6b84c;">⚡</div>
+            <div class="int-card-info">
+              <h4>Webhooks / Slack</h4>
+              <p>Real-time alerts to your incident channel</p>
+            </div>
+            <span class="int-card-tag">Built-in</span>
+          </div>
+
+          <div class="int-card">
+            <div class="int-card-icon int-card-icon--emoji">🔭</div>
+            <div class="int-card-info">
+              <h4>OpenTelemetry</h4>
+              <p>Push into Datadog, Honeycomb, Grafana, etc.</p>
+            </div>
+            <span class="int-card-tag">Native</span>
+          </div>
+
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- COMPARE -->
+<section id="compare">
+  <div class="container">
+    <span class="section-tag reveal">// Comparison</span>
+    <h2 class="section-title reveal">Moving Deception<br><em>into the Code</em></h2>
+    <p class="section-body reveal">Trappsec shifts detection earlier in the attack lifecycle, bringing the signal quality of honeypots directly to the application's real attack surface.</p>
+
+    <div class="compare-table-wrap">
+    <table class="compare-table reveal" style="min-width:620px;">
+      <thead>
+        <tr>
+          <th></th>
+          <th>Traditional Network Deception</th>
+          <th>Business Logic Deception (Trappsec)</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>Placement</td>
+          <td>Adjacent to infrastructure</td>
+          <td>Embedded inside application code</td>
+        </tr>
+        <tr>
+          <td>Detection Phase</td>
+          <td>Post-Breach (Assumed Compromise)</td>
+          <td>Pre-Exploitation (Reconnaissance)</td>
+        </tr>
+        <tr>
+          <td>Target Activity</td>
+          <td>Network scanning, lateral movement</td>
+          <td>API probing, parameter tampering</td>
+        </tr>
+        <tr>
+          <td>Alert Context</td>
+          <td>Infrastructure-level (IPs, ports)</td>
+          <td>Identity-attributed intent</td>
+        </tr>
+        <tr>
+          <td>Alert Volume</td>
+          <td>High — many false positives from scanners</td>
+          <td>Low — only authenticated, targeted actors</td>
+        </tr>
+        <tr>
+          <td>Integration</td>
+          <td>Separate appliance or agent</td>
+          <td>Lightweight SDK, 3 lines of code</td>
+        </tr>
+      </tbody>
+    </table>
+    </div>
+
+    <!-- Mobile compare cards (hidden on desktop) -->
+    <div class="compare-cards">
+      <div class="compare-card-col-headers">
+        <span class="compare-col-head">Traditional</span>
+        <span class="compare-col-head">Trappsec ✦</span>
+      </div>
+      <div class="compare-card">
+        <div class="compare-card-label">Placement</div>
+        <div class="compare-card-row">
+          <div class="compare-card-cell">Adjacent to infrastructure</div>
+          <div class="compare-card-cell">Inside application code</div>
+        </div>
+      </div>
+      <div class="compare-card">
+        <div class="compare-card-label">Detection Phase</div>
+        <div class="compare-card-row">
+          <div class="compare-card-cell">Post-breach</div>
+          <div class="compare-card-cell">Pre-exploitation</div>
+        </div>
+      </div>
+      <div class="compare-card">
+        <div class="compare-card-label">Target Activity</div>
+        <div class="compare-card-row">
+          <div class="compare-card-cell">Network scanning, lateral movement</div>
+          <div class="compare-card-cell">API probing, parameter tampering</div>
+        </div>
+      </div>
+      <div class="compare-card">
+        <div class="compare-card-label">Alert Context</div>
+        <div class="compare-card-row">
+          <div class="compare-card-cell">IPs, ports</div>
+          <div class="compare-card-cell">Identity-attributed intent</div>
+        </div>
+      </div>
+      <div class="compare-card">
+        <div class="compare-card-label">Alert Volume</div>
+        <div class="compare-card-row">
+          <div class="compare-card-cell">High — scanner noise</div>
+          <div class="compare-card-cell">Low — authenticated actors only</div>
+        </div>
+      </div>
+      <div class="compare-card">
+        <div class="compare-card-label">Integration</div>
+        <div class="compare-card-row">
+          <div class="compare-card-cell">Separate appliance or agent</div>
+          <div class="compare-card-cell">SDK, 3 lines of code</div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- CTA -->
+<section id="cta">
+  <div class="container">
+    <span class="section-tag reveal" style="color:var(--coral-lt);display:block;text-align:center;">// Open Source · MIT License</span>
+    <h2 class="section-title reveal">
+      Your code is now<br>a security sensor.
+    </h2>
+    <p class="cta-sub reveal">
+      Built for the 1% of people who actually look at their security alerts — and the 99% who just like the idea of having them.
+    </p>
+    <div class="cta-actions reveal">
+      <a href="https://github.com/trappsec-dev/trappsec" target="_blank" class="btn-cta-primary">View on GitHub ↗</a>
+      <a href="https://trappsec.dev/getting-started/" target="_blank" class="btn-cta-ghost">Read the Docs</a>
+    </div>
+  </div>
+</section>
+
+<!-- FOOTER -->
+<footer>
+  <span class="footer-logo">trappsec</span>
+  <span class="footer-copy">
+    <a href="https://github.com/trappsec-dev/trappsec" target="_blank" style="color:rgba(255,255,255,.4);text-decoration:none;margin-right:24px;">GitHub ↗</a>
+    <a href="https://trappsec.dev" target="_blank" style="color:rgba(255,255,255,.4);text-decoration:none;margin-right:24px;">Docs ↗</a>
+    MIT License · deception as a developer tool
+  </span>
+</footer>
+
+<script>
+
+  // Hall of Mirrors mobile toggle
+  function setMirrorView(view) {
+    const attSide = document.querySelector('.perspective-side.attacker');
+    const defSide = document.querySelector('.perspective-side.defender');
+    const attTab  = document.getElementById('mtab-attacker');
+    const defTab  = document.getElementById('mtab-defender');
+    if (!attSide) return;
+
+    if (view === 'attacker') {
+      attSide.classList.remove('mobile-hidden');
+      defSide.classList.add('mobile-hidden');
+      attTab.classList.add('active');
+      attTab.classList.remove('active-coral');
+      defTab.classList.remove('active', 'active-coral');
+    } else {
+      defSide.classList.remove('mobile-hidden');
+      attSide.classList.add('mobile-hidden');
+      defTab.classList.add('active', 'active-coral');
+      defTab.classList.remove('active');
+      defTab.classList.add('active-coral');
+      attTab.classList.remove('active', 'active-coral');
+    }
+  }
+
+  // Set initial state for mobile
+  function initMirrorMobile() {
+    if (window.innerWidth <= 900) {
+      const defSide = document.querySelector('.perspective-side.defender');
+      if (defSide) defSide.classList.add('mobile-hidden');
+    }
+  }
+
+  window.addEventListener('resize', () => {
+    const attSide = document.querySelector('.perspective-side.attacker');
+    const defSide = document.querySelector('.perspective-side.defender');
+    if (!attSide) return;
+    if (window.innerWidth > 900) {
+      attSide.classList.remove('mobile-hidden');
+      defSide.classList.remove('mobile-hidden');
+    }
+  });
+
+  document.addEventListener('DOMContentLoaded', initMirrorMobile);
+  initMirrorMobile();
+
+  // Scroll reveal
+  const reveals = document.querySelectorAll('.reveal');
+  const observer = new IntersectionObserver((entries) => {
+    entries.forEach((entry, i) => {
+      if (entry.isIntersecting) {
+        const delay = (entry.target.dataset.delay || 0);
+        setTimeout(() => entry.target.classList.add('visible'), delay * 100);
+        observer.unobserve(entry.target);
+      }
+    });
+  }, { threshold: 0.12 });
+
+  // Stagger siblings
+  document.querySelectorAll('section').forEach(sec => {
+    const children = sec.querySelectorAll('.reveal');
+    children.forEach((el, i) => el.dataset.delay = i);
+  });
+
+  reveals.forEach(el => observer.observe(el));
+
+  // Request stream animation
+  const logEntries = [
+    { method: 'GET',  path: '/api/v2/users',                    status: '200', recon: false },
+    { method: 'POST', path: '/auth/login',                       status: '200', recon: false },
+    { method: 'GET',  path: '/api/v2/profile',                   status: '200', recon: false },
+    { method: 'GET',  path: '/api/v2/users?include_roles=true',  status: '200', recon: true  },
+    { method: 'PUT',  path: '/api/v2/profile',                   status: '200', recon: false },
+    { method: 'GET',  path: '/api/v2/transactions',              status: '200', recon: false },
+    { method: 'GET',  path: '/api/v1/admin/config',              status: '200', recon: true  },
+    { method: 'POST', path: '/api/v2/orders',                    status: '201', recon: false },
+    { method: 'GET',  path: '/api/v2/users',                     status: '200', recon: false },
+    { method: 'DEL',  path: '/api/v1/payouts/export',            status: '200', recon: true  },
+    { method: 'PATCH',path: '/api/v2/settings',                  status: '200', recon: false },
+    { method: 'POST', path: '/api/v2/roles',                     status: '200', recon: true  },
+  ];
+
+  function buildLogEntry(e) {
+    const el = document.createElement('div');
+    el.className = 'log-entry' + (e.recon ? ' recon' : '');
+    const methodClass = e.method === 'GET' ? 'get' : e.method === 'POST' ? 'post' :
+                        e.method === 'PUT' ? 'put' : e.method === 'DEL' ? 'del' : 'patch';
+    el.innerHTML = `
+      <span class="log-method ${methodClass}">${e.method}</span>
+      <span class="log-path">${e.path}</span>
+      ${e.recon
+        ? `<span class="recon-tag">recon</span><span class="waf-miss-tag" style="color:#4cae7a;">WAF: ✓ ok</span>`
+        : `<span class="log-status ok">${e.status}</span>`}
+    `;
+    return el;
+  }
+
+  let streamStarted = false;
+  function startStream() {
+    if (streamStarted) return;
+    streamStarted = true;
+    const stream = document.getElementById('logStream');
+    if (!stream) return;
+    let i = 0;
+    function addEntry() {
+      if (i >= logEntries.length) { i = 0; }
+      const el = buildLogEntry(logEntries[i]);
+      stream.appendChild(el);
+      // keep only last 9 visible
+      if (stream.children.length > 9) {
+        const old = stream.children[0];
+        old.style.transition = 'opacity .3s';
+        old.style.opacity = '0';
+        setTimeout(() => old.remove(), 300);
+      }
+      requestAnimationFrame(() => el.classList.add('visible'));
+      i++;
+      setTimeout(addEntry, i === 1 ? 400 : 600 + Math.random() * 500);
+    }
+    addEntry();
+  }
+
+  // Trigger stream when problem section enters view
+  const problemSection = document.getElementById('problem');
+  if (problemSection) {
+    const streamObserver = new IntersectionObserver(entries => {
+      if (entries[0].isIntersecting) { startStream(); streamObserver.disconnect(); }
+    }, { threshold: 0.2 });
+    streamObserver.observe(problemSection);
+  }
+
+  // Code tab switcher
+  function switchTab(lang) {
+    ['py', 'node', 'go'].forEach(l => {
+      const block = document.getElementById('code-' + l);
+      const tab = document.getElementById('tab-' + l);
+      if (block) block.style.display = l === lang ? 'block' : 'none';
+      if (tab) {
+        tab.style.background = l === lang ? 'var(--navy)' : 'var(--cream-dk)';
+        tab.style.color = l === lang ? 'var(--coral)' : 'var(--muted)';
+      }
+    });
+  }
+
+  // Typing animation for terminal (hero)
+  const terminal = document.querySelector('.hero-terminal');
+  if (terminal) {
+    terminal.style.opacity = '0';
+    setTimeout(() => {
+      terminal.style.transition = 'opacity 0.8s';
+      terminal.style.opacity = '1';
+    }, 600);
+  }
+</script>
+</body>
+</html>
