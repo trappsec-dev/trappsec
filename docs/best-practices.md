@@ -1,11 +1,9 @@
 ---
 layout: default
 title: Best Practices
-nav_order: 4
 permalink: /best-practices/
+tagline: "Recommendations for effective deception deployments."
 ---
-
-# Best Practices
 
 ### Require Authentication
 In an internet that is mostly harmless but increasingly full of people and scanners (mostly scanners) poking things they shouldn't, you don’t want to get buried with noise. Use unauthenticated template responses like (401, Unauthorized) to guide them to probe with authentication.

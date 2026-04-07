@@ -1,8 +1,8 @@
 ---
 layout: default
 title: Getting Started
-nav_order: 2
 permalink: /getting-started/
+tagline: "Install the SDK, initialize the Sentry, and define your first traps in under 10 minutes."
 ---
 
 <div class="lang-switcher">
@@ -10,8 +10,6 @@ permalink: /getting-started/
   <button class="lang-btn" onclick="switchLang('node')">Node.js</button>
   <button class="lang-btn" onclick="switchLang('go')">Go</button>
 </div>
-
-# Getting Started
 
 {: .note }
 > **Just want to run code?** Check out the [Ultra Quickstart](/ultra-quickstart/) to copy-paste and run locally.
@@ -50,7 +48,9 @@ Initialize the Sentry in your application. This is the main entry point for defi
 ```python
 import trappsec
 # app is your Flask or FastAPI instance
-ts = trappsec.Sentry(app, service="PaymentService", environment="Production")
+ts = trappsec.Sentry(
+    app, service="PaymentService", environment="Production"
+)
 ```
 
 </div>
@@ -101,7 +101,10 @@ import random
 ts.trap("/deployment/metrics") \
     .methods("GET") \
     .intent("Reconnaissance") \
-    .respond(200, lambda r: {"cpu": f"{random.randint(5, 95)}%", "memory": f"{random.randint(20, 90)}%"})
+    .respond(200, lambda r: {
+        "cpu":    f"{random.randint(5, 95)}%",
+        "memory": f"{random.randint(20, 90)}%",
+    })
 
 ```
 
@@ -113,8 +116,11 @@ ts.trap("/deployment/metrics") \
 ts.trap("/deployment/config")
     .methods("GET")
     .intent("Reconnaissance")
-    .respond({ status: 200, body: { "region": "us-east-1", "deployment_type": "production" } })
-    .if_unauthenticated({ status: 401, body: { "error": "Login Required" } });
+    .respond({
+        status: 200,
+        body: { region: "us-east-1", deployment_type: "production" },
+    })
+    .if_unauthenticated({ status: 401, body: { error: "Login Required" } });
 
 // Dynamic response
 ts.trap("/deployment/metrics")
@@ -137,8 +143,17 @@ ts.trap("/deployment/metrics")
 ts.Trap("/deployment/config").
     Methods("GET").
     Intent("Reconnaissance").
-    Respond(trappsec.ResponseConfig{Status: 200, Body: map[string]any{"region": "us-east-1", "deployment_type": "production"}}).
-    IfUnauthenticated(trappsec.ResponseConfig{Status: 401, Body: map[string]any{"error": "Login Required"}})
+    Respond(trappsec.ResponseConfig{
+        Status: 200,
+        Body: map[string]any{
+            "region":          "us-east-1",
+            "deployment_type": "production",
+        },
+    }).
+    IfUnauthenticated(trappsec.ResponseConfig{
+        Status: 401,
+        Body:   map[string]any{"error": "Login Required"},
+    })
 
 // Dynamic response
 ts.Trap("/deployment/metrics").
@@ -163,7 +178,10 @@ You can define reusable templates for common responses (e.g., deprecated API err
 <div class="lang-content" data-lang="python" markdown="1">
 
 ```python
-ts.template("deprecated_api", 410, {"error": "Gone", "message": "API v1 is deprecated"})
+ts.template(
+    "deprecated_api", 410,
+    {"error": "Gone", "message": "API v1 is deprecated"},
+)
 
 ts.trap("/api/v1/users").methods("GET").respond(template="deprecated_api")
 ```
@@ -172,7 +190,9 @@ ts.trap("/api/v1/users").methods("GET").respond(template="deprecated_api")
 <div class="lang-content" data-lang="node" markdown="1">
 
 ```javascript
-ts.template("deprecated_api", 410, { "error": "Gone", "message": "API v1 is deprecated" });
+ts.template("deprecated_api", 410, {
+    error: "Gone", message: "API v1 is deprecated",
+});
 
 ts.trap("/api/v1/users").methods("GET").respond({ template: "deprecated_api" });
 ```
@@ -181,9 +201,15 @@ ts.trap("/api/v1/users").methods("GET").respond({ template: "deprecated_api" });
 <div class="lang-content" data-lang="go" markdown="1">
 
 ```go
-ts.Template("deprecated_api", 410, map[string]any{"error": "Gone", "message": "API v1 is deprecated"}, "application/json")
+ts.Template(
+    "deprecated_api",
+    410,
+    map[string]any{"error": "Gone", "message": "API v1 is deprecated"},
+    "application/json",
+)
 
-ts.Trap("/api/v1/users").Methods("GET").Respond(trappsec.ResponseConfig{Template: "deprecated_api"})
+ts.Trap("/api/v1/users").Methods("GET").
+    Respond(trappsec.ResponseConfig{Template: "deprecated_api"})
 ```
 
 </div>
@@ -210,7 +236,8 @@ ts.watch("/auth/register") \
 
 ```javascript
 // Alert if 'role' is present
-ts.watch("/api/profile/update").body("role", { intent: "Privilege Escalation" });
+ts.watch("/api/profile/update")
+    .body("role", { intent: "Privilege Escalation" });
 
 // Alert if 'role' is present AND not equal to 'user'
 ts.watch("/auth/register")
@@ -222,7 +249,8 @@ ts.watch("/auth/register")
 
 ```go
 // Alert if 'role' is present (regardless of value)
-ts.Watch("/api/profile/update").Body("role", trappsec.NoDefault, "Privilege Escalation")
+ts.Watch("/api/profile/update").
+    Body("role", trappsec.NoDefault, "Privilege Escalation")
 
 // Alert if 'role' is present AND not equal to 'user'
 ts.Watch("/auth/register").Body("role", "user", "Role Tampering")
@@ -270,7 +298,7 @@ ts.override_source_ip((req) => req.headers["x-real-ip"] || req.ip);
 <div class="lang-content" data-lang="go" markdown="1">
 
 ```go
-// Extract user info from your authentication middleware (e.g. JWT claims set on context)
+// Extract user info from auth middleware (e.g. JWT claims on context)
 ts.IdentifyUser(func(req any) *trappsec.AuthContext {
     c := req.(*gin.Context) // cast to your framework's request type
     uid := c.GetHeader("x-user-id")
@@ -327,7 +355,10 @@ ts.add_webhook("https://hooks.slack.com/services/...", { alerts_only: false });
 ts.AddWebhook("https://hooks.slack.com/services/...", nil)
 // Send all events (not just alerts)
 alertsOnly := false
-ts.AddWebhook("https://hooks.slack.com/services/...", &trappsec.WebhookOptions{AlertsOnly: &alertsOnly})
+ts.AddWebhook(
+    "https://hooks.slack.com/services/...",
+    &trappsec.WebhookOptions{AlertsOnly: &alertsOnly},
+)
 ```
 
 </div>
@@ -431,10 +462,16 @@ ts.default_responses["authenticated"] = {
 
 ```go
 // Override default unauthenticated response
-ts.SetDefaultUnauthenticated(403, map[string]any{"error": "Access Denied", "code": 1001}, "application/json")
+ts.SetDefaultUnauthenticated(
+    403,
+    map[string]any{"error": "Access Denied", "code": 1001},
+    "application/json",
+)
 
 // Override default authenticated response
-ts.SetDefaultAuthenticated(200, map[string]any{"status": "ok"}, "application/json")
+ts.SetDefaultAuthenticated(
+    200, map[string]any{"status": "ok"}, "application/json",
+)
 ```
 
 </div>

@@ -5,8 +5,6 @@ nav_exclude: true
 permalink: /blogposts/graphql-decoy-with-trappsec/
 ---
 
-# Detect API Reconnaissance with a GraphQL Decoy
-
 *Feb 12, 2026*
 
 ![GraphQL decoy concept](https://miro.medium.com/v2/resize:fit:1400/format:webp/1*cgF45518XKQmJ4pyO_tTCQ.png)

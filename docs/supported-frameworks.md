@@ -1,11 +1,9 @@
 ---
 layout: default
 title: Supported Frameworks
-nav_order: 8
 permalink: /supported-frameworks/
+tagline: "All frameworks supported across Python, Node.js, and Go."
 ---
-
-# Supported Frameworks
 
 <table>
   <thead>

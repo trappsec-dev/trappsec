@@ -1,13 +1,9 @@
 ---
 layout: default
-title: Blog posts
-nav_order: 10
+title: Blog
 permalink: /blogposts/
+tagline: "Articles on releases, implementation patterns, and attack telemetry lessons learned."
 ---
-
-# Blog posts
-
-Posts about releases, implementation patterns, and attack telemetry lessons learned.
 
 ## Articles
 

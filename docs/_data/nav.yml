@@ -1,0 +1,41 @@
+- label: Overview
+  items:
+    - title: Overview
+      url: /overview/
+      icon: "⊙"
+
+- label: Guides
+  items:
+    - title: Getting Started
+      url: /getting-started/
+      icon: "→"
+    - title: Ultra Quickstart
+      url: /ultra-quickstart/
+      icon: "⚡"
+    - title: Baiting & Lures
+      url: /baiting-and-lures/
+      icon: "🪤"
+    - title: Best Practices
+      url: /best-practices/
+      icon: "◎"
+
+- label: Reference
+  items:
+    - title: API Reference
+      url: /api/
+      icon: "{}"
+    - title: Event Reference
+      url: /events/
+      icon: "◈"
+    - title: Supported Frameworks
+      url: /supported-frameworks/
+      icon: "⊞"
+
+- label: Community
+  items:
+    - title: Getting Help
+      url: /getting-help/
+      icon: "?"
+    - title: Blog
+      url: /blogposts/
+      icon: "↗"

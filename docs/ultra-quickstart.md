@@ -1,8 +1,8 @@
 ---
 layout: default
 title: Ultra Quickstart
-nav_order: 5
 permalink: /ultra-quickstart/
+tagline: "Copy-paste one file and trigger a live trap from your terminal in under 2 minutes."
 ---
 
 <div class="lang-switcher">
@@ -10,8 +10,6 @@ permalink: /ultra-quickstart/
   <button class="lang-btn" onclick="switchLang('node')">Node.js</button>
   <button class="lang-btn" onclick="switchLang('go')">Go</button>
 </div>
-
-# Ultra Quickstart
 
 {: .warning }
 > This example is designed for **quick copy-paste local testing only**. For proper integration, please consult the [Getting Started](/getting-started/) guide.
@@ -97,7 +95,8 @@ const ts = new Sentry(app, "DemoApp", "Dev");
 ts.identify_user((req) => ({ user: userDb.username }));
 
 // 1. Decoy Route (Trap)
-ts.trap("/admin/config").methods("GET").respond({ status: 200, body: { debug: true } });
+ts.trap("/admin/config").methods("GET")
+    .respond({ status: 200, body: { debug: true } });
 
 // 2. Honey Field (Watch)
 ts.watch("/profile").body("is_admin", { intent: "PrivEsc" });
@@ -202,7 +201,10 @@ func main() {
         mu.Lock()
         u := userDB["username"]
         mu.Unlock()
-        c.JSON(http.StatusOK, gin.H{"status": "updated", "user": gin.H{"username": u}})
+        c.JSON(http.StatusOK, gin.H{
+            "status": "updated",
+            "user":   gin.H{"username": u},
+        })
     })
 
     app.Run(":5000")
@@ -239,5 +241,10 @@ curl http://localhost:5000/admin/config
 
 {: .note }
 > **Windows Users:** The `curl` command syntax differs for Windows Command Prompt (cmd.exe). Use double quotes for JSON and escape inner quotes:
-> `curl -X POST http://localhost:5000/profile -H "Content-Type: application/json" -d "{\"username\": \"hacker\", \"is_admin\": true}"`
+>
+> ```
+> curl -X POST http://localhost:5000/profile \
+>   -H "Content-Type: application/json" \
+>   -d "{\"username\": \"hacker\", \"is_admin\": true}"
+> ```
 

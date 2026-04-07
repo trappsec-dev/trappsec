@@ -5,8 +5,6 @@ nav_exclude: true
 permalink: /blogposts/api-deception-with-trappsec/
 ---
 
-# API Deception with trappsec
-
 *Feb 8, 2026*
 
 ![Photo by Mick Haupt on Unsplash](https://miro.medium.com/v2/resize:fit:1400/format:webp/0*VFiYu9u1KleswWoZ)

@@ -1,9 +1,8 @@
 ---
 layout: default
 title: API Reference
-nav_order: 7
-
 permalink: /api/
+tagline: "Complete reference for Sentry, TrapBuilder, and WatchBuilder."
 ---
 
 <div class="lang-switcher">
@@ -11,8 +10,6 @@ permalink: /api/
   <button class="lang-btn" onclick="switchLang('node')">Node.js</button>
   <button class="lang-btn" onclick="switchLang('go')">Go</button>
 </div>
-
-# API Reference
 
 This reference documents the core classes and methods available in the trappsec SDK.
 
@@ -112,21 +109,34 @@ Configures the response sent to **authenticated** requests. Unauthenticated requ
 <div class="lang-content" data-lang="python" markdown="1">
 
 ```python
-trap.respond(status: int, body: dict | str | Callable, mime_type: str = None, template: str = None)
+trap.respond(
+    status: int,
+    body: dict | str | Callable,
+    mime_type: str = None,
+    template: str = None,
+)
 ```
 
 </div>
 <div class="lang-content" data-lang="node" markdown="1">
 
 ```javascript
-trap.respond({ status: number, body: object | string | Function, mime_type: string, template: string })
+trap.respond({
+    status: number,
+    body: object | string | Function,
+    mime_type: string,
+    template: string,
+})
 ```
 
 </div>
 <div class="lang-content" data-lang="go" markdown="1">
 
 ```go
-trap.Respond(trappsec.ResponseConfig{Status: int, Body: any, MIMEType: string, Template: string})
+trap.Respond(trappsec.ResponseConfig{
+    Status: int, Body: any,
+    MIMEType: string, Template: string,
+})
 ```
 
 </div>
@@ -154,8 +164,12 @@ trap.respond({ template: "deprecated_api" });
 <div class="lang-content" data-lang="go" markdown="1">
 
 ```go
-trap.Respond(trappsec.ResponseConfig{Status: 200, Body: map[string]any{"status": "ok"}})
-trap.Respond(trappsec.ResponseConfig{Status: 403, Body: "Access Denied", MIMEType: "text/plain"})
+trap.Respond(trappsec.ResponseConfig{
+    Status: 200, Body: map[string]any{"status": "ok"},
+})
+trap.Respond(trappsec.ResponseConfig{
+    Status: 403, Body: "Access Denied", MIMEType: "text/plain",
+})
 trap.Respond(trappsec.ResponseConfig{Template: "deprecated_api"})
 ```
 
@@ -175,21 +189,34 @@ Configures a specific response for unauthenticated requests. Overrides `respond`
 <div class="lang-content" data-lang="python" markdown="1">
 
 ```python
-trap.if_unauthenticated(status: int, body: dict | Callable, mime_type: str = None, template: str = None)
+trap.if_unauthenticated(
+    status: int,
+    body: dict | Callable,
+    mime_type: str = None,
+    template: str = None,
+)
 ```
 
 </div>
 <div class="lang-content" data-lang="node" markdown="1">
 
 ```javascript
-trap.if_unauthenticated({ status: number, body: object | Function, mime_type: string, template: string })
+trap.if_unauthenticated({
+    status: number,
+    body: object | Function,
+    mime_type: string,
+    template: string,
+})
 ```
 
 </div>
 <div class="lang-content" data-lang="go" markdown="1">
 
 ```go
-trap.IfUnauthenticated(trappsec.ResponseConfig{Status: int, Body: any, MIMEType: string, Template: string})
+trap.IfUnauthenticated(trappsec.ResponseConfig{
+    Status: int, Body: any,
+    MIMEType: string, Template: string,
+})
 ```
 
 </div>
@@ -213,7 +240,10 @@ trap.if_unauthenticated({ status: 401, body: { "error": "Login Required" } });
 <div class="lang-content" data-lang="go" markdown="1">
 
 ```go
-trap.IfUnauthenticated(trappsec.ResponseConfig{Status: 401, Body: map[string]any{"error": "Login Required"}})
+trap.IfUnauthenticated(trappsec.ResponseConfig{
+    Status: 401,
+    Body:   map[string]any{"error": "Login Required"},
+})
 ```
 
 </div>
@@ -419,7 +449,10 @@ ts.add_slack("https://hooks.slack.com/services/...", { alerts_only: false });
 ts.AddSlack("https://hooks.slack.com/services/...", nil)
 // Send all events (not just alerts)
 alertsOnly := false
-ts.AddSlack("https://hooks.slack.com/services/...", &trappsec.SlackOptions{AlertsOnly: &alertsOnly})
+ts.AddSlack(
+    "https://hooks.slack.com/services/...",
+    &trappsec.SlackOptions{AlertsOnly: &alertsOnly},
+)
 ```
 
 </div>

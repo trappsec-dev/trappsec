@@ -1,11 +1,9 @@
 ---
 layout: default
 title: Event Reference
-nav_order: 6
 permalink: /events/
+tagline: "Schema and fields for every event emitted by trappsec."
 ---
-
-# Event Reference
 
 This page details the schema for the events emitted by trappsec. These events are sent to all configured handlers (Log, Webhook, OpenTelemetry).
 

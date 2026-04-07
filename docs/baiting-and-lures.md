@@ -1,11 +1,9 @@
 ---
 layout: default
 title: Baiting & Lures
-nav_order: 3
 permalink: /baiting-and-lures/
+tagline: "A trap no one finds doesn't fire. Plant breadcrumbs that lead attackers to your decoy routes and honey fields."
 ---
-
-# Baiting & Lures
 
 Traps are only effective if attackers find them. You need to plant "lures" — hints and crumbs that lead attackers to your decoy routes and honey fields.
 
