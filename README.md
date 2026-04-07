@@ -6,7 +6,7 @@ trappsec is an open-source framework that helps developers detect attackers who 
 > Built for the 1% of people who actually look at their security alerts, **and** the 99% who just like the idea of having them — based on the radical idea that if you can’t further reduce your attack surface, expand it.
 
 
-[Read the Docs](https://trappsec.dev/getting-started/) • [Ultra Quickstart](https://trappsec.dev/ultra-quickstart/)
+[Read the Docs](https://trappsec.dev/overview/) • [Ultra Quickstart](https://trappsec.dev/ultra-quickstart/)
 
 <br>
 
