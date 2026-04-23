@@ -3,7 +3,7 @@
 
 trappsec is an open-source framework that helps developers detect attackers who probe API business logic. By embedding realistic decoy routes and honey fields that are difficult to distinguish from real API constructs, attackers are nudged to authenticate — converting reconnaissance into actionable security telemetry.
 
-> Built for the 1% of people who actually look at their security alerts, **and** the 99% who just like the idea of having them — based on the radical idea that if you can’t further reduce your attack surface, expand it.
+> Built for the 1% of people who actually look at their security alerts, **and** the 99% who just like the idea of having them.
 
 
 [Read the Docs](https://trappsec.dev/overview/) • [Ultra Quickstart](https://trappsec.dev/ultra-quickstart/)
