@@ -133,7 +133,14 @@ class KoaIntegration {
         // Insert before the first application router, after ordinary middleware.
         const mws = this.app.middleware;
         let idx = mws.findIndex((m) => m && m.router && !m.__trappsecTrap);
-        if (idx === -1) idx = mws.length;
+        if (idx === -1) {
+            // Without a router, middleware and handlers are indistinguishable. Putting
+            // traps first keeps them from being shadowed by catch-all handlers; the
+            // trade-off is that identify_user only sees state set before trappsec.
+            this.ts.logger.warn('Trappsec: no @koa/router found; traps are installed ahead of all middleware, ' +
+                'so identify_user cannot see state set by your auth middleware. Use @koa/router for full support.');
+            idx = 0;
+        }
         mws.splice(idx, 0, mw);
     }
 

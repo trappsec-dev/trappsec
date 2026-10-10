@@ -170,3 +170,16 @@ test('koa: prototype keys ignored', async (t) => {
     assert.equal(r.status, 200);
     assert.equal(events.length, 0);
 });
+
+test('koa: without a router, traps are not shadowed by a catch-all and methods are case-insensitive', async (t) => {
+    const app = new Koa();
+    const { sentry, events } = makeSentry(app);
+    sentry.trap('/t').methods('get');
+    app.use((ctx) => { ctx.status = 404; ctx.body = 'app404'; });
+    const { server, close } = await serve(app.callback());
+    t.after(close);
+    const r = await request(server, { path: '/t' });
+    assert.equal(r.status, 401);
+    assert.equal(events.length, 1);
+    assert.equal(events[0].event, 'trappsec.trap_hit');
+});
