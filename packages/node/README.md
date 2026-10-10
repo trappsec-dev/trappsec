@@ -35,7 +35,7 @@ app.listen(3000);
 When a `secret` is set, requests carry `x-trappsec-timestamp` (unix seconds) and
 `x-trappsec-signature: sha256=<hex HMAC-SHA256(secret, "<timestamp>.<raw body>")>`.
 
-Delivery is asynchronous (global `fetch`, 5s timeout, max 100 in flight, 2 retries). Requires Node 20+.
+Delivery is asynchronous (node:http/https, 5s timeout, max 100 in flight, 2 retries). Requires Node 20+.
 `@opentelemetry/api` is an optional peer dependency used by `add_otel()`.
 
 License: MIT

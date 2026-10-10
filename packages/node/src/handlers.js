@@ -1,4 +1,31 @@
 const crypto = require('crypto');
+const http = require('http');
+const https = require('https');
+
+const REQUEST_TIMEOUT_MS = 5000;
+
+/** POST `body` and resolve with the status code. Uses node:http(s) rather than
+ *  fetch: undici's pooled keep-alive sockets intermittently fail or stall when a
+ *  receiver closes connections, which delays or loses alerts. */
+function postJSON(url, headers, body) {
+    return new Promise((resolve, reject) => {
+        let target;
+        try { target = new URL(url); } catch (e) { reject(e); return; }
+        const mod = target.protocol === 'https:' ? https : http;
+        const req = mod.request(target, {
+            method: 'POST',
+            headers: { ...headers, 'content-length': Buffer.byteLength(body) },
+            timeout: REQUEST_TIMEOUT_MS,
+        }, (res) => {
+            res.resume();
+            res.on('end', () => resolve(res.statusCode));
+            res.on('error', reject);
+        });
+        req.on('timeout', () => req.destroy(new Error('request timed out')));
+        req.on('error', reject);
+        req.end(body);
+    });
+}
 
 const MAX_IN_FLIGHT = 100;
 const MAX_RETRIES = 2;
@@ -139,17 +166,11 @@ class WebhookHandler {
             }
             let retryable = true;
             try {
-                const res = await fetch(this.url, {
-                    method: 'POST',
-                    headers: this._buildHeaders(payload),
-                    body: payload,
-                    signal: AbortSignal.timeout(5000),
-                });
-                try { await res.body?.cancel(); } catch (e) { /* ignore */ }
-                if (res.ok) return;
-                this.logger.error(`trappsec webhook: non-2xx response ${res.status}`);
-                lastErr = new Error(`HTTP ${res.status}`);
-                retryable = res.status >= 500 || res.status === 429;
+                const status = await postJSON(this.url, this._buildHeaders(payload), payload);
+                if (status >= 200 && status < 300) return;
+                this.logger.error(`trappsec webhook: non-2xx response ${status}`);
+                lastErr = new Error(`HTTP ${status}`);
+                retryable = status >= 500 || status === 429;
             } catch (e) {
                 lastErr = e;
             }

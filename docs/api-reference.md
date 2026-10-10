@@ -706,7 +706,7 @@ _ = ts.Close(ctx) // flush pending deliveries
 
 ## Delivery model
 
-Webhook and Slack delivery is asynchronous. Events go to a bounded in-memory queue (capacity 1000) drained by a background worker (Python: daemon thread; Go: goroutine; Node: un-awaited `fetch` capped at 100 in flight). When the queue is full the event is dropped and a warning is logged (at most once per 60 s). Failed deliveries are retried at most twice with short backoff, in the worker, never on the request path. Non-2xx responses are logged. A slow or down webhook can never delay your HTTP responses.
+Webhook and Slack delivery is asynchronous. Events go to a bounded in-memory queue (capacity 1000) drained by a background worker (Python: daemon thread; Go: goroutine; Node: un-awaited `node:http` requests capped at 100 in flight). When the queue is full the event is dropped and a warning is logged (at most once per 60 s). Failed deliveries are retried at most twice with short backoff, in the worker, never on the request path. Non-2xx responses are logged. A slow or down webhook can never delay your HTTP responses.
 
 ## Callback safety
 
