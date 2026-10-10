@@ -1,5 +1,7 @@
 const NO_DEFAULT = Symbol('NO_DEFAULT');
 
+const hasOwn = (o, k) => o != null && Object.prototype.hasOwnProperty.call(o, k);
+
 class TrapBuilder {
     constructor(ts, path) {
         this.ts = ts;
@@ -7,9 +9,10 @@ class TrapBuilder {
             path: path,
             methods: ["GET", "POST"],
             intent: null,
-            "response.authenticated": JSON.parse(JSON.stringify(this.ts.default_responses["authenticated"])),
-            "response.unauthenticated": JSON.parse(JSON.stringify(this.ts.default_responses["unauthenticated"])),
         };
+        // Per-kind overrides; defaults are resolved when build() is called so
+        // that the order of default_responses configuration does not matter.
+        this._overrides = { authenticated: null, unauthenticated: null };
     }
 
     methods(...args) {
@@ -22,56 +25,66 @@ class TrapBuilder {
         return this;
     }
 
-    _respond(key, { status = null, body = null, mime_type = null, template = null } = {}) {
-        key = "response." + key;
-        if (template) {
-            if (status !== null || body !== null || mime_type !== null) {
+    _respond(kind, { status = undefined, body = undefined, mime_type = undefined, template = undefined } = {}) {
+        const provided = (v) => v !== undefined && v !== null;
+        const ov = this._overrides[kind] || {};
+
+        if (provided(template)) {
+            if (provided(status) || provided(body) || provided(mime_type)) {
                 throw new Error("response_builder: `template` cannot be used together with `status`, `body`, or `mime_type`.");
             }
 
-            const tmpl = this.ts._templates[template];
+            const tmpl = hasOwn(this.ts._templates, template) ? this.ts._templates[template] : undefined;
             if (!tmpl) {
                 throw new Error(`response_builder: template '${template}' not found.`);
             }
 
-            this.config[key] = JSON.parse(JSON.stringify(tmpl));
+            // Shallow copy: function bodies must survive.
+            this._overrides[kind] = { ...tmpl };
         } else {
-            if (status) {
-                this.config[key]["status_code"] = status;
-            }
-
-            if (body) {
-                this.config[key]["response_body"] = body;
-            }
-
-            if (mime_type) {
-                this.config[key]["mime_type"] = mime_type;
-            }
+            if (provided(status)) ov.status_code = status;
+            if (provided(body)) ov.response_body = body;
+            if (provided(mime_type)) ov.mime_type = mime_type;
+            this._overrides[kind] = ov;
         }
 
         return this;
     }
 
-    respond({ status = null, body = null, mime_type = null, template = null } = {}) {
-        this._respond("authenticated", { status, body, mime_type, template });
-        return this;
+    respond(opts = {}) {
+        return this._respond("authenticated", opts || {});
     }
 
-    if_unauthenticated({ status = null, body = null, mime_type = null, template = null } = {}) {
-        this._respond("unauthenticated", { status, body, mime_type, template });
-        return this;
+    if_unauthenticated(opts = {}) {
+        return this._respond("unauthenticated", opts || {});
+    }
+
+    _resolve(kind) {
+        const ov = this._overrides[kind];
+        const base = { ...this.ts.default_responses[kind] };
+        if (ov) {
+            for (const k of ["status_code", "response_body", "mime_type"]) {
+                if (hasOwn(ov, k)) base[k] = ov[k];
+            }
+        }
+        return base;
     }
 
     build() {
-        return this.config;
+        return {
+            ...this.config,
+            methods: [...this.config.methods],
+            "response.authenticated": this._resolve("authenticated"),
+            "response.unauthenticated": this._resolve("unauthenticated"),
+        };
     }
 }
 
 class WatchBuilder {
     constructor(path) {
         this.path = path;
-        this._query = {};
-        this._body = {};
+        this._query = Object.create(null);
+        this._body = Object.create(null);
     }
 
     query(name, { defaultValue = NO_DEFAULT, intent = null } = {}) {

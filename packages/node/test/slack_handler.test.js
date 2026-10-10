@@ -31,7 +31,7 @@ test("slack handler formats payload with blocks", () => {
   const payload = JSON.parse(sent[0]);
   assert.ok(Array.isArray(payload.attachments));
   assert.ok(Array.isArray(payload.attachments[0].blocks));
-  assert.equal(payload.text, "");
+  assert.match(payload.text, /Decoy|Honeypot/);
   const summaryText = payload.attachments[0].blocks[0].text.text;
   assert.match(summaryText, /\*Event:\* Decoy Route Triggered/);
   assert.match(summaryText, /\*Timestamp:\* <!date\^1712011200\^/);

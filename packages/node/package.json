@@ -9,14 +9,52 @@
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/trappsec-dev/trappsec"
-  },
-  "dependencies": {
-    "axios": "^1.6.0"
+    "url": "https://github.com/trappsec-dev/trappsec",
+    "directory": "packages/node"
   },
   "peerDependencies": {
     "@opentelemetry/api": "^1.0.0"
   },
   "author": "Nikhil Salgaonkar <nikhil@ftfy.co>",
-  "license": "MIT"
+  "license": "MIT",
+  "module": "src/index.mjs",
+  "exports": {
+    ".": {
+      "import": {
+        "types": "./src/index.d.ts",
+        "default": "./src/index.mjs"
+      },
+      "require": {
+        "types": "./src/index.d.ts",
+        "default": "./src/index.js"
+      }
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "src",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "keywords": [
+    "security",
+    "deception",
+    "honeypot",
+    "honeytoken",
+    "canary",
+    "intrusion-detection",
+    "express",
+    "fastify",
+    "koa",
+    "hapi",
+    "nestjs"
+  ],
+  "peerDependenciesMeta": {
+    "@opentelemetry/api": {
+      "optional": true
+    }
+  }
 }
