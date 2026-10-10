@@ -46,6 +46,8 @@ python tests/e2e/run_examples.py --install
 python tests/e2e/run_examples.py --kill-port-blockers
 ```
 
+Example dependencies are locked (`app.py.lock` next to each Python example, `package-lock.json` for Node, `go.sum` for Go): the harness runs `uv run --locked` and `npm ci`, so results do not change when a framework publishes a release. `--latest` ignores the locks (`uv run --upgrade`, `npm install`) and is what the weekly `E2E (latest releases)` workflow runs; refresh the locks with `uv lock --script --upgrade app.py` or `npm update` after checking that run.
+
 The harness runs cases in parallel (`--jobs`, default 4): case N listens on port 8000+N and its receiver on 5050+N. It generates a fresh signing secret per run, waits for each app to answer HTTP before testing it, and reads results from pytest's JUnit XML. When `--log-dir` is given, per-case app logs (`<case>.app.log`), pytest output (`<case>.pytest.log`), `summary.csv` and `summary.txt` are written there. Without it, app output is discarded.
 
 ### Requirements

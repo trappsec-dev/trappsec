@@ -214,7 +214,6 @@ docs/_site/
 
 # temporary
 uv.lock
-examples/*/package-lock.json
 GemFile.lock
 
 *.exe

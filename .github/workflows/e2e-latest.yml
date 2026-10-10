@@ -1,0 +1,48 @@
+name: E2E (latest releases)
+
+# Pull-request CI runs the e2e suite against the examples' lockfiles, so it is
+# reproducible. This scheduled run ignores the lockfiles and uses the newest
+# matching framework releases, so a breaking upstream release shows up here
+# first instead of in an unrelated pull request. When it fails, reproduce with
+# `python tests/e2e/run_examples.py --install --latest`; once fixed, refresh
+# the locks (`uv lock --script --upgrade app.py`, `npm update`) in a PR.
+
+on:
+  schedule:
+    - cron: "17 6 * * 1"  # Mondays 06:17 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  e2e-latest:
+    name: End-to-end examples (latest releases)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.13"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: packages/go/go.mod
+          cache-dependency-path: |
+            packages/go/go.sum
+            packages/go/*/go.sum
+            examples/go-*/go.sum
+      - uses: astral-sh/setup-uv@v5
+      - name: Install e2e test dependencies
+        run: pip install pytest requests
+      - name: Run examples against the newest releases
+        run: python tests/e2e/run_examples.py --install --latest --log-dir artifacts/e2e-latest-logs
+      - name: Upload logs
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: e2e-latest-logs
+          path: artifacts/e2e-latest-logs/
+          if-no-files-found: ignore

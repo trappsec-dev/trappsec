@@ -37,7 +37,7 @@ NO_MULTIPART = frozenset({"multipart"})
 def _default_cases() -> List[Case]:
     """Commands may use {webhook}; each case gets its own app port ($PORT) and receiver."""
     node = lambda d: ["node", "app.js", "--webhook={webhook}"]  # noqa: E731
-    py = lambda d: ["uv", "run", "app.py", "--webhook={webhook}"]  # noqa: E731
+    py = lambda d: ["uv", "run", "{uv_lock}", "app.py", "--webhook={webhook}"]  # noqa: E731
     go = lambda d: ["go", "run", "main.go", "--webhook={webhook}"]  # noqa: E731
     ex = REPO_ROOT / "examples"
     return [
@@ -271,15 +271,17 @@ def _junit_counts(path: Path) -> Dict[str, int]:
 _INSTALLED: Set[Path] = set()
 
 
-def _install_dependencies(case: Case, log_dir: Optional[Path]) -> Tuple[bool, str]:
-    """Run `npm install` for Node cases (once per directory), plus the local node package."""
+def _install_dependencies(case: Case, log_dir: Optional[Path], latest: bool = False) -> Tuple[bool, str]:
+    """Install Node dependencies (once per directory): `npm ci` from the committed
+    lockfile, or `npm install` (newest matching releases) with --latest."""
     if case.command[0] not in ("node", "npm"):
         return True, ""
     targets = [REPO_ROOT / "packages" / "node", case.cwd]
     for target in targets:
         if target in _INSTALLED or not (target / "package.json").exists():
             continue
-        cmd = _resolve_command(["npm", "install", "--no-audit", "--no-fund"])
+        locked = (target / "package-lock.json").exists() and not latest
+        cmd = _resolve_command(["npm", "ci" if locked else "install", "--no-audit", "--no-fund"])
         print(f"    installing node dependencies in {target.relative_to(REPO_ROOT)}")
         cp = subprocess.run(cmd, cwd=str(target), capture_output=True, text=True, check=False)
         if log_dir is not None:
@@ -394,7 +396,8 @@ def _run_case(case: Case, app_port: int, webhook_port: int, secret: str, args: a
     out: List[str] = []
     url = f"http://{args.host}:{app_port}"
     receiver = f"http://127.0.0.1:{webhook_port}"
-    command = _resolve_command([part.format(webhook=f"{receiver}/webhook") for part in case.command])
+    uv_lock = "--upgrade" if args.latest else "--locked"  # app.py.lock pins Python example dependencies
+    command = _resolve_command([part.format(webhook=f"{receiver}/webhook", uv_lock=uv_lock) for part in case.command])
     out.append(f"==> [{case.name}] port {app_port}, receiver {webhook_port}: {_format_command(command)}")
 
     def result(status: str, code: str, reason: str, counts: Optional[Dict[str, int]] = None) -> Dict[str, object]:
@@ -508,6 +511,13 @@ def main() -> int:
         default=None,
         help="Directory for per-case app logs, pytest output and summary.csv (created if missing).",
     )
+    parser.add_argument(
+        "--latest",
+        action="store_true",
+        default=False,
+        help="Ignore the examples' lockfiles and use the newest matching releases (uv --upgrade, npm install). "
+        "May refresh lockfiles in the working tree.",
+    )
     parser.add_argument("--pytest-timeout", type=int, default=240, help="Seconds before pytest is force-terminated.")
     parser.add_argument(
         "--cases",
@@ -538,7 +548,7 @@ def main() -> int:
         if case not in selected:
             continue
         if args.install:  # sequential: cases can share a directory (nestjs)
-            ok, msg = _install_dependencies(case, log_dir)
+            ok, msg = _install_dependencies(case, log_dir, latest=args.latest)
             if not ok:
                 print(f"==> [{case.name}] {msg}")
                 results[case.name] = {"case": case.name, "status": "fail", "code": "install-failed",
