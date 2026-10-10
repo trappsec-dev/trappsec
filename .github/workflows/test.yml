@@ -25,7 +25,7 @@ jobs:
       - name: Ruff (syntax errors only)
         run: |
           pip install ruff
-          ruff check --select E9,F63,F7,F82 packages/python tests/e2e examples
+          ruff check --select E9,F63,F7,F82 packages/python tests/e2e tests/package examples
       - name: Node syntax check
         run: |
           find packages/node/src -name '*.js' -print0 | xargs -0 -n1 node --check
@@ -68,7 +68,7 @@ jobs:
           cache: npm
           cache-dependency-path: |
             packages/node/package-lock.json
-            packages/node/test/integrations/package.json
+            packages/node/test/integrations/package-lock.json
       - name: Core tests
         working-directory: packages/node
         run: |
@@ -77,7 +77,7 @@ jobs:
       - name: Integration tests
         working-directory: packages/node/test/integrations
         run: |
-          npm install
+          npm ci
           node --test
 
   go:
@@ -101,6 +101,22 @@ jobs:
       - name: Test (race)
         working-directory: ${{ matrix.module }}
         run: go test -race ./...
+
+  package:
+    name: Package smoke tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.13"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      # Builds the wheel, sdist and npm tarball, installs each into a clean
+      # environment outside the repo and runs a real framework app against it.
+      - name: Build, install and smoke-test distributions
+        run: bash tests/package/run.sh
 
   go-examples:
     name: Build Go examples

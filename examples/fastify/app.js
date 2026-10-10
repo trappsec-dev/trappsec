@@ -139,7 +139,7 @@ async function bootstrap() {
     }
 
     if (values.webhook) {
-        ts.add_webhook(values.webhook, { alerts_only: false });
+        ts.add_webhook(values.webhook, { secret: process.env.TRAPPSEC_WEBHOOK_SECRET || null, alerts_only: false });
     }
 
     await fastify.listen({ port: 8000, host: '0.0.0.0' });

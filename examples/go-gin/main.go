@@ -179,7 +179,7 @@ func main() {
 
 	if *webhookURL != "" {
 		alertsOnly := false
-		app.AddWebhook(*webhookURL, &trappsec.WebhookOptions{AlertsOnly: &alertsOnly})
+		app.AddWebhook(*webhookURL, &trappsec.WebhookOptions{Secret: os.Getenv("TRAPPSEC_WEBHOOK_SECRET"), AlertsOnly: &alertsOnly})
 	}
 
 	log.Println("Starting server on http://127.0.0.1:8000")

@@ -2,16 +2,20 @@
 import argparse
 import csv
 import os
-import re
+import secrets
 import shutil
 import signal
 import socket
 import subprocess
 import sys
+import tempfile
 import time
+import urllib.error
+import urllib.request
+import xml.etree.ElementTree as ET
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, List, Optional, Set, Tuple
+from typing import Dict, FrozenSet, List, Optional, Set, Tuple
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -23,16 +27,20 @@ class Case:
     name: str
     cwd: Path
     command: List[str]
+    unsupported: FrozenSet[str] = frozenset()  # features the example does not implement
+
+
+NO_MULTIPART = frozenset({"multipart"})
 
 
 def _default_cases(webhook_url: str) -> List[Case]:
     return [
-        Case("node-express", REPO_ROOT / "examples" / "express", ["node", "app.js", f"--webhook={webhook_url}"]),
+        Case("node-express", REPO_ROOT / "examples" / "express", ["node", "app.js", f"--webhook={webhook_url}"], NO_MULTIPART),
         Case("node-fastify", REPO_ROOT / "examples" / "fastify", ["node", "app.js", f"--webhook={webhook_url}"]),
         Case("node-hapi", REPO_ROOT / "examples" / "hapi", ["node", "app.js", f"--webhook={webhook_url}"]),
-        Case("node-koa", REPO_ROOT / "examples" / "koa", ["node", "app.js", f"--webhook={webhook_url}"]),
-        Case("node-nestjs-express", REPO_ROOT / "examples" / "nestjs", ["npm", "run", "start"]),
-        Case("node-nestjs-fastify", REPO_ROOT / "examples" / "nestjs", ["npm", "run", "start_fastify"]),
+        Case("node-koa", REPO_ROOT / "examples" / "koa", ["node", "app.js", f"--webhook={webhook_url}"], NO_MULTIPART),
+        Case("node-nestjs-express", REPO_ROOT / "examples" / "nestjs", ["npm", "run", "start"], NO_MULTIPART),
+        Case("node-nestjs-fastify", REPO_ROOT / "examples" / "nestjs", ["npm", "run", "start_fastify"], NO_MULTIPART),
         Case("py-django", REPO_ROOT / "examples" / "django", ["uv", "run", "app.py", f"--webhook={webhook_url}"]),
         Case("py-fastapi", REPO_ROOT / "examples" / "fastapi", ["uv", "run", "app.py", f"--webhook={webhook_url}"]),
         Case("py-flask", REPO_ROOT / "examples" / "flask", ["uv", "run", "app.py", f"--webhook={webhook_url}"]),
@@ -68,6 +76,20 @@ def _wait_for_port_or_process_exit(
             return True, None
         time.sleep(0.25)
     return False, proc.poll()
+
+
+def _wait_for_http(url: str, proc: subprocess.Popen, timeout_sec: float) -> bool:
+    """An open port is not a ready app: wait until it answers HTTP at all."""
+    deadline = time.time() + timeout_sec
+    while time.time() < deadline and proc.poll() is None:
+        try:
+            urllib.request.urlopen(url, timeout=2).close()
+            return True
+        except urllib.error.HTTPError:
+            return True  # any status code means the server is handling requests
+        except (urllib.error.URLError, OSError):
+            time.sleep(0.25)
+    return False
 
 
 def _is_port_open(host: str, port: int) -> bool:
@@ -205,15 +227,38 @@ def _terminate_process_tree(proc: subprocess.Popen) -> None:
         pass
 
 
-def _run_pytest(url: str, timeout_sec: int) -> subprocess.CompletedProcess:
+def _run_pytest(url: str, timeout_sec: int, secret: str, webhook_port: int,
+                unsupported: FrozenSet[str]) -> Tuple[subprocess.CompletedProcess, Dict[str, int]]:
     py = _find_test_python()
-    return subprocess.run(
-        [py, "-m", "pytest", "-q", "test_example.py", f"--url={url}"],
-        cwd=E2E_DIR,
-        capture_output=True,
-        text=True,
-        timeout=timeout_sec,
-    )
+    with tempfile.TemporaryDirectory() as tmp:
+        junit = Path(tmp) / "junit.xml"
+        cp = subprocess.run(
+            [py, "-m", "pytest", "-q", "test_example.py", f"--url={url}", f"--junitxml={junit}",
+             f"--webhook-secret={secret}", f"--webhook-port={webhook_port}",
+             f"--unsupported={','.join(sorted(unsupported))}"],
+            cwd=E2E_DIR,
+            capture_output=True,
+            text=True,
+            timeout=timeout_sec,
+        )
+        return cp, _junit_counts(junit)
+
+
+def _junit_counts(path: Path) -> Dict[str, int]:
+    counts = _empty_counts()
+    try:
+        root = ET.parse(path).getroot()
+    except (OSError, ET.ParseError):
+        return counts
+    suites = [root] if root.tag == "testsuite" else root.findall("testsuite")
+    for suite in suites:
+        tests = int(suite.get("tests", 0))
+        failed, errors, skipped = (int(suite.get(k, 0)) for k in ("failures", "errors", "skipped"))
+        counts["failed"] += failed
+        counts["errors"] += errors
+        counts["skipped"] += skipped
+        counts["passed"] += tests - failed - errors - skipped
+    return counts
 
 
 _INSTALLED: Set[Path] = set()
@@ -263,22 +308,8 @@ def _resolve_command(cmd: List[str]) -> List[str]:
     return cmd
 
 
-def _parse_pytest_counts(output: str) -> Dict[str, int]:
-    counts = {
-        "passed": 0,
-        "failed": 0,
-        "errors": 0,
-        "skipped": 0,
-        "xfailed": 0,
-        "xpassed": 0,
-    }
-    for match in re.finditer(r"(\d+)\s+(passed|failed|error|errors|skipped|xfailed|xpassed)", output, re.IGNORECASE):
-        value = int(match.group(1))
-        key = match.group(2).lower()
-        if key in {"error", "errors"}:
-            key = "errors"
-        counts[key] = value
-    return counts
+def _empty_counts() -> Dict[str, int]:
+    return {"passed": 0, "failed": 0, "errors": 0, "skipped": 0, "xfailed": 0, "xpassed": 0}
 
 
 def _format_counts(counts: Dict[str, int]) -> str:
@@ -355,7 +386,7 @@ def main() -> int:
     parser.add_argument("--url", default="http://127.0.0.1:8000", help="Base URL used by pytest (--url).")
     parser.add_argument("--host", default="127.0.0.1", help="Host to probe for readiness.")
     parser.add_argument("--port", type=int, default=8000, help="Port to probe for readiness.")
-    parser.add_argument("--webhook-url", default="http://localhost:5050/webhook", help="Webhook URL passed to examples.")
+    parser.add_argument("--webhook-port", type=int, default=5050, help="Port of the alert receiver started by pytest.")
     parser.add_argument("--startup-timeout", type=int, default=45, help="Seconds to wait for app startup.")
     parser.add_argument(
         "--port-release-timeout",
@@ -392,7 +423,8 @@ def main() -> int:
     if log_dir is not None:
         log_dir.mkdir(parents=True, exist_ok=True)
 
-    all_cases = _default_cases(args.webhook_url)
+    all_cases = _default_cases(f"http://127.0.0.1:{args.webhook_port}/webhook")
+    secret = secrets.token_hex(16)  # every delivery must carry a valid signature
     selected: List[Case]
     if args.cases.strip():
         wanted = {x.strip() for x in args.cases.split(",") if x.strip()}
@@ -424,7 +456,7 @@ def main() -> int:
                 "case": case.name,
                 "status": "fail",
                 "code": "port-busy",
-                "counts": _parse_pytest_counts(""),
+                "counts": _empty_counts(),
                 "failure_reason": msg,
             }
             results.append(case_result)
@@ -442,7 +474,7 @@ def main() -> int:
                     "case": case.name,
                     "status": "fail",
                     "code": "install-failed",
-                    "counts": _parse_pytest_counts(""),
+                    "counts": _empty_counts(),
                     "failure_reason": inst_msg,
                 })
                 failure_details.append(f"[{case.name}] {inst_msg}")
@@ -457,6 +489,7 @@ def main() -> int:
                     app_out = app_err = subprocess.DEVNULL
                 popen_kwargs = {
                     "cwd": str(case.cwd),
+                    "env": {**os.environ, "TRAPPSEC_WEBHOOK_SECRET": secret},
                     "stdout": app_out,
                     "stderr": subprocess.STDOUT if app_log else app_err,
                     "text": True,
@@ -474,12 +507,14 @@ def main() -> int:
                     "case": case.name,
                     "status": "error",
                     "code": "127",
-                    "counts": _parse_pytest_counts(""),
+                    "counts": _empty_counts(),
                     "failure_reason": msg,
                 }
 
             if case_result is None:
                 started, exit_code = _wait_for_port_or_process_exit(proc, args.host, args.port, args.startup_timeout)
+                if started and not _wait_for_http(args.url, proc, args.startup_timeout):
+                    started, exit_code = False, proc.poll()
                 if not started:
                     if exit_code is not None:
                         msg = f"process exited before port became ready (exit code {exit_code})"
@@ -492,17 +527,17 @@ def main() -> int:
                         "case": case.name,
                         "status": "fail",
                         "code": code,
-                        "counts": _parse_pytest_counts(""),
+                        "counts": _empty_counts(),
                         "failure_reason": msg,
                     }
 
             if case_result is None:
                 try:
-                    test_result = _run_pytest(args.url, args.pytest_timeout)
+                    test_result, counts = _run_pytest(args.url, args.pytest_timeout, secret,
+                                                      args.webhook_port, case.unsupported)
                     combined = (test_result.stdout or "") + (test_result.stderr or "")
                     if log_dir is not None:
                         (log_dir / f"{case.name}.pytest.log").write_text(combined)
-                    counts = _parse_pytest_counts(combined)
                     status = "pass" if test_result.returncode == 0 else "fail"
                     case_result = {
                         "case": case.name,
@@ -514,7 +549,7 @@ def main() -> int:
                     print(f"    pytest: {status} ({_format_counts(counts)})")
                 except subprocess.TimeoutExpired:
                     msg = f"pytest timeout after {args.pytest_timeout}s"
-                    counts = _parse_pytest_counts("")
+                    counts = _empty_counts()
                     case_result = {
                         "case": case.name,
                         "status": "fail",
@@ -542,7 +577,7 @@ def main() -> int:
                             "case": case.name,
                             "status": "fail",
                             "code": "port-release-timeout",
-                            "counts": _parse_pytest_counts(""),
+                            "counts": _empty_counts(),
                             "failure_reason": release_msg,
                         }
                     elif str(case_result["status"]) == "pass":
@@ -560,7 +595,7 @@ def main() -> int:
                 "case": case.name,
                 "status": "error",
                 "code": "internal-error",
-                "counts": _parse_pytest_counts(""),
+                "counts": _empty_counts(),
                 "failure_reason": "unknown harness state",
             }
         results.append(case_result)

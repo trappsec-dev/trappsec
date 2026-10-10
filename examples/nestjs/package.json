@@ -2,8 +2,8 @@
     "name": "trappsec-nestjs-example",
     "version": "0.1.0",
     "scripts": {
-        "start": "ts-node src/main.ts --webhook=http://localhost:5050/webhook",
-        "start_fastify": "ts-node src/main.ts --fastify --webhook=http://localhost:5050/webhook"
+        "start": "ts-node src/main.ts --webhook=http://127.0.0.1:5050/webhook",
+        "start_fastify": "ts-node src/main.ts --fastify --webhook=http://127.0.0.1:5050/webhook"
     },
     "dependencies": {
         "@fastify/multipart": "^9.2.1",

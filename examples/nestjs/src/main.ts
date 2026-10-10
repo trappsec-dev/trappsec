@@ -40,7 +40,7 @@ async function bootstrap() {
     }
 
     if (values.webhook) {
-        ts.add_webhook(values.webhook as string, { alerts_only: false });
+        ts.add_webhook(values.webhook as string, { secret: process.env.TRAPPSEC_WEBHOOK_SECRET || null, alerts_only: false });
     }
 
     ts.identify_user((req) => {
