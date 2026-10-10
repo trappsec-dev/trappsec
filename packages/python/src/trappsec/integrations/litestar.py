@@ -188,6 +188,9 @@ class LitestarIntegration:
     def _inject_traps(self):
         from litestar import Request, Response
         from litestar.handlers import HTTPRouteHandler
+
+        csrf_config = getattr(self.app, "csrf_config", None)
+        csrf_exclude_key = getattr(csrf_config, "exclude_from_csrf_key", None) or "exclude_from_csrf"
         from litestar.routes import HTTPRoute
 
         ts = self.ts
@@ -228,6 +231,8 @@ class LitestarIntegration:
                 http_method=trap["methods"],
                 include_in_schema=False,
                 name=f"trappsec_trap_{idx}",
+                # R22: CSRF protection must not turn a trap into a silent 403.
+                opt={csrf_exclude_key: True},
             )(make_handler(trap))
             self.app.register(route_handler)
 

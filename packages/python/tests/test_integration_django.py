@@ -246,3 +246,18 @@ def test_encoding_and_content_type_bypasses_stripped(env, ctype, raw):
     assert d["json"] == {"name": "x"}
     assert int(d["clen"]) == d["alen"]
     assert len(watch_events(cap)) == 1
+
+
+def test_watch_on_included_urlconf(env):
+    """R7: routes mounted with include() are watched by their full pattern."""
+    from django.urls import include
+
+    h, s, cap = env(urlpatterns=[path("api/", include([path("users/<int:pk>", items)]))])
+    s.watch("/api/users/<int:pk>").query("debug", intent="q").body("is_admin", intent="b")
+    r = client(h).post("/api/users/7?debug=1&x=1", data=json.dumps({"is_admin": True, "n": 1}),
+                       content_type="application/json")
+    assert r.status_code == 200
+    assert r.get_json()["get"] == {"x": ["1"]}
+    assert r.get_json()["json"] == {"n": 1}
+    [event] = watch_events(cap)
+    assert {f["field"] for f in event["found_fields"]} == {"debug", "is_admin"}

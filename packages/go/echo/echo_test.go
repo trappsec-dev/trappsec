@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/labstack/echo/v4"
+	"github.com/labstack/echo/v4/middleware"
 	core "github.com/trappsec-dev/trappsec/packages/go"
 	"io"
 	"mime/multipart"
@@ -100,6 +101,12 @@ func TestMiddlewareRunsBeforeWatchAndTrap(t *testing.T) {
 type syncBuf struct {
 	mu sync.Mutex
 	b  bytes.Buffer
+}
+
+func (s *syncBuf) String() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.b.String()
 }
 
 func (s *syncBuf) Write(p []byte) (int, error) {
@@ -603,4 +610,80 @@ func TestConcurrentRequestsRace(t *testing.T) {
 		}
 		wg.Wait()
 	})
+}
+
+func TestCSRFSkipperKeepsTrapsWorking(t *testing.T) {
+	for _, skip := range []bool{false, true} {
+		e := echo.New()
+		app := InstallSentry(e, "svc", "test")
+		logs := &syncBuf{}
+		app.Logger().SetOutput(logs)
+		cfg := middleware.CSRFConfig{}
+		if skip {
+			cfg.Skipper = app.IsTrap
+		}
+		e.Use(middleware.CSRFWithConfig(cfg))
+		e.POST("/real", func(c echo.Context) error { return c.String(200, "ok") })
+		app.Sentry.Trap("/admin/backup").Methods("POST")
+
+		do := func(path string) int {
+			rec := httptest.NewRecorder()
+			app.ServeHTTP(rec, httptest.NewRequest("POST", path, strings.NewReader("a=1")))
+			return rec.Code
+		}
+		trap, real := do("/admin/backup"), do("/real")
+		if real != http.StatusForbidden && real != http.StatusBadRequest {
+			t.Fatalf("skip=%v: CSRF must still protect real routes, got %d", skip, real)
+		}
+		if skip {
+			if trap != http.StatusUnauthorized || logs.count("trappsec.trap_hit") != 1 {
+				t.Fatalf("with IsTrap skipper: trap = %d, events = %d", trap, logs.count("trappsec.trap_hit"))
+			}
+		} else if trap == http.StatusUnauthorized {
+			t.Fatalf("without the skipper Echo's CSRF middleware is expected to block the trap (got %d)", trap)
+		}
+	}
+	e := echo.New()
+	app := InstallSentry(e, "svc", "test")
+	app.Sentry.Trap("/t").Methods("GET")
+	c := e.NewContext(httptest.NewRequest("GET", "/x", nil), httptest.NewRecorder())
+	c.SetPath("/x")
+	if app.IsTrap(c) {
+		t.Fatal("a non-trap route is not a trap")
+	}
+}
+
+func TestUnreachableWatchIsLogged(t *testing.T) {
+	e := echo.New()
+	app := InstallSentry(e, "svc", "test")
+	logs := &syncBuf{}
+	app.Logger().SetOutput(logs)
+	e.Group("/api").POST("/users/:id", func(echo.Context) error { return nil })
+	app.Sentry.Watch("/api/users/:id").Body("is_admin", core.NoDefault, "priv")
+	app.Sentry.Watch("/users/:id").Body("is_admin", core.NoDefault, "priv") // missing the group prefix
+	app.Bootstrap()
+	out := logs.String()
+	if !strings.Contains(out, "watch /users/:id matches no registered route") || strings.Contains(out, "watch /api/users/:id matches") {
+		t.Fatalf("unexpected warnings: %s", out)
+	}
+}
+
+func TestWatchOnGroupRoute(t *testing.T) {
+	e := echo.New()
+	app := InstallSentry(e, "svc", "test")
+	logs := &syncBuf{}
+	app.Logger().SetOutput(logs)
+	var bound map[string]any
+	e.Group("/api").POST("/users/:id", func(c echo.Context) error {
+		bound = nil
+		_ = c.Bind(&bound)
+		return c.NoContent(200)
+	})
+	app.Sentry.Watch("/api/users/:id").Body("is_admin", core.NoDefault, "priv")
+	req := httptest.NewRequest("POST", "/api/users/7", strings.NewReader(`{"is_admin":true,"n":1}`))
+	req.Header.Set("Content-Type", "application/json")
+	app.ServeHTTP(httptest.NewRecorder(), req)
+	if _, leaked := bound["is_admin"]; leaked || logs.count("trappsec.watch_hit") != 1 {
+		t.Fatalf("group route not watched: bound=%v events=%d", bound, logs.count("trappsec.watch_hit"))
+	}
 }

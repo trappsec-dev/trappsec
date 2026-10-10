@@ -92,6 +92,12 @@ type syncBuf struct {
 	b  bytes.Buffer
 }
 
+func (s *syncBuf) String() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.b.String()
+}
+
 func (s *syncBuf) Write(p []byte) (int, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -614,5 +620,58 @@ func TestJSONTrailingDataCannotBypassBinder(t *testing.T) {
 		if got := logs.count("trappsec.watch_hit"); got != i+1 {
 			t.Fatalf("%q: watch events = %d, want %d", b, got, i+1)
 		}
+	}
+}
+
+func TestRouteGroupsCreatedBeforeInstallAreWatched(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	for _, mode := range []string{"group+route before install", "group before, route after install", "group+route after install"} {
+		t.Run(mode, func(t *testing.T) {
+			engine := gin.New()
+			var bound map[string]any
+			h := func(c *gin.Context) { bound = nil; _ = c.ShouldBindJSON(&bound); c.Status(200) }
+			var app *App
+			switch mode {
+			case "group+route before install":
+				engine.Group("/api").POST("/users/:id", h)
+				app = InstallSentry(engine, "svc", "test")
+			case "group before, route after install":
+				g := engine.Group("/api")
+				app = InstallSentry(engine, "svc", "test")
+				g.POST("/users/:id", h)
+			default:
+				app = InstallSentry(engine, "svc", "test")
+				app.Group("/api").POST("/users/:id", h)
+			}
+			logs := &syncBuf{}
+			app.Logger().SetOutput(logs)
+			app.Sentry.Watch("/api/users/:id").Body("is_admin", core.NoDefault, "priv")
+			for i := 1; i <= 3; i++ { // first request learns coverage; later ones must not double-report
+				req := httptest.NewRequest("POST", "/api/users/7", strings.NewReader(`{"is_admin":true,"n":1}`))
+				req.Header.Set("Content-Type", "application/json")
+				app.ServeHTTP(httptest.NewRecorder(), req)
+				if _, leaked := bound["is_admin"]; leaked {
+					t.Fatalf("request %d: honey field reached the handler", i)
+				}
+				if got := logs.count("trappsec.watch_hit"); got != i {
+					t.Fatalf("request %d: watch events = %d, want %d", i, got, i)
+				}
+			}
+		})
+	}
+}
+
+func TestUnreachableWatchIsLogged(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	app := InstallSentry(gin.New(), "svc", "test")
+	logs := &syncBuf{}
+	app.Logger().SetOutput(logs)
+	app.Group("/api").POST("/users/:id", func(*gin.Context) {})
+	app.Sentry.Watch("/api/users/:id").Body("is_admin", core.NoDefault, "priv")
+	app.Sentry.Watch("/users/:id").Body("is_admin", core.NoDefault, "priv") // missing the group prefix
+	app.Bootstrap()
+	out := logs.String()
+	if !strings.Contains(out, "watch /users/:id matches no registered route") || strings.Contains(out, "watch /api/users/:id matches") {
+		t.Fatalf("unexpected warnings: %s", out)
 	}
 }

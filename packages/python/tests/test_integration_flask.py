@@ -242,3 +242,26 @@ def test_get_data_consistent_when_get_json_read_first():
     sentry.watch("/raw2").body("is_admin")
     d = app.test_client().post("/raw2", json=_PAYLOAD).get_json()
     assert d["first"] == {"name": "x"} and d["raw"] == {"name": "x"}
+
+
+def test_watch_on_blueprint_route():
+    """R7: routes mounted through a Blueprint (with url_prefix) are watched."""
+    from flask import Blueprint
+
+    app = Flask(__name__)
+    bp = Blueprint("api", __name__, url_prefix="/api")
+
+    @bp.post("/users/<uid>")
+    def user(uid):
+        return jsonify(args=request.args.to_dict(), json=request.get_json(silent=True))
+
+    app.register_blueprint(bp)
+    sentry = Sentry(app, "svc", "test")
+    cap = Capture()
+    sentry._handlers.append(cap)
+    sentry.watch("/api/users/<uid>").query("debug", intent="q").body("is_admin", intent="b")
+
+    r = app.test_client().post("/api/users/7?debug=1&x=1", json={"is_admin": True, "n": 1})
+    assert r.get_json() == {"args": {"x": "1"}, "json": {"n": 1}}
+    [event] = watch_events(cap)
+    assert {f["field"] for f in event["found_fields"]} == {"debug", "is_admin"}

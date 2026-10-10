@@ -276,3 +276,10 @@ def test_warn_if_older_than_tested_minimum(caplog):
     with mock.patch("importlib.metadata.version", return_value="weird"):
         warn_if_older(log, "litestar", (2, 13), "x")
     assert caplog.text == ""
+
+
+@pytest.mark.parametrize("app", [object(), None, {}, type("Bottle", (), {})()])
+def test_unknown_framework_fails_loud(app):
+    """R9: an unsupported app must raise, never run silently unprotected."""
+    with pytest.raises(Exception, match="trappsec error: unknown framework"):
+        Sentry(app, "svc", "test")

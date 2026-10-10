@@ -209,5 +209,7 @@ if __name__ == "__main__":
         ts.add_webhook(url=os.environ["TRAPPSEC_ALERTS_WEBHOOK"], secret=os.environ.get("TRAPPSEC_WEBHOOK_SECRET"))
 
     print(f"Starting server on http://127.0.0.1:{PORT}")
-    uvicorn.run(app, host="127.0.0.1", port=PORT)
+    # proxy_headers=False: uvicorn otherwise trusts X-Forwarded-For from 127.0.0.1. Behind a
+    # reverse proxy, enable it with forwarded_allow_ips set to the proxy's address.
+    uvicorn.run(app, host="127.0.0.1", port=PORT, proxy_headers=False)
 

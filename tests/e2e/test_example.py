@@ -364,3 +364,12 @@ def test_strip_mixed_multipart_honey_stripped_safe_retained(multipart, alerts):
 
     [alert] = alerts.expect(ua)
     assert alert["found_fields"][0]["field"] == "honey_m"
+
+
+def test_forwarded_for_is_not_trusted_by_default(api, base_url, alerts):
+    """R21: without proxy configuration a client cannot choose the recorded IP."""
+    ua = unique_ua()
+    spoofed = "203.0.113.77"
+    api.get(f"{base_url}/deployment/config", headers=headers(ua, **{"X-Forwarded-For": spoofed, "Forwarded": f"for={spoofed}"}))
+    [alert] = alerts.expect(ua)
+    assert spoofed not in alert["ip"]

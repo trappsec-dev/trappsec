@@ -249,7 +249,7 @@ Default IP extractors use the transport peer address (Go gin/echo: `RemoteAddr` 
 
 ## R22: Traps are exempt from CSRF protection
 
-Framework CSRF middleware must not block trap routes, otherwise a scanner's POST gets a CSRF error instead of the decoy response (a fingerprint). Django: `csrf_exempt`. Other frameworks: register traps outside, or exempt them from, CSRF middleware.
+Framework CSRF middleware must not block trap routes, otherwise a scanner's POST gets a CSRF error instead of the decoy response (a fingerprint). Django: `csrf_exempt`. Litestar: `opt={exclude_from_csrf_key: True}` on trap handlers. Tornado: traps override `check_xsrf_cookie`. Echo: the user's CSRF middleware runs before routes, so the adapter exposes `App.IsTrap` as a `Skipper`. Other frameworks: register traps outside, or exempt them from, CSRF middleware, and test it with the framework's CSRF protection switched on.
 
 ## R23: Responses
 

@@ -182,6 +182,41 @@ func (in *netHTTPIntegration) bootstrap(a *App) {
 		}
 	}
 	in.watchIdx = idx
+	in.warnUnreachableWatches()
+}
+
+// warnUnreachableWatches logs every watch whose path no route on this mux
+// serves: such a watch can never fire. The usual cause is a route inside a
+// sub-mux mounted with Handle("/prefix/", ...), which this mux only knows by
+// the mount pattern.
+func (in *netHTTPIntegration) warnUnreachableWatches() {
+	for _, w := range in.ts.Watches() {
+		want := patternPath(w.Path)
+		u, err := url.Parse(wildcardRe.ReplaceAllString(want, "x"))
+		if err != nil {
+			continue
+		}
+		served, nearest := false, ""
+		for _, m := range []string{"GET", "POST", "PUT", "PATCH", "DELETE"} {
+			_, got := in.mux.Handler(&http.Request{Method: m, URL: u, Header: http.Header{}})
+			if patternPath(got) == want {
+				served = true
+				break
+			}
+			if got != "" && nearest == "" {
+				nearest = got
+			}
+		}
+		if served {
+			continue
+		}
+		hint := ""
+		if nearest != "" {
+			hint = fmt.Sprintf(" (requests to it are served by %q; if that mounts a sub-mux, watch %q or register the routes on the App)",
+				nearest, patternPath(nearest))
+		}
+		in.ts.Logger().Printf("trappsec: watch %s matches no route on this mux and will never fire%s", w.Path, hint)
+	}
 }
 
 func (in *netHTTPIntegration) register(pattern string, h http.HandlerFunc) {

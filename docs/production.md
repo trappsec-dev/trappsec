@@ -81,7 +81,7 @@ _ = ts.Close(ctx)
 
 *   Trap and watch lookups are O(1) hash lookups per request.
 *   Requests with no matching watch are untouched: no body read, no parsing.
-*   For watched routes the body is parsed once and restored for your handler. The Go adapters buffer bodies up to 1 MiB by default (`SetMaxBodyBytes`); larger bodies are passed through uninspected. Set the limit to at least your watched routes' own maximum body size, so padding a request past it cannot bypass inspection. Litestar bodies over 10 MiB are also passed through uninspected; Litestar's default `request_max_body_size` (10 MB) already rejects them, so do not raise it above 10 MiB on apps with body watches. With Gin, call `InstallSentry` before creating route groups.
+*   For watched routes the body is parsed once and restored for your handler. The Go adapters buffer bodies up to 1 MiB by default (`SetMaxBodyBytes`); larger bodies are passed through uninspected. Set the limit to at least your watched routes' own maximum body size, so padding a request past it cannot bypass inspection. Litestar bodies over 10 MiB are also passed through uninspected; Litestar's default `request_max_body_size` (10 MB) already rejects them, so do not raise it above 10 MiB on apps with body watches. With Gin, install trappsec before your own middleware where you can, so `IdentifyUser` sees values that middleware sets; routes registered earlier, including routes in groups created earlier, are still watched.
 *   Handlers run off the request path; the cost of an alert on the request thread is building and enqueueing one small event.
 *   Callbacks (`identify_user`, `override_source_ip`) run on every trap/watch hit, so keep them cheap and non-blocking. They are wrapped in try/catch and never break the request.
 
@@ -102,9 +102,11 @@ Order does not matter for configuration: default responses are resolved at boots
 ## Framework caveats
 
 *   **Django:** traps are `csrf_exempt` so scanners get the decoy response instead of a CSRF error. Under WSGI with multiple threads, bootstrap is lock-guarded.
+*   **CSRF protection elsewhere:** Litestar traps are excluded from `CSRFConfig` automatically and Tornado traps from `xsrf_cookies`. Echo's `middleware.CSRF` runs before every route, so pass the trap skipper: `e.Use(middleware.CSRFWithConfig(middleware.CSRFConfig{Skipper: app.IsTrap}))`. With third-party CSRF middleware (Flask-WTF, csurf, `@fastify/csrf-protection`, crumb, koa-csrf), exempt the trap paths the same way; otherwise a POST to a trap gets a CSRF error instead of the decoy, which disables the trap and gives it away.
 *   **Express / NestJS-Express:** sub-routers are covered. Routes registered before Sentry is installed are covered too; where a framework cannot do that, a startup warning names the uncovered routes.
 *   **Koa / Express trap placement:** traps sit after middleware and before your first route. Middleware that rejects unauthenticated users before routes will also reject unauthenticated scanners, hiding the decoy; keep the decoy reachable if you want `signal` events.
 *   **Gin / Echo:** the default IP is the RemoteAddr host; configure trusted proxies or `OverrideSourceIP`.
+*   **uvicorn (FastAPI, Starlette, Litestar):** uvicorn rewrites the client address from `X-Forwarded-For` for requests from `127.0.0.1` by default (`proxy_headers=True`, `forwarded_allow_ips="127.0.0.1"`). That is right behind a local reverse proxy and wrong if anything local can reach the app directly; set `forwarded_allow_ips` to your proxy's address, or `proxy_headers=False` when there is none.
 *   **Go:** all modules require Go 1.26+ (the OpenTelemetry dependency requires it). net/http traps use method-qualified mux patterns.
 *   **Tornado, Sanic, Litestar, Starlette:** run the app normally; no extra configuration beyond the usual `Sentry(app, ...)` call.
 *   **Logging:** trappsec uses the `trappsec` logger and never calls `logging.basicConfig`. Attach a handler at INFO or above or alerts will not appear in your logs.

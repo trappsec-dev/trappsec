@@ -356,3 +356,22 @@ test("otel: trap/rule attributes, non-recording spans and the real API without a
   const real = new OTELHandler();
   assert.doesNotThrow(() => real.emit({ event: "trappsec.trap_hit", type: "alert", intent: "Recon" }));
 });
+
+test("unknown framework fails loud (R9)", () => {
+  for (const app of [null, {}, { listen() {} }, function () {}]) {
+    assert.throws(() => new Sentry(app, "svc", "test"), /trappsec error: unknown framework/);
+  }
+});
+
+test("a handler that throws does not affect the request or other handlers (R12)", () => {
+  const ts = harness();
+  const seen = [];
+  const errors = [];
+  ts.logger = { ...quiet, error: (...a) => errors.push(a) };
+  ts.service = "svc"; ts.environment = "test"; ts.hostname = "h";
+  delete ts._trigger; // use the real fan-out
+  ts._handlers = [{ emit() { throw new Error("handler exploded"); } }, { emit: (e) => seen.push(e) }];
+  assert.doesNotThrow(() => ts.trigger({}, "reason"));
+  assert.equal(seen.length, 1);
+  assert.equal(errors.length, 1);
+});

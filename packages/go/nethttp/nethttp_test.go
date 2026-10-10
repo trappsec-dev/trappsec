@@ -92,6 +92,12 @@ type syncBuf struct {
 	b  bytes.Buffer
 }
 
+func (s *syncBuf) String() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.b.String()
+}
+
 func (s *syncBuf) Write(p []byte) (int, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -593,4 +599,26 @@ func TestConcurrentRequestsRace(t *testing.T) {
 		}
 		wg.Wait()
 	})
+}
+
+func TestUnreachableWatchIsLogged(t *testing.T) {
+	mux := http.NewServeMux()
+	app := InstallSentry(mux, "svc", "test")
+	logs := &syncBuf{}
+	app.Logger().SetOutput(logs)
+	sub := http.NewServeMux()
+	sub.HandleFunc("POST /users/{id}", func(http.ResponseWriter, *http.Request) {})
+	app.Handle("/api/", http.StripPrefix("/api", sub))
+	app.HandleFunc("POST /items/{id}", func(http.ResponseWriter, *http.Request) {})
+	app.Sentry.Watch("/api/users/{id}").Body("is_admin", core.NoDefault, "priv") // inside the sub-mux
+	app.Sentry.Watch("/items/{id}").Body("is_admin", core.NoDefault, "priv")     // served
+	app.Sentry.Watch("/api/").Body("is_admin", core.NoDefault, "priv")           // the mount itself
+	app.Bootstrap()
+	out := logs.String()
+	if !strings.Contains(out, `watch /api/users/{id} matches no route on this mux`) || !strings.Contains(out, `watch "/api/"`) {
+		t.Fatalf("expected a warning with a hint for the sub-mux route, got: %s", out)
+	}
+	if strings.Contains(out, "watch /items/{id} matches") || strings.Contains(out, "watch /api/ matches") {
+		t.Fatalf("served watches must not warn: %s", out)
+	}
 }

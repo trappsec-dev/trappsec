@@ -29,6 +29,9 @@ func main() {
 	flag.Parse()
 
 	e := echo.New()
+	// Use the socket address for c.RealIP(); echo's default trusts X-Forwarded-For.
+	// Behind a proxy you control, use echo.ExtractIPFromXFFHeader(echo.TrustIPRange(...)).
+	e.IPExtractor = echo.ExtractIPDirect()
 	e.HideBanner = true
 	e.HTTPErrorHandler = func(err error, c echo.Context) {
 		_ = c.String(http.StatusInternalServerError, err.Error())

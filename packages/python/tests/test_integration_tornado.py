@@ -269,3 +269,19 @@ class BypassTests(SentryCase):
             assert json.loads(d["body"]) == {"name": "n"}, ctype
             assert int(d["clen"]) == len(d["body"].encode())
             assert len(self.hits("trappsec.watch_hit")) == n
+
+
+class TestTrapsUnderXsrfCookies(SentryCase):
+    """R22: xsrf_cookies must not turn a POST trap into a 403."""
+    traps = staticmethod(lambda s: s.trap("/admin/backup").methods("POST"))
+
+    def get_app(self):
+        app = super().get_app()
+        app.settings["xsrf_cookies"] = True
+        app.settings["cookie_secret"] = "s"
+        return app
+
+    def test_trap_answers_and_real_route_stays_protected(self):
+        assert self.fetch("/echo", method="POST", body="a=1").code == 403
+        assert self.fetch("/admin/backup", method="POST", body="a=1").code == 401
+        assert len(self.hits("trappsec.trap_hit")) == 1

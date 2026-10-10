@@ -101,3 +101,10 @@ test('fastify: plugin-registered (prefixed) routes are watched by full route pat
     assert.equal(events.length, 1);
     await app.close();
 });
+
+test('fastify: a trap duplicating a real route fails loud (R20)', async () => {
+    const app = Fastify();
+    makeSentry(app).sentry.trap('/real').methods('GET');
+    app.get('/real', async () => 'real');
+    await assert.rejects(app.ready(), /already declared/);
+});

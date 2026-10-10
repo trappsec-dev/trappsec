@@ -27,6 +27,9 @@ func main() {
 	flag.Parse()
 
 	r := gin.New()
+	// Trust no proxy headers: c.ClientIP() is then the socket address. Behind a
+	// proxy you control, list its addresses here instead.
+	_ = r.SetTrustedProxies(nil)
 	r.Use(gin.Recovery())
 	app := trappsec.InstallSentry(r, "GoGinApp", "Development")
 	app.SetDefaultUnauthenticated(401, gin.H{"error": "authentication required"}, "application/json")

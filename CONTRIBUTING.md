@@ -64,6 +64,8 @@ See [`tests/e2e/README.md`](tests/e2e/README.md) for options. If you add an exam
 
 ## Conformance fixtures and package checks
 
+[`tests/rule-coverage.md`](tests/rule-coverage.md) maps each integration rule to the tests that cover it per framework, with the open gaps. Update it when you add a framework or close a gap.
+
 Matching, detection and event-shape rules that must agree across languages live in `tests/conformance/*.json`. Change behaviour there first; the Python, Node and Go unit tests all load those files.
 
 `bash tests/package/run.sh` builds the Python and Node distributions, installs each into a clean environment outside the repo and runs a real app against it. Run it after touching packaging (`pyproject.toml`, `package.json` `files`/`exports`, `index.d.ts`, `index.mjs`).
