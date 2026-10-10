@@ -24,7 +24,7 @@ function safe_value(v) {
     if (t === 'bigint') return String(v);
     if (t === 'string') return truncStr(v);
     if (Array.isArray(v)) return v.slice(0, 20).map(safe_value);
-    if (isPlainObject(v)) return truncStr(safeStringify(v));
+    if (isPlainObject(v)) return truncStr(safeStringify(v, { sortKeys: true }));
     const name = (v && v.constructor && v.constructor.name) || 'Object';
     return `<${name}>`;
 }

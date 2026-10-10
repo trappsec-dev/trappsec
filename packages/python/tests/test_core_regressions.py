@@ -102,7 +102,7 @@ def test_events_always_have_user_role_keys_and_truncate():
     assert len(ev["path"]) == 1027 and ev["path"].endswith("...")
     assert len(ev["user_agent"]) == 1027
     for e in cap.events:
-        assert {"user", "role", "intent", "ip", "user_agent", "path", "method"} <= set(e)
+        assert {"user", "role", "ip", "user_agent", "path", "method"} <= set(e)
         json.dumps(e, default=str)
 
 
@@ -187,7 +187,7 @@ def test_safe_value():
     assert safe_value(UploadFile()) == "<UploadFile>"
     assert safe_value(b"xx") == "<bytes>"
     assert len(safe_value(list(range(50)))) == 20
-    assert safe_value({"d": datetime.date(2026, 1, 1)}) == '{"d": "2026-01-01"}'
+    assert safe_value({"d": datetime.date(2026, 1, 1)}) == '{"d":"2026-01-01"}'
     assert len(safe_value({"k": "v" * 3000})) == 1027
 
 

@@ -56,37 +56,45 @@ func nullable(s string) any {
 	return s
 }
 
-// MarshalJSON emits every key; empty ip/user_agent/intent/reason/user/role,
-// nil found_fields and nil metadata become null. It never fails: a metadata
-// value that cannot be encoded is replaced by its fmt representation.
+// MarshalJSON emits exactly the documented keys for the event: the common
+// keys plus intent (trap_hit), found_fields (watch_hit) or reason, intent and
+// metadata (rule_hit); other event names get all of them. Empty optional
+// values are null and found_fields is never null on a watch_hit. It never
+// fails: a metadata value that cannot be encoded is replaced by its fmt
+// representation.
 func (t TriggerContext) MarshalJSON() ([]byte, error) {
-	var found any
-	if t.Found != nil {
-		found = t.Found
+	m := map[string]any{
+		"timestamp":  t.Timestamp,
+		"event":      t.Event,
+		"type":       t.Type,
+		"path":       truncEllipsis(t.Path),
+		"method":     t.Method,
+		"ip":         nullable(t.IP),
+		"user":       nullable(t.User),
+		"role":       nullable(t.Role),
+		"user_agent": nullable(truncEllipsis(t.UserAgent)),
+		"app":        t.App,
 	}
-	return json.Marshal(struct {
-		Timestamp float64         `json:"timestamp"`
-		Event     string          `json:"event"`
-		Type      string          `json:"type"`
-		Reason    any             `json:"reason"`
-		Intent    any             `json:"intent"`
-		Path      string          `json:"path"`
-		Method    string          `json:"method"`
-		IP        any             `json:"ip"`
-		User      any             `json:"user"`
-		Role      any             `json:"role"`
-		UserAgent any             `json:"user_agent"`
-		Found     any             `json:"found_fields"`
-		Metadata  json.RawMessage `json:"metadata"`
-		App       AppInfo         `json:"app"`
-	}{
-		Timestamp: t.Timestamp, Event: t.Event, Type: t.Type,
-		Reason: nullable(t.Reason), Intent: nullable(t.Intent),
-		Path: truncate(t.Path, maxStringLen), Method: t.Method,
-		IP: nullable(t.IP), User: nullable(t.User), Role: nullable(t.Role),
-		UserAgent: nullable(truncate(t.UserAgent, maxStringLen)),
-		Found:     found, Metadata: safeMarshal(t.Metadata), App: t.App,
-	})
+	var found any = t.Found // a nil slice encodes as null
+	switch t.Event {
+	case "trappsec.trap_hit":
+		m["intent"] = nullable(t.Intent)
+	case "trappsec.watch_hit":
+		if t.Found == nil {
+			found = []FoundField{}
+		}
+		m["found_fields"] = found
+	case "trappsec.rule_hit":
+		m["reason"] = nullable(t.Reason)
+		m["intent"] = nullable(t.Intent)
+		m["metadata"] = safeMarshal(t.Metadata)
+	default:
+		m["intent"] = nullable(t.Intent)
+		m["reason"] = nullable(t.Reason)
+		m["found_fields"] = found
+		m["metadata"] = safeMarshal(t.Metadata)
+	}
+	return json.Marshal(m)
 }
 
 // safeMarshal never fails or panics; unencodable values degrade to a string.
@@ -107,18 +115,6 @@ func safeMarshal(v any) (out json.RawMessage) {
 		}
 	}
 	return b
-}
-
-// truncate shortens s to at most n characters (runes), without a suffix.
-func truncate(s string, n int) string {
-	if len(s) <= n {
-		return s
-	}
-	r := []rune(s)
-	if len(r) <= n {
-		return s
-	}
-	return string(r[:n])
 }
 
 type AppInfo struct {
@@ -408,9 +404,9 @@ func (s *Sentry) newEvent(req any, name string) (TriggerContext, extractedIdenti
 		Timestamp: float64(time.Now().UnixNano()) / 1e9,
 		Event:     name,
 		Type:      "signal",
-		Path:      truncate(request.Path, maxStringLen),
+		Path:      truncEllipsis(request.Path),
 		Method:    request.Method,
-		UserAgent: truncate(request.UserAgent, maxStringLen),
+		UserAgent: truncEllipsis(request.UserAgent),
 		IP:        identity.IP,
 	}
 	if identity.User != "" {
@@ -816,7 +812,8 @@ func SafeValue(v any) any {
 		}
 		return out
 	case reflect.Map:
-		b, err := json.Marshal(v)
+		// Same text as Python and Node: compact, sorted keys, no HTML escaping.
+		b, err := marshalJSON(v)
 		if err != nil {
 			return truncEllipsis(fmt.Sprintf("%v", v))
 		}

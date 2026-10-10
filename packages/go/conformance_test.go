@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"sort"
+	"strings"
 	"testing"
 )
 
@@ -114,5 +115,124 @@ func TestConformanceDetectHoneyFields(t *testing.T) {
 				t.Errorf("touched = %v, want %v", touched, c.Touched)
 			}
 		})
+	}
+}
+
+func TestConformanceEventKeys(t *testing.T) {
+	var fx struct {
+		Common     []string            `json:"common"`
+		App        []string            `json:"app"`
+		Events     map[string][]string `json:"events"`
+		FoundField []string            `json:"found_field"`
+	}
+	loadConformance(t, "event_keys.json", &fx)
+
+	s := NewSentry("svc", "test")
+	capture := &captureHandler{}
+	s.handlers = []EventHandler{capture}
+	s.TriggerTrapEvent(nil, TrapConfig{Path: "/t"})
+	s.TriggerWatchEvent(nil, []FoundField{{Type: "body", Field: "f"}})
+	s.Trigger(nil, "", "", nil)
+
+	keysOf := func(v any) []string {
+		var m map[string]any
+		_ = json.Unmarshal(normalizeRaw(t, v), &m)
+		out := make([]string, 0, len(m))
+		for k := range m {
+			out = append(out, k)
+		}
+		sort.Strings(out)
+		return out
+	}
+	sorted := func(a ...[]string) []string {
+		var out []string
+		for _, x := range a {
+			out = append(out, x...)
+		}
+		sort.Strings(out)
+		return out
+	}
+	if len(capture.events) != 3 {
+		t.Fatalf("events = %d", len(capture.events))
+	}
+	for _, ev := range capture.events {
+		if got, want := keysOf(ev), sorted(fx.Common, fx.Events[ev.Event]); !reflect.DeepEqual(got, want) {
+			t.Errorf("%s keys = %v, want %v", ev.Event, got, want)
+		}
+		if got, want := keysOf(ev.App), sorted(fx.App); !reflect.DeepEqual(got, want) {
+			t.Errorf("app keys = %v, want %v", got, want)
+		}
+		if ev.Event == "trappsec.watch_hit" {
+			if got, want := keysOf(ev.Found[0]), sorted(fx.FoundField); !reflect.DeepEqual(got, want) {
+				t.Errorf("found_field keys = %v, want %v", got, want)
+			}
+		}
+	}
+}
+
+func normalizeRaw(t *testing.T, v any) []byte {
+	t.Helper()
+	b, err := json.Marshal(v)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	return b
+}
+
+func expandRepeat(v any) any {
+	switch t := v.(type) {
+	case []any:
+		out := make([]any, len(t))
+		for i, x := range t {
+			out[i] = expandRepeat(x)
+		}
+		return out
+	case map[string]any:
+		if s, ok := t["$repeat"].(string); ok {
+			n, _ := t["count"].(json.Number).Int64()
+			prefix, _ := t["prefix"].(string)
+			suffix, _ := t["suffix"].(string)
+			return prefix + strings.Repeat(s, int(n)) + suffix
+		}
+		out := make(map[string]any, len(t))
+		for k, x := range t {
+			out[k] = expandRepeat(x)
+		}
+		return out
+	}
+	return v
+}
+
+func TestConformanceSafeValue(t *testing.T) {
+	var fx struct {
+		Cases []struct {
+			Name   string `json:"name"`
+			Input  any    `json:"input"`
+			Output any    `json:"output"`
+		} `json:"cases"`
+		Events map[string]any `json:"events"`
+	}
+	loadConformance(t, "safe_value.json", &fx)
+	for _, c := range fx.Cases {
+		t.Run(c.Name, func(t *testing.T) {
+			got := SafeValue(expandRepeat(c.Input))
+			if g, w := normalizeJSON(t, got), normalizeJSON(t, expandRepeat(c.Output)); !reflect.DeepEqual(g, w) {
+				t.Errorf("SafeValue = %#v, want %#v", g, w)
+			}
+		})
+	}
+
+	ev := expandRepeat(fx.Events).(map[string]any)
+	s := NewSentry("svc", "test")
+	capture := &captureHandler{}
+	s.handlers = []EventHandler{capture}
+	s.Request.Path = func(any) string { return ev["path"].(string) }
+	s.Request.UserAgent = func(any) string { return ev["user_agent"].(string) }
+	s.Trigger(nil, "reason", "", nil)
+	var m map[string]any
+	_ = json.Unmarshal(normalizeRaw(t, capture.events[0]), &m)
+	if m["path"] != ev["path_out"] || m["user_agent"] != ev["user_agent_out"] {
+		t.Errorf("event path/user_agent: got %d/%d chars, want %d/%d",
+			len(m["path"].(string)), len(m["user_agent"].(string)), len(ev["path_out"].(string)), len(ev["user_agent_out"].(string)))
 	}
 }

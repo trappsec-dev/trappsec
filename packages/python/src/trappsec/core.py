@@ -77,8 +77,14 @@ def safe_value(v):
     if isinstance(v, (list, tuple)):
         return [safe_value(x) for x in list(v)[:_MAX_LIST]]
     if isinstance(v, dict):
+        # Compact, sorted, unescaped: the same text Node and Go produce (R19).
+        opts = {"default": str, "separators": (",", ":"), "ensure_ascii": False}
         try:
-            return _truncate_text(json.dumps(v, default=str), _MAX_STR)
+            try:
+                text = json.dumps(v, sort_keys=True, **opts)
+            except TypeError:  # keys of mixed types cannot be sorted
+                text = json.dumps(v, **opts)
+            return _truncate_text(text, _MAX_STR)
         except Exception:
             return "<dict>"
     return "<%s>" % type(v).__name__
@@ -259,7 +265,6 @@ class Sentry:
             "method": request_ctx["method"],
             "user_agent": _truncate_text(ua, _MAX_STR) if isinstance(ua, str) else ua,
             "ip": identity_ctx["ip"],
-            "intent": None,
             "user": None,
             "role": None,
         }

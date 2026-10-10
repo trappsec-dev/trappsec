@@ -605,7 +605,7 @@ func TestDetectHoneyFieldsAnyShapes(t *testing.T) {
 // ---- events ---------------------------------------------------------------
 
 func TestEventJSONHasNullForEmptyFields(t *testing.T) {
-	b, err := json.Marshal(TriggerContext{Event: "trappsec.watch_hit", Type: "signal", Path: "/p", Method: "GET"})
+	b, err := json.Marshal(TriggerContext{Event: "trappsec.rule_hit", Type: "signal", Path: "/p", Method: "GET"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -613,16 +613,17 @@ func TestEventJSONHasNullForEmptyFields(t *testing.T) {
 	if err := json.Unmarshal(b, &m); err != nil {
 		t.Fatal(err)
 	}
-	for _, k := range []string{"ip", "user_agent", "intent", "user", "role", "reason", "metadata", "found_fields"} {
+	for _, k := range []string{"ip", "user_agent", "intent", "user", "role", "reason", "metadata"} {
 		v, ok := m[k]
 		if !ok || v != nil {
 			t.Errorf("key %q must be present and null, got %v (present=%v)", k, v, ok)
 		}
 	}
-	for _, k := range []string{"timestamp", "event", "type", "path", "method", "app"} {
-		if _, ok := m[k]; !ok {
-			t.Errorf("key %q missing", k)
-		}
+	b, _ = json.Marshal(TriggerContext{Event: "trappsec.watch_hit"})
+	m = nil
+	_ = json.Unmarshal(b, &m)
+	if f, ok := m["found_fields"].([]any); !ok || len(f) != 0 {
+		t.Errorf("watch_hit found_fields must be an empty array, got %#v", m["found_fields"])
 	}
 }
 
@@ -635,8 +636,8 @@ func TestEventJSONNeverFailsAndTruncates(t *testing.T) {
 	}
 	var m map[string]any
 	_ = json.Unmarshal(b, &m)
-	if len(m["path"].(string)) != 1024 || len(m["user_agent"].(string)) != 1024 {
-		t.Fatal("path/user_agent not truncated to 1024")
+	if m["path"] != strings.Repeat("p", 1024)+"..." || m["user_agent"] != strings.Repeat("u", 1024)+"..." {
+		t.Fatal("path/user_agent not truncated to 1024 + \"...\"")
 	}
 }
 
@@ -647,8 +648,8 @@ func TestSentryTruncatesPathAndUserAgentInEvents(t *testing.T) {
 	s.Request.Path = func(any) string { return strings.Repeat("a", 5000) }
 	s.Request.UserAgent = func(any) string { return strings.Repeat("b", 5000) }
 	s.Trigger(nil, "r", "i", nil)
-	if len(c.events[0].Path) != 1024 || len(c.events[0].UserAgent) != 1024 {
-		t.Fatal("not truncated")
+	if c.events[0].Path != strings.Repeat("a", 1024)+"..." || c.events[0].UserAgent != strings.Repeat("b", 1024)+"..." {
+		t.Fatal("not truncated to 1024 + \"...\"")
 	}
 }
 

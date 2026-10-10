@@ -5,6 +5,8 @@ import os
 import pathlib
 import sys
 
+from unittest import mock
+
 import pytest
 
 try:
@@ -56,3 +58,62 @@ def test_detect_honey_fields(case):
     assert sorted(found, key=key) == sorted(expected, key=key)
     assert data == case["result"]
     assert touched is case["touched"]
+
+
+def _event_keys_fixture():
+    path = CONFORMANCE / "event_keys.json"
+    if not path.exists() and not os.environ.get("CI"):
+        pytest.skip("event_keys.json not found (outside the trappsec repository)")
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def test_event_keys():
+    fx = _event_keys_fixture()
+    with mock.patch.object(Sentry, "_register", lambda self, app: None):
+        ts = Sentry(object(), "svc", "test")
+    events = []
+    ts._handlers = [type("Cap", (), {"emit": lambda self, e: events.append(e)})()]
+    ts._trigger_trap_event(None, ts.trap("/t").build())
+    ts._trigger_watch_event(None, [{"type": "body", "field": "f", "value": 1, "intent": None}])
+    ts.trigger(None, "reason")
+
+    assert [e["event"] for e in events] == list(fx["events"])
+    for e in events:
+        assert sorted(e) == sorted(fx["common"] + fx["events"][e["event"]]), e["event"]
+        assert sorted(e["app"]) == sorted(fx["app"])
+    assert sorted(events[1]["found_fields"][0]) == sorted(fx["found_field"])
+
+
+def _expand(v):
+    """Expand {"$repeat": s, "count": n, "prefix": p, "suffix": x} placeholders."""
+    if isinstance(v, dict):
+        if "$repeat" in v:
+            return v.get("prefix", "") + v["$repeat"] * v["count"] + v.get("suffix", "")
+        return {k: _expand(x) for k, x in v.items()}
+    if isinstance(v, list):
+        return [_expand(x) for x in v]
+    return v
+
+
+@pytest.mark.parametrize("case", _load("safe_value.json"), ids=lambda c: c["name"] if c else "missing")
+def test_safe_value(case):
+    from trappsec.core import safe_value
+
+    assert safe_value(_expand(case["input"])) == _expand(case["output"])
+
+
+def test_event_path_and_user_agent_truncation():
+    path = CONFORMANCE / "safe_value.json"
+    if not path.exists() and not os.environ.get("CI"):
+        pytest.skip("safe_value.json not found (outside the trappsec repository)")
+    fx = _expand(json.loads(path.read_text(encoding="utf-8"))["events"])
+    with mock.patch.object(Sentry, "_register", lambda self, app: None):
+        ts = Sentry(object(), "svc", "test")
+    ts.request.path = lambda r: fx["path"]
+    ts.request.user_agent = lambda r: fx["user_agent"]
+    ts.request.method = lambda r: "GET"
+    events = []
+    ts._handlers = [type("Cap", (), {"emit": lambda self, e: events.append(e)})()]
+    ts.trigger(None, "reason")
+    assert events[0]["path"] == fx["path_out"]
+    assert events[0]["user_agent"] == fx["user_agent_out"]

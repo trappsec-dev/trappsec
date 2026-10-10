@@ -48,3 +48,60 @@ for (const c of load("detect_honey_fields.json")) {
     assert.equal(touched, c.touched);
   });
 }
+
+test("event keys match tests/conformance/event_keys.json", (t) => {
+  const file = path.join(CONFORMANCE, "event_keys.json");
+  if (!fs.existsSync(file) && !process.env.CI) return t.skip("event_keys.json not found");
+  const fx = JSON.parse(fs.readFileSync(file, "utf8"));
+
+  const ts = Object.create(Sentry.prototype);
+  ts.logger = quiet;
+  ts.service = "svc"; ts.environment = "test"; ts.hostname = "h";
+  ts.identity = { ip: null, auth: null };
+  ts.requestContext = { path: () => "/p", userAgent: () => null, method: () => "GET" };
+  const events = [];
+  ts._handlers = [{ emit: (e) => events.push(e) }];
+  const resp = { status_code: 401, response_body: {}, mime_type: "application/json" };
+  ts._trigger_trap_event({}, { intent: null, "response.authenticated": resp, "response.unauthenticated": resp });
+  ts._trigger_watch_event({}, [{ type: "body", field: "f", value: 1, intent: null }]);
+  ts.trigger({}, "reason");
+
+  assert.deepEqual(events.map((e) => e.event), Object.keys(fx.events));
+  const sorted = (a) => [...a].sort();
+  for (const e of events) {
+    assert.deepEqual(sorted(Object.keys(e)), sorted([...fx.common, ...fx.events[e.event]]), e.event);
+    assert.deepEqual(sorted(Object.keys(e.app)), sorted(fx.app));
+  }
+  assert.deepEqual(sorted(Object.keys(events[1].found_fields[0])), sorted(fx.found_field));
+});
+
+function expand(v) {
+  if (Array.isArray(v)) return v.map(expand);
+  if (v !== null && typeof v === "object") {
+    if ("$repeat" in v) return (v.prefix || "") + v.$repeat.repeat(v.count) + (v.suffix || "");
+    return Object.fromEntries(Object.entries(v).map(([k, x]) => [k, expand(x)]));
+  }
+  return v;
+}
+
+const { safe_value } = require("../src/core");
+for (const c of load("safe_value.json")) {
+  test(`safe_value: ${c.name}`, () => {
+    assert.deepEqual(safe_value(expand(c.input)), expand(c.output));
+  });
+}
+
+test("event path and user_agent truncation", (t) => {
+  const file = path.join(CONFORMANCE, "safe_value.json");
+  if (!fs.existsSync(file) && !process.env.CI) return t.skip("safe_value.json not found");
+  const fx = expand(JSON.parse(fs.readFileSync(file, "utf8")).events);
+  const ts = Object.create(Sentry.prototype);
+  ts.logger = quiet;
+  ts.identity = { ip: null, auth: null };
+  ts.requestContext = { path: () => fx.path, userAgent: () => fx.user_agent, method: () => "GET" };
+  const events = [];
+  ts._handlers = [{ emit: (e) => events.push(e) }];
+  ts.trigger({}, "reason");
+  assert.equal(events[0].path, fx.path_out);
+  assert.equal(events[0].user_agent, fx.user_agent_out);
+});
