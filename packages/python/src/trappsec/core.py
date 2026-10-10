@@ -1,5 +1,6 @@
 import time
 import json
+import decimal
 import math
 import typing
 import socket
@@ -19,16 +20,38 @@ def _is_number(v) -> bool:
     return isinstance(v, (int, float)) and not isinstance(v, bool)
 
 
+def _es_number(v: float) -> str:
+    """ECMAScript Number::toString(v): the float text JavaScript (and so Node) produces."""
+    if math.isnan(v):
+        return "NaN"
+    if math.isinf(v):
+        return "Infinity" if v > 0 else "-Infinity"
+    if v == 0:
+        return "0"
+    sign = "-" if v < 0 else ""
+    t = decimal.Decimal(repr(abs(v))).normalize().as_tuple()  # repr: shortest round-trip digits
+    digits = "".join(str(d) for d in t.digits)
+    k, n = len(digits), len(digits) + t.exponent  # value = 0.digits * 10**n
+    if k <= n <= 21:
+        text = digits + "0" * (n - k)
+    elif 0 < n <= 21:
+        text = digits[:n] + "." + digits[n:]
+    elif -6 < n <= 0:
+        text = "0." + "0" * -n + digits
+    else:
+        exp = ("+" if n - 1 >= 0 else "-") + str(abs(n - 1))
+        text = (digits if k == 1 else digits[0] + "." + digits[1:]) + "e" + exp
+    return sign + text
+
+
 def _canonical(v) -> typing.Optional[str]:
-    """Canonical string form of a bool/number, or None for anything else."""
+    """Canonical string form of a bool/number, or None for anything else (R17)."""
     if isinstance(v, bool):
         return "true" if v else "false"
     if isinstance(v, int):
         return str(v)
     if isinstance(v, float):
-        if math.isfinite(v) and v == int(v):
-            return str(int(v))
-        return repr(v)
+        return _es_number(v)
     return None
 
 

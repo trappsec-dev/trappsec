@@ -714,12 +714,52 @@ func canonical(v any) (string, bool) {
 		return strconv.FormatUint(n.u, 10), true
 	case n.isInt:
 		return strconv.FormatInt(n.i, 10), true
-	case math.IsNaN(n.f) || math.IsInf(n.f, 0):
-		return strconv.FormatFloat(n.f, 'g', -1, 64), true
-	case n.f == math.Trunc(n.f) && math.Abs(n.f) < 1e15:
-		return strconv.FormatInt(int64(n.f), 10), true
 	}
-	return strconv.FormatFloat(n.f, 'f', -1, 64), true
+	return esNumber(n.f), true
+}
+
+// esNumber formats f like ECMAScript Number::toString, the text JavaScript
+// (and so the Node SDK) produces, so canonical matching agrees across SDKs.
+func esNumber(f float64) string {
+	switch {
+	case math.IsNaN(f):
+		return "NaN"
+	case math.IsInf(f, 1):
+		return "Infinity"
+	case math.IsInf(f, -1):
+		return "-Infinity"
+	case f == 0:
+		return "0"
+	}
+	sign := ""
+	if f < 0 {
+		sign, f = "-", -f
+	}
+	// Shortest round-trip digits: "d.ddde±XX".
+	mant, expText, _ := strings.Cut(strconv.FormatFloat(f, 'e', -1, 64), "e")
+	digits := strings.Replace(mant, ".", "", 1)
+	e, _ := strconv.Atoi(expText)
+	k, n := len(digits), e+1 // value = 0.digits * 10^n
+	var text string
+	switch {
+	case k <= n && n <= 21:
+		text = digits + strings.Repeat("0", n-k)
+	case 0 < n && n <= 21:
+		text = digits[:n] + "." + digits[n:]
+	case -6 < n && n <= 0:
+		text = "0." + strings.Repeat("0", -n) + digits
+	default:
+		exp := strconv.Itoa(n - 1)
+		if n-1 >= 0 {
+			exp = "+" + exp
+		}
+		if k == 1 {
+			text = digits + "e" + exp
+		} else {
+			text = digits[:1] + "." + digits[1:] + "e" + exp
+		}
+	}
+	return sign + text
 }
 
 // valuesMatch implements C3 values_match(actual, expected).

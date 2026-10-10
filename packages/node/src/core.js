@@ -5,9 +5,12 @@ const { LogHandler, WebhookHandler, SlackHandler, OTELHandler, safeStringify } =
 const MAX_STR = 1024;
 const hasOwn = (o, k) => o != null && Object.prototype.hasOwnProperty.call(o, k);
 
+/** Truncate to `limit` code points (as Python and Go do), never splitting a surrogate pair. */
 function truncStr(v, limit = MAX_STR) {
     if (typeof v !== 'string') return v == null ? null : v;
-    return v.length > limit ? v.slice(0, limit) + "..." : v;
+    if (v.length <= limit) return v; // UTF-16 length >= code point count
+    const points = Array.from(v);
+    return points.length > limit ? points.slice(0, limit).join("") + "..." : v;
 }
 
 function isPlainObject(v) {

@@ -1,5 +1,5 @@
 {
-  "description": "Shared R19 cases for safe_value(v), the sanitizer applied to found_fields[].value. {\"$repeat\": s, \"count\": n, \"prefix\": p, \"suffix\": x} stands for p, then s repeated n times, then x (prefix and suffix optional). Objects render as compact JSON with sorted keys and no HTML escaping. Strings are ASCII here because languages count non-ASCII length differently (code points, runes, UTF-16 units). Values JSON cannot express (NaN, uploads, bytes) are covered by each language's own tests.",
+  "description": "Shared R19 cases for safe_value(v), the sanitizer applied to found_fields[].value. {\"$repeat\": s, \"count\": n, \"prefix\": p, \"suffix\": x} stands for p, then s repeated n times, then x (prefix and suffix optional). Objects render as compact JSON with sorted keys and no HTML escaping. String lengths count Unicode code points (never UTF-16 units or bytes). Values JSON cannot express (NaN, uploads, bytes) are covered by each language's own tests.",
   "max_string": 1024,
   "max_list": 20,
   "truncation_suffix": "...",
@@ -14,6 +14,8 @@
     {"name": "empty string", "input": "", "output": ""},
     {"name": "string at the limit", "input": {"$repeat": "a", "count": 1024}, "output": {"$repeat": "a", "count": 1024}},
     {"name": "string over the limit", "input": {"$repeat": "a", "count": 1025}, "output": {"$repeat": "a", "count": 1024, "suffix": "..."}},
+    {"name": "non-ASCII string over the limit is cut by code points", "input": {"$repeat": "\u00e9\ud83d\ude00", "count": 600},
+     "output": {"$repeat": "\u00e9\ud83d\ude00", "count": 512, "suffix": "..."}},
     {"name": "markup in strings is kept", "input": "<b>&amp;</b>", "output": "<b>&amp;</b>"},
 
     {"name": "list of scalars", "input": ["a", 1, true, null], "output": ["a", 1, true, null]},

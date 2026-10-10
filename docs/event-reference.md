@@ -180,7 +180,7 @@ A watch with a default value fires when the request value differs from it. Compa
 
 *   Equal values match.
 *   Numbers match numerically and booleans are never numbers: `1` matches `1.0`; `true` does not match `1`.
-*   A string matches a bool/number when it equals that value's canonical form: `"true"`/`"false"` (lowercase), `"5"` (not `"5.0"`), otherwise the shortest representation. So a form field `is_admin=false` matches a default of `false`.
+*   A string matches a bool/number when it equals that value's canonical form: `"true"`/`"false"` (lowercase), `"5"` (not `"5.0"`); other floats as JavaScript writes them (`"0.1"`, `"1e-7"`, `"1e+21"`), identically in every SDK. So a form field `is_admin=false` matches a default of `false`.
 *   Strings compare exactly (no trimming, no case folding): `"False"` does **not** match `false`.
 *   **Duplicate keys** (`?role=user&role=admin`, repeated form fields): one value is compared as a scalar; with several, the request is a violation unless every value matches. All occurrences are stripped.
 *   **JSON keys**: Python and Node match keys case-sensitively. Go matches case-insensitively (`IsAdmin`, `is_admin` and `IS_ADMIN` all hit), because `encoding/json` binds struct fields that way.
