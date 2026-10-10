@@ -1,11 +1,23 @@
 package trappsec
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"sync/atomic"
 	"testing"
+	"time"
 )
+
+// flush closes the handler, waiting for its asynchronous queue to drain.
+func flush(t *testing.T, h interface{ Close(context.Context) error }) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := h.Close(ctx); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+}
 
 func boolPtr(v bool) *bool {
 	return &v
@@ -28,6 +40,7 @@ func TestWebhookHandlerDefaultsToAlertsOnly(t *testing.T) {
 		t.Fatalf("emit returned unexpected error: %v", err)
 	}
 
+	flush(t, h)
 	if got := atomic.LoadInt32(&posts); got != 0 {
 		t.Fatalf("expected no webhook posts for signal event, got %d", got)
 	}
@@ -50,6 +63,7 @@ func TestWebhookHandlerCanDisableAlertsOnly(t *testing.T) {
 		t.Fatalf("emit returned unexpected error: %v", err)
 	}
 
+	flush(t, h)
 	if got := atomic.LoadInt32(&posts); got != 1 {
 		t.Fatalf("expected one webhook post for signal event, got %d", got)
 	}
