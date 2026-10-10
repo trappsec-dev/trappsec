@@ -261,3 +261,56 @@ def test_encoding_and_content_type_bypasses_stripped(ctype, raw):
         assert json.loads(d["body"]) == {"name": "n"}
         assert int(d["clen"]) == len(d["body"].encode())
         assert len(hits(cap, "trappsec.watch_hit")) == 1
+
+
+def test_body_over_inspect_limit_passes_through_intact(monkeypatch):
+    import trappsec.integrations.litestar as ls_integration
+
+    monkeypatch.setattr(ls_integration, "MAX_INSPECT_BYTES", 200)
+    app, s, cap = make(watch_x)
+    big = json.dumps({"x": "evil", "pad": "a" * 5000}).encode()
+    with TestClient(app) as c:
+        d = c.post("/echo", content=big, headers={"content-type": "application/json"}).json()
+    assert d["body"] == big.decode()
+    assert hits(cap, "trappsec.watch_hit") == []
+
+
+def test_streamed_body_over_inspect_limit_is_replayed_intact(monkeypatch):
+    """No content-length: the chunks read before the limit are replayed, then the rest streams."""
+    import asyncio
+    import trappsec.integrations.litestar as ls_integration
+
+    monkeypatch.setattr(ls_integration, "MAX_INSPECT_BYTES", 200)
+    app, s, cap = make(watch_x)
+    big = json.dumps({"x": "evil", "pad": "a" * 5000}).encode()
+    chunks = [big[i:i + 150] for i in range(0, len(big), 150)]
+    messages = [{"type": "http.request", "body": ch, "more_body": i < len(chunks) - 1} for i, ch in enumerate(chunks)]
+    sent = []
+
+    async def receive():
+        return messages.pop(0) if messages else {"type": "http.disconnect"}
+
+    async def send(message):
+        sent.append(message)
+
+    scope = {
+        "type": "http", "asgi": {"version": "3.0"}, "http_version": "1.1", "method": "POST",
+        "scheme": "http", "path": "/echo", "raw_path": b"/echo", "root_path": "", "query_string": b"",
+        "headers": [(b"host", b"testserver"), (b"content-type", b"application/json")],
+        "client": ("127.0.0.1", 1234), "server": ("testserver", 80), "state": {},
+    }
+    asyncio.run(app(scope, receive, send))
+    body = b"".join(m.get("body", b"") for m in sent if m["type"] == "http.response.body")
+    assert json.loads(body)["body"] == big.decode()
+    assert hits(cap, "trappsec.watch_hit") == []
+
+
+def test_body_under_inspect_limit_is_inspected(monkeypatch):
+    import trappsec.integrations.litestar as ls_integration
+
+    monkeypatch.setattr(ls_integration, "MAX_INSPECT_BYTES", 200)
+    app, s, cap = make(watch_x)
+    with TestClient(app) as c:
+        d = c.post("/echo", json={"x": "evil", "pad": "a" * 50}).json()
+    assert d["json"] == {"pad": "a" * 50}
+    assert len(hits(cap, "trappsec.watch_hit")) == 1

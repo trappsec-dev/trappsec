@@ -594,3 +594,25 @@ func TestConcurrentRequestsRace(t *testing.T) {
 		wg.Wait()
 	})
 }
+
+func TestJSONTrailingDataCannotBypassBinder(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	engine := gin.New()
+	app := InstallSentry(engine, "svc", "test")
+	logs := &syncBuf{}
+	app.Logger().SetOutput(logs)
+	var bound map[string]any
+	app.POST("/submit", func(c *gin.Context) { bound = nil; _ = c.ShouldBindJSON(&bound); c.Status(200) })
+	app.Sentry.Watch("/submit").Body("is_admin", core.NoDefault, "priv")
+	for i, b := range []string{`{"is_admin":true} x`, `{"is_admin":true}{}`, `{"name":"a"}` + "\n" + `{"is_admin":true}`} {
+		req := httptest.NewRequest("POST", "/submit", strings.NewReader(b))
+		req.Header.Set("Content-Type", "application/json")
+		app.ServeHTTP(httptest.NewRecorder(), req)
+		if _, ok := bound["is_admin"]; ok {
+			t.Fatalf("%q: honey field reached the handler", b)
+		}
+		if got := logs.count("trappsec.watch_hit"); got != i+1 {
+			t.Fatalf("%q: watch events = %d, want %d", b, got, i+1)
+		}
+	}
+}

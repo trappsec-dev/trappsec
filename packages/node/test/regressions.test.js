@@ -329,3 +329,30 @@ test("otel attributes are valid types", () => {
   assert.equal("metadata.n" in attrs, false);
   assert.equal("trappsec.user" in attrs, false);
 });
+
+test("otel: trap/rule attributes, non-recording spans and the real API without an SDK", () => {
+  const attrs = {};
+  let recording = true;
+  const span = { isRecording: () => recording, setAttribute: (k, v) => { attrs[k] = v; }, addEvent: () => {} };
+  const h = Object.create(OTELHandler.prototype);
+  h.otel = { trace: { getSpan: () => span }, context: { active: () => ({}) } };
+
+  h.emit({ event: "trappsec.trap_hit", type: "signal", intent: "Recon", user: null, role: null, ip: "1.2.3.4" });
+  assert.equal(attrs["trappsec.detected"], true);
+  assert.equal(attrs["trappsec.event"], "trappsec.trap_hit");
+  assert.equal(attrs["trappsec.intent"], "Recon");
+  assert.equal(attrs["trappsec.ip"], "1.2.3.4");
+
+  h.emit({ event: "trappsec.rule_hit", type: "alert", intent: "Abuse", reason: "too many", user: "u" });
+  assert.equal(attrs["trappsec.reason"], "too many");
+  assert.equal(attrs["trappsec.user"], "u");
+
+  for (const k of Object.keys(attrs)) delete attrs[k];
+  recording = false;
+  h.emit({ event: "trappsec.trap_hit", type: "alert", intent: "Recon" });
+  assert.deepEqual(attrs, {});
+
+  // Real @opentelemetry/api with no SDK registered: no active span, emit is a no-op.
+  const real = new OTELHandler();
+  assert.doesNotThrow(() => real.emit({ event: "trappsec.trap_hit", type: "alert", intent: "Recon" }));
+});

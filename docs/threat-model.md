@@ -36,7 +36,7 @@ Hits with an identified user are `alert`s; hits without one are `signal`s (see [
 *   Anything that never reaches your application: attacks blocked or handled by a CDN, WAF or gateway, or traffic to other services.
 *   Injection, XSS, SSRF, authentication bypass and other vulnerability classes. A trap only tells you someone went somewhere they should not.
 *   Attackers who only use documented, legitimate behavior (for example, scraping an endpoint they are allowed to call).
-*   Request bodies beyond what the integration parses: unsupported content types, bodies larger than the Go adapters' size limit (1 MiB by default), or multipart parts that are not text fields are not inspected.
+*   Request bodies beyond what the integration parses: unsupported content types, bodies larger than the Go adapters' size limit (1 MiB by default) or the Litestar integration's (10 MiB, just above Litestar's own default `request_max_body_size` of 10 MB, so by default Litestar rejects such bodies first), or multipart parts that are not text fields are not inspected.
 *   A compromised host. An attacker with code execution can read configuration and silence the sensor. Use heartbeats to notice silence.
 *   Attribution accuracy beyond what your `identify_user` and IP extraction provide.
 

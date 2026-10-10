@@ -320,37 +320,60 @@ func marshalJSON(v any) ([]byte, error) {
 }
 
 func inspectJSON(s *Sentry, r *http.Request, reqObj any, rules map[string]WatchFieldRule, data []byte) []FoundField {
+	// Inspect every top-level value, not just the first: json.Decoder (used by
+	// Gin's and Echo's binders) reads the first value and ignores what
+	// follows, so `{"honey":1} x` or `{"honey":1}{}` must not skip inspection.
 	dec := json.NewDecoder(bytes.NewReader(data))
 	dec.UseNumber() // keep large integers exact
-	var v any
-	if err := dec.Decode(&v); err != nil {
-		return nil
+	var values []any
+	var tail []byte
+	for {
+		start := dec.InputOffset()
+		var v any
+		if err := dec.Decode(&v); err != nil {
+			if err != io.EOF {
+				tail = data[start:] // unparseable remainder, kept verbatim
+			}
+			break
+		}
+		values = append(values, v)
 	}
-	if _, err := dec.Token(); err != io.EOF {
-		return nil // trailing garbage: not something we can safely rewrite
+	if len(values) == 0 {
+		return nil
 	}
 	var found []FoundField
 	touchedAny := false
-	switch t := v.(type) {
-	case map[string]any:
-		_, f, touched := detect(s, t, rules, reqObj, "body")
-		found, touchedAny = f, touched
-	case []any:
-		for _, el := range t {
-			if m, ok := el.(map[string]any); ok {
-				_, f, touched := detect(s, m, rules, reqObj, "body")
-				found = append(found, f...)
-				touchedAny = touchedAny || touched
+	for _, v := range values {
+		switch t := v.(type) {
+		case map[string]any:
+			_, f, touched := detect(s, t, rules, reqObj, "body")
+			found = append(found, f...)
+			touchedAny = touchedAny || touched
+		case []any:
+			for _, el := range t {
+				if m, ok := el.(map[string]any); ok {
+					_, f, touched := detect(s, m, rules, reqObj, "body")
+					found = append(found, f...)
+					touchedAny = touchedAny || touched
+				}
 			}
 		}
-	default:
-		return nil
 	}
 	if touchedAny {
-		if nb, err := marshalJSON(v); err == nil {
-			ResetBody(r, nb)
-			r.Form, r.PostForm = nil, nil
+		var out bytes.Buffer
+		for i, v := range values {
+			nb, err := marshalJSON(v)
+			if err != nil {
+				return found
+			}
+			if i > 0 {
+				out.WriteByte('\n')
+			}
+			out.Write(nb)
 		}
+		out.Write(tail)
+		ResetBody(r, out.Bytes())
+		r.Form, r.PostForm = nil, nil
 	}
 	return found
 }

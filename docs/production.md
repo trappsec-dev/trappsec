@@ -81,7 +81,7 @@ _ = ts.Close(ctx)
 
 *   Trap and watch lookups are O(1) hash lookups per request.
 *   Requests with no matching watch are untouched: no body read, no parsing.
-*   For watched routes the body is parsed once and restored for your handler. The Go adapters buffer bodies up to 1 MiB by default (`SetMaxBodyBytes`); larger bodies are passed through uninspected. Set the limit to at least your watched routes' own maximum body size, so padding a request past it cannot bypass inspection. With Gin, call `InstallSentry` before creating route groups.
+*   For watched routes the body is parsed once and restored for your handler. The Go adapters buffer bodies up to 1 MiB by default (`SetMaxBodyBytes`); larger bodies are passed through uninspected. Set the limit to at least your watched routes' own maximum body size, so padding a request past it cannot bypass inspection. Litestar bodies over 10 MiB are also passed through uninspected; Litestar's default `request_max_body_size` (10 MB) already rejects them, so do not raise it above 10 MiB on apps with body watches. With Gin, call `InstallSentry` before creating route groups.
 *   Handlers run off the request path; the cost of an alert on the request thread is building and enqueueing one small event.
 *   Callbacks (`identify_user`, `override_source_ip`) run on every trap/watch hit, so keep them cheap and non-blocking. They are wrapped in try/catch and never break the request.
 
