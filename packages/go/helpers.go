@@ -5,18 +5,26 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math"
+	"mime"
 	"mime/multipart"
 	"net/http"
+	"net/textproto"
 	"net/url"
 	"strings"
 )
 
 const defaultMaxMemory = 32 << 20 // 32 MB, matches http.defaultMaxMemory
 
+// DefaultMaxBodyBytes is the default limit on request bodies that watch
+// inspection will buffer. Larger bodies are passed through uninspected.
+const DefaultMaxBodyBytes int64 = 1 << 20
+
 // ParseMultipartFields parses the multipart form from r and returns the text
-// (non-file) fields as a map[string]any suitable for DetectHoneyFields.
-// r.MultipartForm is populated as a side effect so RebuildMultipartBody can
-// access the original file parts later.
+// (non-file) fields as a map[string]any.
+//
+// Deprecated: InspectWatch parses multipart bodies itself without touching
+// temp files. Kept for API compatibility.
 func ParseMultipartFields(r *http.Request) map[string]any {
 	if err := r.ParseMultipartForm(defaultMaxMemory); err != nil {
 		return nil
@@ -24,15 +32,15 @@ func ParseMultipartFields(r *http.Request) map[string]any {
 	return QueryToMap(r.PostForm)
 }
 
-// RebuildMultipartBody rewrites r.Body as a new multipart message that contains
-// only the text keys present in sanitized (watched keys already removed) plus
-// all original file parts unchanged.  The Content-Type header is updated with
-// the new boundary.
+// RebuildMultipartBody rewrites r.Body as a multipart message holding only the
+// text keys present in sanitized plus the original file parts (with their
+// original part headers). Temp files created by ParseMultipartForm are removed.
+//
+// Deprecated: InspectWatch rewrites multipart bodies itself.
 func RebuildMultipartBody(r *http.Request, sanitized map[string]any) {
 	var buf bytes.Buffer
 	writer := multipart.NewWriter(&buf)
 
-	// Write text fields from sanitized map.
 	for k, v := range sanitized {
 		switch vv := v.(type) {
 		case []any:
@@ -48,11 +56,10 @@ func RebuildMultipartBody(r *http.Request, sanitized map[string]any) {
 		}
 	}
 
-	// Copy original file parts unchanged.
 	if r.MultipartForm != nil && r.MultipartForm.File != nil {
-		for fieldName, fileHeaders := range r.MultipartForm.File {
+		for _, fileHeaders := range r.MultipartForm.File {
 			for _, fh := range fileHeaders {
-				part, err := writer.CreateFormFile(fieldName, fh.Filename)
+				part, err := writer.CreatePart(fh.Header)
 				if err != nil {
 					continue
 				}
@@ -69,8 +76,9 @@ func RebuildMultipartBody(r *http.Request, sanitized map[string]any) {
 	writer.Close()
 	ResetBody(r, buf.Bytes())
 	r.Header.Set("Content-Type", writer.FormDataContentType())
-	// Invalidate parsed form caches so downstream ParseMultipartForm/ParseForm
-	// re-parse from the rewritten body instead of returning stale values.
+	if r.MultipartForm != nil {
+		_ = r.MultipartForm.RemoveAll()
+	}
 	r.MultipartForm = nil
 	r.PostForm = nil
 	r.Form = nil
@@ -123,20 +131,304 @@ func MapToQuery(data map[string]any) string {
 	return vals.Encode()
 }
 
-// ReadBody reads r.Body fully and restores it so downstream handlers can re-read it.
+// ReadBody reads r.Body fully and restores it so downstream handlers can re-read
+// it. On a read error it returns nil and restores the body so the downstream
+// handler sees the same bytes followed by the same error.
 func ReadBody(r *http.Request) []byte {
-	if r.Body == nil {
+	data, ok := ReadBodyLimit(r, math.MaxInt64-1)
+	if !ok {
 		return nil
 	}
-	data, _ := io.ReadAll(r.Body)
-	ResetBody(r, data)
 	return data
 }
 
-// ResetBody replaces r.Body with a fresh reader containing data.
+// ReadBodyLimit reads at most limit bytes of r.Body. When the whole body was
+// read within the limit it returns (data, true). On a read error or when the
+// body exceeds limit it returns (nil, false); in every case r.Body is restored
+// so downstream consumers observe the original stream intact (bytes already
+// read, then the remainder or the original error).
+func ReadBodyLimit(r *http.Request, limit int64) ([]byte, bool) {
+	if r.Body == nil || r.Body == http.NoBody {
+		return nil, true
+	}
+	orig := r.Body
+	data, err := io.ReadAll(io.LimitReader(orig, limit+1))
+	if err != nil {
+		r.Body = &readCloser{io.MultiReader(bytes.NewReader(data), errReader{err}), orig}
+		return nil, false
+	}
+	if int64(len(data)) > limit {
+		r.Body = &readCloser{io.MultiReader(bytes.NewReader(data), orig), orig}
+		return nil, false
+	}
+	r.Body = &readCloser{bytes.NewReader(data), orig}
+	return data, true
+}
+
+type readCloser struct {
+	io.Reader
+	c io.Closer
+}
+
+func (r *readCloser) Close() error { return r.c.Close() }
+
+type errReader struct{ err error }
+
+func (e errReader) Read([]byte) (int, error) { return 0, e.err }
+
+// ResetBody replaces r.Body with a fresh reader containing data and updates
+// ContentLength / Content-Length / Transfer-Encoding accordingly.
 func ResetBody(r *http.Request, data []byte) {
 	r.Body = io.NopCloser(bytes.NewReader(data))
 	r.ContentLength = int64(len(data))
+	r.TransferEncoding = nil
+	if r.Header != nil {
+		r.Header.Del("Transfer-Encoding")
+		r.Header.Set("Content-Length", fmt.Sprint(len(data)))
+	}
+}
+
+// detect wraps Sentry.DetectHoneyFields so adapters have one call site.
+func detect(s *Sentry, data map[string]any, rules map[string]WatchFieldRule, reqObj any, source string) (map[string]any, []FoundField, bool) {
+	sanitized, f, touched := s.DetectHoneyFields(data, rules, reqObj, source)
+	for i := range f {
+		f[i].Type = source
+	}
+	return sanitized, f, touched
+}
+
+// InspectWatch applies a watch to the request: it detects and strips honey
+// fields from the query string and body (JSON, +json, form, multipart, or a
+// body that merely looks like JSON) and emits a watch event when violations are
+// found. Bodies larger than maxBody (<=0 means DefaultMaxBodyBytes) are passed
+// through uninspected and intact. Panics are recovered and logged: the request
+// always continues to the application.
+func InspectWatch(s *Sentry, r *http.Request, reqObj any, watch WatchConfig, maxBody int64) {
+	defer func() {
+		if p := recover(); p != nil {
+			s.Logger().Printf("trappsec: watch inspection failed: %v", p)
+		}
+	}()
+	if maxBody <= 0 {
+		maxBody = DefaultMaxBodyBytes
+	}
+	var found []FoundField
+
+	if len(watch.QueryFields) > 0 {
+		vals := r.URL.Query()
+		if len(vals) > 0 {
+			sanitized, f, touched := detect(s, QueryToMap(vals), watch.QueryFields, reqObj, "query")
+			found = append(found, f...)
+			if touched {
+				pruneValues(vals, sanitized)
+				r.URL.RawQuery = vals.Encode()
+				r.Form, r.PostForm = nil, nil
+			}
+		}
+	}
+
+	if len(watch.BodyFields) > 0 {
+		found = append(found, inspectBody(s, r, reqObj, watch.BodyFields, maxBody)...)
+	}
+
+	if len(found) > 0 {
+		s.TriggerWatchEvent(reqObj, found)
+	}
+}
+
+func pruneValues(vals url.Values, sanitized map[string]any) {
+	for k := range vals {
+		if _, ok := sanitized[k]; !ok {
+			delete(vals, k)
+		}
+	}
+}
+
+const (
+	kindOther = iota
+	kindJSON
+	kindForm
+	kindMultipart
+)
+
+func classifyContentType(ct string) int {
+	mt := strings.ToLower(strings.TrimSpace(strings.SplitN(ct, ";", 2)[0]))
+	switch {
+	case mt == "application/x-www-form-urlencoded":
+		return kindForm
+	case mt == "multipart/form-data":
+		return kindMultipart
+	case mt == "application/json", mt == "text/json", strings.HasSuffix(mt, "+json"):
+		return kindJSON
+	}
+	return kindOther
+}
+
+func looksLikeJSON(b []byte) bool {
+	b = bytes.TrimLeft(b, " \t\r\n")
+	return len(b) > 0 && (b[0] == '{' || b[0] == '[')
+}
+
+func inspectBody(s *Sentry, r *http.Request, reqObj any, rules map[string]WatchFieldRule, maxBody int64) []FoundField {
+	if r.Body == nil || r.Body == http.NoBody || r.ContentLength == 0 {
+		return nil
+	}
+	if r.ContentLength > maxBody {
+		return nil // known to be too large: leave the stream untouched
+	}
+	ct := r.Header.Get("Content-Type")
+	kind := classifyContentType(ct)
+	data, ok := ReadBodyLimit(r, maxBody)
+	if !ok || len(data) == 0 {
+		return nil
+	}
+	if kind == kindOther {
+		if !looksLikeJSON(data) {
+			return nil
+		}
+		kind = kindJSON
+	}
+	switch kind {
+	case kindJSON:
+		return inspectJSON(s, r, reqObj, rules, data)
+	case kindForm:
+		vals, _ := url.ParseQuery(string(data))
+		if len(vals) == 0 {
+			return nil
+		}
+		sanitized, f, touched := detect(s, QueryToMap(vals), rules, reqObj, "body")
+		if touched {
+			pruneValues(vals, sanitized)
+			ResetBody(r, []byte(vals.Encode()))
+			r.Form, r.PostForm = nil, nil
+		}
+		return f
+	case kindMultipart:
+		return inspectMultipart(s, r, reqObj, rules, data, ct)
+	}
+	return nil
+}
+
+func marshalJSON(v any) ([]byte, error) {
+	var buf bytes.Buffer
+	enc := json.NewEncoder(&buf)
+	enc.SetEscapeHTML(false)
+	if err := enc.Encode(v); err != nil {
+		return nil, err
+	}
+	return bytes.TrimRight(buf.Bytes(), "\n"), nil
+}
+
+func inspectJSON(s *Sentry, r *http.Request, reqObj any, rules map[string]WatchFieldRule, data []byte) []FoundField {
+	dec := json.NewDecoder(bytes.NewReader(data))
+	dec.UseNumber() // keep large integers exact
+	var v any
+	if err := dec.Decode(&v); err != nil {
+		return nil
+	}
+	if _, err := dec.Token(); err != io.EOF {
+		return nil // trailing garbage: not something we can safely rewrite
+	}
+	var found []FoundField
+	touchedAny := false
+	switch t := v.(type) {
+	case map[string]any:
+		_, f, touched := detect(s, t, rules, reqObj, "body")
+		found, touchedAny = f, touched
+	case []any:
+		for _, el := range t {
+			if m, ok := el.(map[string]any); ok {
+				_, f, touched := detect(s, m, rules, reqObj, "body")
+				found = append(found, f...)
+				touchedAny = touchedAny || touched
+			}
+		}
+	default:
+		return nil
+	}
+	if touchedAny {
+		if nb, err := marshalJSON(v); err == nil {
+			ResetBody(r, nb)
+			r.Form, r.PostForm = nil, nil
+		}
+	}
+	return found
+}
+
+type mpPart struct {
+	header  textproto.MIMEHeader
+	body    []byte
+	name    string
+	isField bool
+}
+
+func inspectMultipart(s *Sentry, r *http.Request, reqObj any, rules map[string]WatchFieldRule, data []byte, ct string) []FoundField {
+	_, params, err := mime.ParseMediaType(ct)
+	if err != nil || params["boundary"] == "" {
+		return nil
+	}
+	boundary := params["boundary"]
+	mr := multipart.NewReader(bytes.NewReader(data), boundary)
+	var parts []mpPart
+	vals := url.Values{}
+	for {
+		p, err := mr.NextRawPart()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return nil // malformed: leave untouched
+		}
+		b, err := io.ReadAll(p)
+		if err != nil {
+			return nil
+		}
+		mp := mpPart{header: p.Header, body: b, name: p.FormName()}
+		if mp.name != "" {
+			_, dp, _ := mime.ParseMediaType(p.Header.Get("Content-Disposition"))
+			_, hasFilename := dp["filename"]
+			_, hasFilenameExt := dp["filename*"]
+			mp.isField = !hasFilename && !hasFilenameExt
+		}
+		if mp.isField {
+			vals.Add(mp.name, string(b))
+		}
+		parts = append(parts, mp)
+	}
+	if len(vals) == 0 {
+		return nil
+	}
+	sanitized, f, touched := detect(s, QueryToMap(vals), rules, reqObj, "body")
+	if !touched {
+		return f
+	}
+	var buf bytes.Buffer
+	w := multipart.NewWriter(&buf)
+	newBoundary := boundary
+	if err := w.SetBoundary(boundary); err != nil {
+		newBoundary = w.Boundary()
+	}
+	for _, p := range parts {
+		if p.isField {
+			if _, keep := sanitized[p.name]; !keep {
+				continue
+			}
+		}
+		pw, err := w.CreatePart(p.header)
+		if err != nil {
+			return f // cannot rebuild safely: leave body as read
+		}
+		_, _ = pw.Write(p.body)
+	}
+	if err := w.Close(); err != nil {
+		return f
+	}
+	ResetBody(r, buf.Bytes())
+	if newBoundary != boundary {
+		r.Header.Set("Content-Type", w.FormDataContentType())
+	}
+	r.MultipartForm, r.PostForm, r.Form = nil, nil, nil
+	return f
 }
 
 func toString(v any) string {
@@ -147,6 +439,8 @@ func toString(v any) string {
 		return fmt.Sprintf("%d", t)
 	case int64:
 		return fmt.Sprintf("%d", t)
+	case json.Number:
+		return t.String()
 	case float64:
 		return fmt.Sprintf("%v", t)
 	case bool:

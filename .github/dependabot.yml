@@ -1,0 +1,34 @@
+version: 2
+updates:
+  - package-ecosystem: pip
+    directory: /packages/python
+    schedule:
+      interval: weekly
+  - package-ecosystem: npm
+    directory: /packages/node
+    schedule:
+      interval: weekly
+  - package-ecosystem: npm
+    directory: /packages/node/test/integrations
+    schedule:
+      interval: monthly
+  - package-ecosystem: gomod
+    directory: /packages/go
+    schedule:
+      interval: weekly
+  - package-ecosystem: gomod
+    directory: /packages/go/nethttp
+    schedule:
+      interval: weekly
+  - package-ecosystem: gomod
+    directory: /packages/go/gin
+    schedule:
+      interval: weekly
+  - package-ecosystem: gomod
+    directory: /packages/go/echo
+    schedule:
+      interval: weekly
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly

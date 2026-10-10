@@ -2,7 +2,10 @@ import pathlib
 import sys
 import unittest
 
-sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / "src"))
+try:
+    import trappsec  # noqa: F401  (prefer the installed package)
+except ImportError:
+    sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / "src"))
 
 from trappsec import handlers
 from trappsec.handlers import WebhookHandler

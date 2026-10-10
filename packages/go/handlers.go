@@ -10,10 +10,13 @@ import (
 	"fmt"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/trace"
+	"io"
 	"log"
 	"math"
 	"net/http"
+	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -42,12 +45,25 @@ type WebhookOptions struct {
 	Service           string
 	Environment       string
 	AlertsOnly        *bool
+	// Logger receives delivery failures and drop warnings (default: log.Default()).
+	Logger *log.Logger
 }
 
 type SlackOptions struct {
 	AlertsOnly *bool
+	Logger     *log.Logger
 }
 
+const (
+	webhookQueueSize  = 1000
+	webhookMaxRetries = 2
+	dropLogInterval   = 60 * time.Second
+)
+
+// WebhookHandler delivers events asynchronously: Emit only enqueues onto a
+// bounded buffer (capacity 1000) drained by a single worker goroutine, so a
+// slow or dead endpoint can never delay the host request. Delivery is retried
+// at most twice in the worker. Call Close to flush and stop the goroutines.
 type WebhookHandler struct {
 	url         string
 	secret      string
@@ -57,6 +73,21 @@ type WebhookHandler struct {
 	environment string
 	alertsOnly  bool
 	client      *http.Client
+	logger      *log.Logger
+
+	queue      chan []byte
+	quit       chan struct{} // closed on Close: stops heartbeat
+	workerDone chan struct{}
+	hbDone     chan struct{}
+	baseCtx    context.Context
+	cancel     context.CancelFunc
+	backoff    []time.Duration
+
+	mu     sync.RWMutex // guards closed and sends on queue
+	closed bool
+
+	dropMu   sync.Mutex
+	lastDrop time.Time
 }
 
 type SlackHandler struct {
@@ -74,6 +105,10 @@ func NewWebhookHandler(url string, opts *WebhookOptions) (*WebhookHandler, error
 	if opts.AlertsOnly != nil {
 		alertsOnly = *opts.AlertsOnly
 	}
+	logger := opts.Logger
+	if logger == nil {
+		logger = log.Default()
+	}
 
 	h := &WebhookHandler{
 		url:         url,
@@ -84,18 +119,29 @@ func NewWebhookHandler(url string, opts *WebhookOptions) (*WebhookHandler, error
 		environment: opts.Environment,
 		alertsOnly:  alertsOnly,
 		client:      &http.Client{Timeout: 5 * time.Second},
+		logger:      logger,
+		queue:       make(chan []byte, webhookQueueSize),
+		quit:        make(chan struct{}),
+		workerDone:  make(chan struct{}),
+		backoff:     []time.Duration{200 * time.Millisecond, 600 * time.Millisecond},
 	}
+	h.baseCtx, h.cancel = context.WithCancel(context.Background())
 	for k, v := range opts.Headers {
 		h.headers[k] = v
 	}
 
+	go h.worker()
 	if opts.HeartbeatInterval > 0 {
+		h.hbDone = make(chan struct{})
 		go h.heartbeatLoop(opts.HeartbeatInterval)
 	}
 
 	return h, nil
 }
 
+// Emit enqueues the event for asynchronous delivery. It never blocks and
+// never performs I/O. A panicking Template drops the event for this handler
+// (the raw event is never sent in its place).
 func (h *WebhookHandler) Emit(event TriggerContext) error {
 	if h.alertsOnly && event.Type != "alert" {
 		return nil
@@ -103,50 +149,191 @@ func (h *WebhookHandler) Emit(event TriggerContext) error {
 
 	payload := any(event)
 	if h.template != nil {
-		payload = h.template(event)
+		var ok bool
+		payload, ok = h.runTemplate(event)
+		if !ok {
+			return nil
+		}
 	}
-	return h.send(payload)
+	data, err := marshalPayload(payload)
+	if err != nil {
+		h.logger.Printf("trappsec: webhook payload not serializable, dropping event: %v", err)
+		return nil
+	}
+	h.enqueue(data)
+	return nil
+}
+
+func (h *WebhookHandler) runTemplate(event TriggerContext) (out any, ok bool) {
+	defer func() {
+		if r := recover(); r != nil {
+			h.logger.Printf("trappsec: webhook template panicked, dropping event: %v", r)
+			out, ok = nil, false
+		}
+	}()
+	return h.template(event), true
+}
+
+func marshalPayload(v any) (data []byte, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			data, err = nil, fmt.Errorf("panic while marshaling: %v", r)
+		}
+	}()
+	return json.Marshal(v)
+}
+
+func (h *WebhookHandler) enqueue(data []byte) {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	if h.closed {
+		return
+	}
+	select {
+	case h.queue <- data:
+	default:
+		h.dropMu.Lock()
+		now := time.Now()
+		warn := h.lastDrop.IsZero() || now.Sub(h.lastDrop) >= dropLogInterval
+		if warn {
+			h.lastDrop = now
+		}
+		h.dropMu.Unlock()
+		if warn {
+			h.logger.Printf("trappsec: webhook queue full (%d), dropping events", webhookQueueSize)
+		}
+	}
 }
 
 func (h *WebhookHandler) heartbeatLoop(interval int) {
+	defer close(h.hbDone)
 	ticker := time.NewTicker(time.Duration(interval) * time.Second)
 	defer ticker.Stop()
-	for range ticker.C {
-		_ = h.send(map[string]any{
-			"timestamp":   float64(time.Now().UnixNano()) / 1e9,
-			"event":       "trappsec.heartbeat",
-			"service":     h.service,
-			"environment": h.environment,
-		})
+	for {
+		select {
+		case <-h.quit:
+			return
+		case <-ticker.C:
+			data, err := marshalPayload(map[string]any{
+				"timestamp":   float64(time.Now().UnixNano()) / 1e9,
+				"event":       "trappsec.heartbeat",
+				"service":     h.service,
+				"environment": h.environment,
+			})
+			if err == nil {
+				h.enqueue(data)
+			}
+		}
 	}
 }
 
-func (h *WebhookHandler) send(payload any) error {
-	data, err := json.Marshal(payload)
-	if err != nil {
-		return err
+// Close stops the heartbeat, flushes queued events (bounded by ctx) and stops
+// the worker. After Close, Emit silently discards events. Safe to call more
+// than once.
+func (h *WebhookHandler) Close(ctx context.Context) error {
+	if ctx == nil {
+		ctx = context.Background()
 	}
-
-	req, err := http.NewRequest(http.MethodPost, h.url, bytes.NewReader(data))
-	if err != nil {
-		return err
+	h.mu.Lock()
+	if h.closed {
+		h.mu.Unlock()
+		<-h.workerDone
+		return nil
 	}
+	h.closed = true
+	close(h.quit)
+	close(h.queue) // no sender can be mid-send: enqueue holds RLock
+	h.mu.Unlock()
 
+	if h.hbDone != nil {
+		select {
+		case <-h.hbDone:
+		case <-ctx.Done():
+		}
+	}
+	select {
+	case <-h.workerDone:
+		h.cancel()
+		return nil
+	case <-ctx.Done():
+		h.cancel() // abort in-flight delivery and discard the rest
+		<-h.workerDone
+		return fmt.Errorf("trappsec: webhook close timed out before flushing queue: %w", ctx.Err())
+	}
+}
+
+func (h *WebhookHandler) worker() {
+	defer close(h.workerDone)
+	for data := range h.queue {
+		if h.baseCtx.Err() != nil {
+			continue // closing past deadline: discard
+		}
+		h.deliver(data)
+	}
+}
+
+func (h *WebhookHandler) deliver(data []byte) {
+	var lastErr error
+	for attempt := 0; attempt <= webhookMaxRetries; attempt++ {
+		if attempt > 0 {
+			d := h.backoff[len(h.backoff)-1]
+			if attempt-1 < len(h.backoff) {
+				d = h.backoff[attempt-1]
+			}
+			select {
+			case <-time.After(d):
+			case <-h.baseCtx.Done():
+				return
+			}
+		}
+		retry, err := h.send(data)
+		if err == nil {
+			return
+		}
+		lastErr = err
+		if !retry {
+			break
+		}
+	}
+	h.logger.Printf("trappsec: webhook delivery failed: %v", lastErr)
+}
+
+// send performs one POST. It reports whether a failure is worth retrying.
+func (h *WebhookHandler) send(data []byte) (retry bool, err error) {
+	req, err := http.NewRequestWithContext(h.baseCtx, http.MethodPost, h.url, bytes.NewReader(data))
+	if err != nil {
+		return false, err
+	}
 	for k, v := range h.headers {
 		req.Header.Set(k, v)
 	}
 	if h.secret != "" {
-		mac := hmac.New(sha256.New, []byte(h.secret))
-		mac.Write(data)
-		req.Header.Set("x-trappsec-signature", hex.EncodeToString(mac.Sum(nil)))
+		ts := strconv.FormatInt(time.Now().Unix(), 10)
+		req.Header.Set("x-trappsec-timestamp", ts)
+		req.Header.Set("x-trappsec-signature", signPayload(h.secret, ts, data))
 	}
 
 	resp, err := h.client.Do(req)
 	if err != nil {
-		return err
+		return true, err
 	}
-	defer resp.Body.Close()
-	return nil
+	// Drain (bounded) and close so the connection can be reused.
+	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<20))
+	_ = resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode > 299 {
+		return resp.StatusCode >= 500 || resp.StatusCode == http.StatusTooManyRequests,
+			fmt.Errorf("webhook responded with status %d", resp.StatusCode)
+	}
+	return false, nil
+}
+
+// signPayload returns "sha256=<hex HMAC-SHA256(secret, "<timestamp>.<body>")>".
+func signPayload(secret, timestamp string, body []byte) string {
+	mac := hmac.New(sha256.New, []byte(secret))
+	mac.Write([]byte(timestamp))
+	mac.Write([]byte("."))
+	mac.Write(body)
+	return "sha256=" + hex.EncodeToString(mac.Sum(nil))
 }
 
 func NewSlackHandler(url string, opts *SlackOptions) (*SlackHandler, error) {
@@ -157,6 +344,7 @@ func NewSlackHandler(url string, opts *SlackOptions) (*SlackHandler, error) {
 	wh, err := NewWebhookHandler(url, &WebhookOptions{
 		AlertsOnly: opts.AlertsOnly,
 		Template:   buildSlackPayload,
+		Logger:     opts.Logger,
 	})
 	if err != nil {
 		return nil, err
@@ -167,6 +355,21 @@ func NewSlackHandler(url string, opts *SlackOptions) (*SlackHandler, error) {
 
 func (h *SlackHandler) Emit(event TriggerContext) error {
 	return h.webhook.Emit(event)
+}
+
+// Close flushes and stops the underlying delivery worker.
+func (h *SlackHandler) Close(ctx context.Context) error {
+	return h.webhook.Close(ctx)
+}
+
+// slackEscape escapes the characters Slack treats as control sequences in
+// mrkdwn/text (&, <, >) so request-derived values cannot inject links or
+// mentions such as <!channel>.
+func slackEscape(s string) string {
+	if !strings.ContainsAny(s, "&<>") {
+		return s
+	}
+	return strings.NewReplacer("&", "&amp;", "<", "&lt;", ">", "&gt;").Replace(s)
 }
 
 var slackEventLabels = map[string]string{
@@ -184,11 +387,17 @@ func slackDateToken(ts float64) string {
 	return fmt.Sprintf("<!date^%d^{date_short_pretty} at {time_secs}|%s>", seconds, fallback)
 }
 
+// kvLine renders "*key:* value"; value must already be Slack-safe.
 func kvLine(key, value string) string {
 	if value == "" {
 		return ""
 	}
 	return fmt.Sprintf("*%s:* %s", key, value)
+}
+
+// kvEsc renders a line from an untrusted value, escaping it first.
+func kvEsc(key, value string) string {
+	return kvLine(key, slackEscape(value))
 }
 
 func compactLines(lines []string) []string {
@@ -262,23 +471,23 @@ func buildSlackPayload(event TriggerContext) any {
 	}
 
 	eventLines := compactLines([]string{
-		kvLine("Event", func() string {
+		kvEsc("Event", func() string {
 			if label, ok := slackEventLabels[eventName]; ok {
 				return label
 			}
 			return eventName
 		}()),
 		kvLine("Timestamp", when),
-		kvLine("Service", service),
-		kvLine("Environment", environment),
-		kvLine("Host", event.App.Hostname),
+		kvEsc("Service", service),
+		kvEsc("Environment", environment),
+		kvEsc("Host", event.App.Hostname),
 	})
 	requestLines := compactLines([]string{
-		kvLine("IP", event.IP),
-		kvLine("Route", route),
-		kvLine("User Agent", event.UserAgent),
-		kvLine("User", event.User),
-		kvLine("Role", event.Role),
+		kvEsc("IP", event.IP),
+		kvEsc("Route", route),
+		kvEsc("User Agent", event.UserAgent),
+		kvEsc("User", event.User),
+		kvEsc("Role", event.Role),
 	})
 
 	blocks := []any{
@@ -306,7 +515,7 @@ func buildSlackPayload(event TriggerContext) any {
 			if f.Intent != "" {
 				parts = append(parts, "- "+f.Intent)
 			}
-			lines = append(lines, kvLine(fmt.Sprintf("Triggered Field %d", i+1), strings.Join(parts, " ")))
+			lines = append(lines, kvEsc(fmt.Sprintf("Triggered Field %d", i+1), strings.Join(parts, " ")))
 		}
 		blocks = append(blocks,
 			map[string]any{"type": "divider"},
@@ -316,10 +525,10 @@ func buildSlackPayload(event TriggerContext) any {
 
 	details := []string{}
 	if event.Intent != "" {
-		details = append(details, kvLine("Intent", event.Intent))
+		details = append(details, kvEsc("Intent", event.Intent))
 	}
 	if event.Reason != "" {
-		details = append(details, kvLine("Reason", event.Reason))
+		details = append(details, kvEsc("Reason", event.Reason))
 	}
 	details = compactLines(details)
 	if len(details) > 0 {
@@ -330,9 +539,18 @@ func buildSlackPayload(event TriggerContext) any {
 	}
 
 	return map[string]any{
-		"text":        "",
+		"text": slackNotificationText(eventName, level, slackEscape(service), slackEscape(event.User),
+			slackEscape(event.Method), slackEscape(event.Path), escapeFound(event.Found)),
 		"attachments": []map[string]any{{"color": color, "blocks": blocks}},
 	}
+}
+
+func escapeFound(in []FoundField) []FoundField {
+	out := make([]FoundField, len(in))
+	for i, f := range in {
+		out[i] = FoundField{Type: f.Type, Field: slackEscape(f.Field), Intent: f.Intent}
+	}
+	return out
 }
 
 func fallback(v string) string {
@@ -377,19 +595,24 @@ func (h *OTELHandler) EmitWithContext(ctx context.Context, event TriggerContext)
 
 	if event.Event == "trappsec.watch_hit" {
 		for _, field := range event.Found {
-			span.AddEvent("watch_hit", trace.WithAttributes(
+			evAttrs := []attribute.KeyValue{
 				attribute.String("type", field.Type),
 				attribute.String("field", field.Field),
 				attribute.String("intent", field.Intent),
-				toAttribute("value", field.Value),
-			))
+			}
+			if kv, ok := toAttribute("value", field.Value); ok {
+				evAttrs = append(evAttrs, kv)
+			}
+			span.AddEvent("watch_hit", trace.WithAttributes(evAttrs...))
 		}
 	}
 
 	if metadata, ok := event.Metadata.(map[string]any); ok {
 		metadataAttrs := make([]attribute.KeyValue, 0, len(metadata))
 		for k, v := range metadata {
-			metadataAttrs = append(metadataAttrs, toAttribute("metadata."+k, v))
+			if kv, ok := toAttribute("metadata."+k, v); ok {
+				metadataAttrs = append(metadataAttrs, kv)
+			}
 		}
 		if len(metadataAttrs) > 0 {
 			span.SetAttributes(metadataAttrs...)
@@ -404,60 +627,133 @@ func (h *OTELHandler) Emit(event TriggerContext) error {
 	return h.EmitWithContext(context.Background(), event)
 }
 
-func toAttribute(key string, value any) attribute.KeyValue {
+// toAttribute coerces a value to a valid OTel attribute: string, bool, int64,
+// float64 or a homogeneous slice of those. nil is dropped (ok=false); anything
+// else (maps, structs, mixed lists) is stringified (JSON when possible).
+func toAttribute(key string, value any) (attribute.KeyValue, bool) {
 	switch v := value.(type) {
+	case nil:
+		return attribute.KeyValue{}, false
 	case string:
-		return attribute.String(key, v)
+		return attribute.String(key, v), true
 	case bool:
-		return attribute.Bool(key, v)
-	case int:
-		return attribute.Int64(key, int64(v))
-	case int8:
-		return attribute.Int64(key, int64(v))
-	case int16:
-		return attribute.Int64(key, int64(v))
-	case int32:
-		return attribute.Int64(key, int64(v))
-	case int64:
-		return attribute.Int64(key, v)
-	case uint:
-		return attribute.Int64(key, int64(v))
-	case uint8:
-		return attribute.Int64(key, int64(v))
-	case uint16:
-		return attribute.Int64(key, int64(v))
-	case uint32:
-		return attribute.Int64(key, int64(v))
-	case uint64:
-		if v > uint64(math.MaxInt64) {
-			return attribute.String(key, fmt.Sprintf("%v", v))
+		return attribute.Bool(key, v), true
+	case json.Number:
+		if i, err := v.Int64(); err == nil {
+			return attribute.Int64(key, i), true
 		}
-		return attribute.Int64(key, int64(v))
+		if f, err := v.Float64(); err == nil {
+			return attribute.Float64(key, f), true
+		}
+		return attribute.String(key, string(v)), true
+	case int:
+		return attribute.Int64(key, int64(v)), true
+	case int8:
+		return attribute.Int64(key, int64(v)), true
+	case int16:
+		return attribute.Int64(key, int64(v)), true
+	case int32:
+		return attribute.Int64(key, int64(v)), true
+	case int64:
+		return attribute.Int64(key, v), true
+	case uint:
+		return uintAttr(key, uint64(v)), true
+	case uint8:
+		return attribute.Int64(key, int64(v)), true
+	case uint16:
+		return attribute.Int64(key, int64(v)), true
+	case uint32:
+		return attribute.Int64(key, int64(v)), true
+	case uint64:
+		return uintAttr(key, v), true
 	case float32:
-		return attribute.Float64(key, float64(v))
+		return attribute.Float64(key, float64(v)), true
 	case float64:
-		return attribute.Float64(key, v)
+		return attribute.Float64(key, v), true
 	case []string:
-		return attribute.StringSlice(key, v)
+		return attribute.StringSlice(key, v), true
 	case []bool:
-		return attribute.BoolSlice(key, v)
+		return attribute.BoolSlice(key, v), true
 	case []int:
 		out := make([]int64, len(v))
 		for i := range v {
 			out[i] = int64(v[i])
 		}
-		return attribute.Int64Slice(key, out)
+		return attribute.Int64Slice(key, out), true
 	case []int64:
-		return attribute.Int64Slice(key, v)
+		return attribute.Int64Slice(key, v), true
 	case []float64:
-		return attribute.Float64Slice(key, v)
+		return attribute.Float64Slice(key, v), true
 	case []float32:
 		out := make([]float64, len(v))
 		for i := range v {
 			out[i] = float64(v[i])
 		}
-		return attribute.Float64Slice(key, out)
-	default:
-		return attribute.String(key, fmt.Sprintf("%v", v))
+		return attribute.Float64Slice(key, out), true
+	case []any:
+		if kv, ok := homogeneousSlice(key, v); ok {
+			return kv, true
+		}
 	}
+	b, err := json.Marshal(value)
+	if err != nil {
+		return attribute.String(key, fmt.Sprintf("%v", value)), true
+	}
+	return attribute.String(key, string(b)), true
+}
+
+func uintAttr(key string, v uint64) attribute.KeyValue {
+	if v > uint64(math.MaxInt64) {
+		return attribute.String(key, strconv.FormatUint(v, 10))
+	}
+	return attribute.Int64(key, int64(v))
+}
+
+// homogeneousSlice converts a []any whose elements are all strings, all bools,
+// all integers or all numbers into a typed OTel slice attribute.
+func homogeneousSlice(key string, v []any) (attribute.KeyValue, bool) {
+	if len(v) == 0 {
+		return attribute.StringSlice(key, []string{}), true
+	}
+	kvs := make([]attribute.KeyValue, 0, len(v))
+	for _, e := range v {
+		kv, ok := toAttribute(key, e)
+		if !ok {
+			return attribute.KeyValue{}, false
+		}
+		kvs = append(kvs, kv)
+	}
+	typ := kvs[0].Value.Type()
+	for _, kv := range kvs {
+		if kv.Value.Type() != typ {
+			return attribute.KeyValue{}, false
+		}
+	}
+	switch typ {
+	case attribute.STRING:
+		out := make([]string, len(kvs))
+		for i, kv := range kvs {
+			out[i] = kv.Value.AsString()
+		}
+		return attribute.StringSlice(key, out), true
+	case attribute.BOOL:
+		out := make([]bool, len(kvs))
+		for i, kv := range kvs {
+			out[i] = kv.Value.AsBool()
+		}
+		return attribute.BoolSlice(key, out), true
+	case attribute.INT64:
+		out := make([]int64, len(kvs))
+		for i, kv := range kvs {
+			out[i] = kv.Value.AsInt64()
+		}
+		return attribute.Int64Slice(key, out), true
+	case attribute.FLOAT64:
+		out := make([]float64, len(kvs))
+		for i, kv := range kvs {
+			out[i] = kv.Value.AsFloat64()
+		}
+		return attribute.Float64Slice(key, out), true
+	}
+	return attribute.KeyValue{}, false
 }

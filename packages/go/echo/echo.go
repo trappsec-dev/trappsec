@@ -7,16 +7,25 @@
 //	app.GET("/real-route", handler)
 //	app.Trap("/fake-config").Methods("GET").Intent("Reconnaissance").Respond(...)
 //	app.Start(":8080")
+//
+// Always serve through the returned *App (app.Start, or app as the http.Handler for
+// http.Server / httptest). The App bootstraps lazily on the first request. The
+// watch middleware is installed at bootstrap, after any middleware you added with
+// Use, and Echo applies Use middleware to every route regardless of registration
+// order, so routes registered before InstallSentry are covered.
 package trappsececho
 
 import (
 	"context"
-	"encoding/json"
+	"fmt"
 	"github.com/labstack/echo/v4"
 	core "github.com/trappsec-dev/trappsec/packages/go"
+	"log"
+	"net"
 	"net/http"
-	"net/url"
 	"strings"
+	"sync"
+	"sync/atomic"
 )
 
 // Re-export core types as aliases so callers need only one import.
@@ -40,51 +49,64 @@ var NoDefault = core.NoDefault
 
 // App wraps an Echo instance and a trappsec Sentry. All Echo methods (GET, POST,
 // Use, Group, etc.) and all Sentry methods (Trap, Watch, IdentifyUser, etc.) are
-// promoted directly — no inner field access needed. The Start* methods are shadowed
-// to register trap routes transparently before the server starts accepting requests.
+// promoted directly, except where both define the name: Logger() returns the
+// trappsec logger (Echo's logger is EchoLogger()), and Close(ctx) flushes and
+// stops trappsec handlers only (stop the server with Shutdown(ctx) or
+// app.Echo.Close()).
 type App struct {
 	*core.Sentry
 	*echo.Echo
 	integration *echoIntegration
 }
 
-// InstallSentry creates a Sentry, wires trappsec watch middleware onto the given Echo
-// instance, and returns an *App that embeds both. Use app.Start() (not e.Start()) to
-// start the server — this ensures trap routes are registered before requests are served.
+// Logger returns the trappsec logger. Echo's own logger is available as
+// EchoLogger() (or app.Echo.Logger).
+func (a *App) Logger() *log.Logger { return a.Sentry.Logger() }
+
+// Close flushes and stops trappsec's handlers (see Sentry.Close). It does not
+// stop the server: use Shutdown(ctx) or app.Echo.Close() for that.
+func (a *App) Close(ctx context.Context) error { return a.Sentry.Close(ctx) }
+
+// EchoLogger returns Echo's logger.
+func (a *App) EchoLogger() echo.Logger { return a.Echo.Logger }
+
+// InstallSentry creates a Sentry, wires trappsec onto the given Echo instance and
+// returns an *App that embeds both.
 func InstallSentry(e *echo.Echo, service, environment string) *App {
-	s := core.NewSentry(service, environment)
+	return Use(core.NewSentry(service, environment), e)
+}
+
+// Use wires an existing Sentry onto the Echo instance and returns the *App to
+// serve through (app.Start*, or app as an http.Handler). Traps and watches only
+// become active through the returned App.
+func Use(s *core.Sentry, e *echo.Echo) *App {
 	in := &echoIntegration{ts: s}
 
 	if s.Identity.IP == nil {
-		s.Identity.IP = func(req any) string {
-			if c, ok := req.(echo.Context); ok {
-				return c.RealIP()
-			}
-			return "0.0.0.0"
-		}
+		s.Identity.IP = defaultIP
 	}
 
 	s.Request.Path = func(req any) string {
-		if c, ok := req.(echo.Context); ok {
-			return c.Request().URL.Path
+		if r := requestOf(req); r != nil {
+			return r.URL.Path
 		}
 		return ""
 	}
 	s.Request.UserAgent = func(req any) string {
-		if c, ok := req.(echo.Context); ok {
-			return c.Request().UserAgent()
+		if r := requestOf(req); r != nil {
+			return r.UserAgent()
 		}
 		return ""
 	}
 	s.Request.Method = func(req any) string {
-		if c, ok := req.(echo.Context); ok {
-			return c.Request().Method
+		if r := requestOf(req); r != nil {
+			return r.Method
 		}
 		return ""
 	}
 	s.Request.Context = func(req any) context.Context {
-		if c, ok := req.(echo.Context); ok && c.Request() != nil {
-			return c.Request().Context()
+		if r := requestOf(req); r != nil {
+			return r.Context()
 		}
 		return context.Background()
 	}
@@ -97,88 +119,104 @@ func InstallSentry(e *echo.Echo, service, environment string) *App {
 		}
 		return body
 	})
-
-	// Post-routing: watches need the resolved route pattern from c.Path().
-	e.Use(in.watchMiddleware())
 
 	return &App{Sentry: s, Echo: e, integration: in}
 }
 
-// Use wires up the trappsec watch middleware on the given Echo instance.
-// Prefer InstallSentry, which also returns an *App whose Start* methods register
-// trap routes transparently before the server starts.
-func Use(s *core.Sentry, app *echo.Echo) {
-	in := &echoIntegration{ts: s}
+func requestOf(req any) *http.Request {
+	switch t := req.(type) {
+	case echo.Context:
+		if t != nil {
+			return t.Request()
+		}
+	case *http.Request:
+		return t
+	}
+	return nil
+}
 
-	if s.Identity.IP == nil {
-		s.Identity.IP = func(req any) string {
-			if c, ok := req.(echo.Context); ok {
-				return c.RealIP()
-			}
-			return "0.0.0.0"
-		}
+// defaultIP returns the connection's RemoteAddr host. It deliberately ignores
+// X-Forwarded-For / X-Real-IP (spoofable; echo's RealIP trusts them by default).
+// Use OverrideSourceIP, e.g. with c.RealIP() plus e.IPExtractor, behind a trusted proxy.
+func defaultIP(req any) string {
+	r := requestOf(req)
+	if r == nil {
+		return "0.0.0.0"
 	}
-
-	s.Request.Path = func(req any) string {
-		if c, ok := req.(echo.Context); ok {
-			return c.Request().URL.Path
-		}
-		return ""
+	if host, _, err := net.SplitHostPort(r.RemoteAddr); err == nil {
+		return host
 	}
-	s.Request.UserAgent = func(req any) string {
-		if c, ok := req.(echo.Context); ok {
-			return c.Request().UserAgent()
-		}
-		return ""
-	}
-	s.Request.Method = func(req any) string {
-		if c, ok := req.(echo.Context); ok {
-			return c.Request().Method
-		}
-		return ""
-	}
-	s.Request.Context = func(req any) context.Context {
-		if c, ok := req.(echo.Context); ok && c.Request() != nil {
-			return c.Request().Context()
-		}
-		return context.Background()
-	}
-
-	s.SetBodyResolver(func(body any, req any) any {
-		if fn, ok := body.(func(echo.Context) any); ok {
-			if c, ok := req.(echo.Context); ok {
-				return fn(c)
-			}
-		}
-		return body
-	})
-
-	app.Use(in.watchMiddleware())
+	return r.RemoteAddr
 }
 
 type echoIntegration struct {
 	ts       *core.Sentry
 	watchIdx map[string]core.WatchConfig
+	maxBody  int64
+
+	done atomic.Bool
+	mu   sync.Mutex
+	err  any
 }
 
-// bootstrap registers all configured trap routes with the Echo instance and builds the
-// watch index. Called transparently from Start* methods.
-func (a *App) bootstrap() {
-	a.integration.watchIdx = make(map[string]core.WatchConfig)
-	for _, w := range a.Sentry.Watches() {
-		a.integration.watchIdx[w.Path] = w
+// Bootstrap registers trap routes and the watch middleware and builds the watch
+// index. It is idempotent and safe for concurrent use, and runs automatically on
+// the first request and from Start*. It panics with a clear message if a trap
+// duplicates an existing route (instead of silently replacing it); later calls
+// repeat the same panic.
+func (a *App) Bootstrap() {
+	in := a.integration
+	if in.done.Load() {
+		if in.err != nil {
+			panic(in.err)
+		}
+		return
 	}
-	// Register each trap as a real Echo route for each declared method.
-	// By going through Echo's router, traps participate in the full middleware chain
-	// (CORS, auth, rate limiting, etc.) and Echo's native 405 handling — ensuring
-	// trap behavior is always consistent with real application routes.
-	for _, trap := range a.Sentry.Traps() {
+	in.mu.Lock()
+	defer in.mu.Unlock()
+	if in.done.Load() {
+		if in.err != nil {
+			panic(in.err)
+		}
+		return
+	}
+	defer func() {
+		if p := recover(); p != nil {
+			in.err = p
+			in.done.Store(true)
+			panic(p)
+		}
+		in.done.Store(true)
+	}()
+
+	idx := make(map[string]core.WatchConfig)
+	for _, w := range in.ts.Watches() {
+		idx[w.Path] = w
+	}
+
+	existing := map[string]bool{}
+	for _, ri := range a.Echo.Routes() {
+		existing[ri.Method+" "+ri.Path] = true
+	}
+	for _, trap := range in.ts.Traps() {
 		t := trap
 		for _, method := range trap.Methods {
-			a.Echo.Add(strings.ToUpper(method), trap.Path, echoTrapHandler(a.Sentry, t))
+			method = strings.ToUpper(method)
+			if existing[method+" "+trap.Path] {
+				panic(fmt.Sprintf("trappsec: trap %s %s duplicates an existing route; "+
+					"rename the trap or remove the real route", method, trap.Path))
+			}
+			a.Echo.Add(method, trap.Path, echoTrapHandler(in.ts, t))
+			existing[method+" "+trap.Path] = true
 		}
 	}
+	in.watchIdx = idx
+	a.Echo.Use(in.watchMiddleware())
 }
+
+// SetMaxBodyBytes sets the largest request body that watch inspection buffers
+// (default 1 MiB). Larger bodies pass through intact but uninspected.
+func (a *App) SetMaxBodyBytes(n int64) { atomic.StoreInt64(&a.integration.maxBody, n) }
 
 // echoTrapHandler returns an Echo handler for a trap route.
 func echoTrapHandler(ts *core.Sentry, trap core.TrapConfig) echo.HandlerFunc {
@@ -188,114 +226,45 @@ func echoTrapHandler(ts *core.Sentry, trap core.TrapConfig) echo.HandlerFunc {
 	}
 }
 
-// Start calls bootstrap (registering trap routes) then starts the HTTP server.
-// Use this instead of e.Start() to ensure traps are active before serving.
+// ServeHTTP bootstraps lazily on the first request, then dispatches to Echo.
+func (a *App) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	a.Bootstrap()
+	a.Echo.ServeHTTP(w, r)
+}
+
+// Start calls Bootstrap then starts the HTTP server.
 func (a *App) Start(address string) error {
-	a.bootstrap()
+	a.Bootstrap()
 	return a.Echo.Start(address)
 }
 
-// StartTLS calls bootstrap then starts an HTTPS server.
-func (a *App) StartTLS(address, certFile, keyFile string) error {
-	a.bootstrap()
+// StartTLS calls Bootstrap then starts an HTTPS server.
+func (a *App) StartTLS(address string, certFile, keyFile any) error {
+	a.Bootstrap()
 	return a.Echo.StartTLS(address, certFile, keyFile)
 }
 
-// StartAutoTLS calls bootstrap then starts a server with automatic TLS via Let's Encrypt.
+// StartAutoTLS calls Bootstrap then starts a server with automatic TLS via Let's Encrypt.
 func (a *App) StartAutoTLS(address string) error {
-	a.bootstrap()
+	a.Bootstrap()
 	return a.Echo.StartAutoTLS(address)
 }
 
-// StartServer calls bootstrap then starts a server using a custom http.Server.
+// StartServer calls Bootstrap then starts a server using a custom http.Server.
 func (a *App) StartServer(s *http.Server) error {
-	a.bootstrap()
+	a.Bootstrap()
 	return a.Echo.StartServer(s)
 }
 
-// watchMiddleware returns an Echo middleware that inspects requests for honey fields
-// on watched routes. It runs via app.Use() — after Echo's router has matched the route —
-// so c.Path() carries the route pattern (e.g. /users/:id) rather than the raw URL.
+// watchMiddleware inspects requests for honey fields on watched routes. Echo runs
+// Use middleware after routing, so c.Path() carries the route pattern
+// (e.g. /users/:id) rather than the raw URL.
 func (in *echoIntegration) watchMiddleware() echo.MiddlewareFunc {
 	return func(next echo.HandlerFunc) echo.HandlerFunc {
 		return func(c echo.Context) error {
-			path := c.Path()
-
-			if watch, ok := in.watchIdx[path]; ok {
-				found := make([]core.FoundField, 0)
-
-				if len(watch.QueryFields) > 0 {
-					qData := core.QueryToMap(c.Request().URL.Query())
-					sanitized, f, touched := in.ts.DetectHoneyFields(qData, watch.QueryFields, c)
-					if len(f) > 0 {
-						for i := range f {
-							f[i].Type = "query"
-						}
-						found = append(found, f...)
-					}
-					if touched {
-						c.Request().URL.RawQuery = core.MapToQuery(sanitized)
-					}
-				}
-
-				if len(watch.BodyFields) > 0 {
-					r := c.Request()
-					bodyBytes := core.ReadBody(r)
-					contentType := r.Header.Get("Content-Type")
-					if len(bodyBytes) > 0 {
-						if strings.Contains(contentType, "application/json") {
-							var data map[string]any
-							if err := json.Unmarshal(bodyBytes, &data); err == nil {
-								sanitized, f, touched := in.ts.DetectHoneyFields(data, watch.BodyFields, c)
-								if len(f) > 0 {
-									for i := range f {
-										f[i].Type = "body"
-									}
-									found = append(found, f...)
-								}
-								if touched {
-									newBody, _ := json.Marshal(sanitized)
-									core.ResetBody(r, newBody)
-								}
-							}
-						} else if strings.Contains(contentType, "application/x-www-form-urlencoded") {
-							vals, err := url.ParseQuery(string(bodyBytes))
-							if err == nil {
-								form := core.QueryToMap(vals)
-								sanitized, f, touched := in.ts.DetectHoneyFields(form, watch.BodyFields, c)
-								if len(f) > 0 {
-									for i := range f {
-										f[i].Type = "body"
-									}
-									found = append(found, f...)
-								}
-								if touched {
-									core.ResetBody(r, []byte(core.MapToQuery(sanitized)))
-								}
-							}
-						} else if strings.Contains(contentType, "multipart/form-data") {
-							form := core.ParseMultipartFields(r)
-							if form != nil {
-								sanitized, f, touched := in.ts.DetectHoneyFields(form, watch.BodyFields, c)
-								if len(f) > 0 {
-									for i := range f {
-										f[i].Type = "body"
-									}
-									found = append(found, f...)
-								}
-								if touched {
-									core.RebuildMultipartBody(r, sanitized)
-								}
-							}
-						}
-					}
-				}
-
-				if len(found) > 0 {
-					in.ts.TriggerWatchEvent(c, found)
-				}
+			if watch, ok := in.watchIdx[c.Path()]; ok {
+				core.InspectWatch(in.ts, c.Request(), c, watch, atomic.LoadInt64(&in.maxBody))
 			}
-
 			return next(c)
 		}
 	}

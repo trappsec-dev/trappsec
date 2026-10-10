@@ -1,6 +1,9 @@
 package trappsec
 
-import "strings"
+import (
+	"fmt"
+	"strings"
+)
 
 type ResponseTemplate struct {
 	StatusCode int
@@ -38,25 +41,23 @@ type FoundField struct {
 	Type   string `json:"type"`
 	Field  string `json:"field"`
 	Value  any    `json:"value"`
-	Intent string `json:"intent,omitempty"`
+	Intent string `json:"intent"`
 }
 
 type TrapBuilder struct {
-	ts     *Sentry
-	config TrapConfig
+	ts      *Sentry
+	path    string
+	methods []string
+	intent  string
+	// Response customisations are recorded as ordered operations and applied
+	// to the Sentry's default responses when the trap is built, so the order
+	// of SetDefault* / Trap() calls does not matter.
+	authOps   []func(*ResponseTemplate)
+	unauthOps []func(*ResponseTemplate)
 }
 
 func newTrapBuilder(ts *Sentry, path string) *TrapBuilder {
-	return &TrapBuilder{
-		ts: ts,
-		config: TrapConfig{
-			Path:                    path,
-			Methods:                 []string{"GET", "POST"},
-			Intent:                  "",
-			ResponseAuthenticated:   cloneTemplate(ts.defaultResponses["authenticated"]),
-			ResponseUnauthenticated: cloneTemplate(ts.defaultResponses["unauthenticated"]),
-		},
-	}
+	return &TrapBuilder{ts: ts, path: path, methods: []string{"GET", "POST"}}
 }
 
 func (b *TrapBuilder) Methods(methods ...string) *TrapBuilder {
@@ -68,57 +69,94 @@ func (b *TrapBuilder) Methods(methods ...string) *TrapBuilder {
 		}
 	}
 	if len(cleaned) > 0 {
-		b.config.Methods = cleaned
+		b.ts.mu.Lock()
+		b.methods = cleaned
+		b.ts.mu.Unlock()
 	}
 	return b
 }
 
 func (b *TrapBuilder) Intent(intent string) *TrapBuilder {
-	b.config.Intent = intent
+	b.ts.mu.Lock()
+	b.intent = intent
+	b.ts.mu.Unlock()
 	return b
 }
 
+// Respond customises the response for authenticated requests. See
+// applyResponse for the "provided" semantics. It panics if cfg.Template names
+// a template that has not been registered with Sentry.Template.
 func (b *TrapBuilder) Respond(cfg ResponseConfig) *TrapBuilder {
-	b.applyResponse("authenticated", cfg)
+	op := b.responseOp(cfg)
+	b.ts.mu.Lock()
+	b.authOps = append(b.authOps, op)
+	b.ts.mu.Unlock()
 	return b
 }
 
+// IfUnauthenticated customises the response for unauthenticated requests.
 func (b *TrapBuilder) IfUnauthenticated(cfg ResponseConfig) *TrapBuilder {
-	b.applyResponse("unauthenticated", cfg)
+	op := b.responseOp(cfg)
+	b.ts.mu.Lock()
+	b.unauthOps = append(b.unauthOps, op)
+	b.ts.mu.Unlock()
 	return b
 }
 
+// Build resolves the trap's configuration, applying the Sentry's current
+// default responses. It is called at bootstrap time, so defaults configured
+// after Trap() are honoured.
 func (b *TrapBuilder) Build() TrapConfig {
-	return b.config
+	b.ts.mu.RLock()
+	defer b.ts.mu.RUnlock()
+	resolve := func(key string, ops []func(*ResponseTemplate)) ResponseTemplate {
+		t := cloneTemplate(b.ts.defaultResponses[key])
+		for _, op := range ops {
+			op(&t)
+		}
+		if t.MIMEType == "" {
+			t.MIMEType = "application/json"
+		}
+		return t
+	}
+	return TrapConfig{
+		Path:                    b.path,
+		Methods:                 append([]string(nil), b.methods...),
+		Intent:                  b.intent,
+		ResponseAuthenticated:   resolve("authenticated", b.authOps),
+		ResponseUnauthenticated: resolve("unauthenticated", b.unauthOps),
+	}
 }
 
-func (b *TrapBuilder) applyResponse(key string, cfg ResponseConfig) {
-	var target *ResponseTemplate
-	if key == "authenticated" {
-		target = &b.config.ResponseAuthenticated
-	} else {
-		target = &b.config.ResponseUnauthenticated
-	}
-
+// responseOp turns a ResponseConfig into an operation on a ResponseTemplate.
+//
+// A named Template replaces the whole response (and is looked up now, so a
+// missing template fails at configuration time with a panic naming it).
+// Otherwise only provided fields override the defaults: Status != 0, Body !=
+// nil (so "", 0, false and empty maps are honoured) and MIMEType != "". A zero
+// Status means "not provided"; it is never a valid HTTP status anyway.
+func (b *TrapBuilder) responseOp(cfg ResponseConfig) func(*ResponseTemplate) {
 	if cfg.Template != "" {
 		b.ts.mu.RLock()
 		t, ok := b.ts.templates[cfg.Template]
 		b.ts.mu.RUnlock()
 		if !ok {
-			panic("response_builder: template not found: " + cfg.Template)
+			panic(fmt.Sprintf("trappsec: response template %q not found; register it with Sentry.Template(name, ...) before referencing it", cfg.Template))
 		}
-		*target = cloneTemplate(t)
-		return
+		t = cloneTemplate(t)
+		return func(dst *ResponseTemplate) { *dst = cloneTemplate(t) }
 	}
-
-	if cfg.Status > 0 {
-		target.StatusCode = cfg.Status
-	}
-	if cfg.Body != nil {
-		target.Body = cfg.Body
-	}
-	if cfg.MIMEType != "" {
-		target.MIMEType = cfg.MIMEType
+	body := deepCopyValue(cfg.Body)
+	return func(dst *ResponseTemplate) {
+		if cfg.Status != 0 {
+			dst.StatusCode = cfg.Status
+		}
+		if cfg.Body != nil {
+			dst.Body = deepCopyValue(body)
+		}
+		if cfg.MIMEType != "" {
+			dst.MIMEType = cfg.MIMEType
+		}
 	}
 }
 
@@ -139,15 +177,33 @@ func newWatchBuilder(ts *Sentry, path string) *WatchBuilder {
 }
 
 func (b *WatchBuilder) Query(name string, defaultValue any, intent string) *WatchBuilder {
+	b.ts.mu.Lock()
 	b.config.QueryFields[name] = WatchFieldRule{Default: defaultValue, Intent: intent}
+	b.ts.mu.Unlock()
 	return b
 }
 
 func (b *WatchBuilder) Body(name string, defaultValue any, intent string) *WatchBuilder {
+	b.ts.mu.Lock()
 	b.config.BodyFields[name] = WatchFieldRule{Default: defaultValue, Intent: intent}
+	b.ts.mu.Unlock()
 	return b
 }
 
+// Build returns a snapshot of the watch configuration.
 func (b *WatchBuilder) Build() WatchConfig {
-	return b.config
+	b.ts.mu.RLock()
+	defer b.ts.mu.RUnlock()
+	cfg := WatchConfig{
+		Path:        b.config.Path,
+		QueryFields: make(map[string]WatchFieldRule, len(b.config.QueryFields)),
+		BodyFields:  make(map[string]WatchFieldRule, len(b.config.BodyFields)),
+	}
+	for k, v := range b.config.QueryFields {
+		cfg.QueryFields[k] = v
+	}
+	for k, v := range b.config.BodyFields {
+		cfg.BodyFields[k] = v
+	}
+	return cfg
 }

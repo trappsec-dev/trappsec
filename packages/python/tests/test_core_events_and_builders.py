@@ -2,7 +2,10 @@ import pathlib
 import sys
 import unittest
 
-sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / "src"))
+try:
+    import trappsec  # noqa: F401  (prefer the installed package)
+except ImportError:
+    sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / "src"))
 
 from trappsec.builders import TrapBuilder, WatchBuilder
 from trappsec.core import Sentry
@@ -13,6 +16,8 @@ class _Ctx:
         self.identity = type("Identity", (), {"get_context": lambda _self, _req: identity_ctx})()
         self.request = type("Request", (), {"get_context": lambda _self, _req: request_ctx})()
         self.events = []
+        self.service, self.environment, self.hostname = "svc", "dev", "h"
+        self._base_event = lambda name, req: Sentry._base_event(self, name, req)
 
     def _trigger(self, event):
         self.events.append(event)

@@ -58,6 +58,7 @@ func TestSlackHandlerFormatsBlocksPayload(t *testing.T) {
 		t.Fatalf("emit returned unexpected error: %v", err)
 	}
 
+	flush(t, h)
 	attachments, ok := payload["attachments"].([]any)
 	if !ok || len(attachments) == 0 {
 		t.Fatalf("expected slack attachments payload, got %#v", payload)
@@ -66,8 +67,8 @@ func TestSlackHandlerFormatsBlocksPayload(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected first attachment object, got %#v", attachments[0])
 	}
-	if text, _ := payload["text"].(string); text != "" {
-		t.Fatalf("expected empty top-level text summary, got %q", text)
+	if text, _ := payload["text"].(string); !strings.Contains(text, "Honeypot endpoint hit") {
+		t.Fatalf("expected non-empty top-level text fallback, got %q", text)
 	}
 	blocks, ok := first["blocks"].([]any)
 	if !ok || len(blocks) == 0 {
