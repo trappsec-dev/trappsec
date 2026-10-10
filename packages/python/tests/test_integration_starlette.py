@@ -193,3 +193,41 @@ def test_trap_duplicate_fails_loud_and_catch_all_does_not_shadow():
     sentry._handlers.append(Capture())
     sentry.trap("/admin")
     assert TestClient(app).get("/admin").status_code == 401
+
+
+import codecs  # noqa: E402
+
+_PAYLOAD = {"is_admin": True, "name": "x"}
+_VARIANTS = [
+    ("application/json", json.dumps(_PAYLOAD).encode("utf-16")),
+    ("application/json", json.dumps(_PAYLOAD).encode("utf-32")),
+    ("application/json", codecs.BOM_UTF8 + json.dumps(_PAYLOAD).encode()),
+    ("application/json; charset=utf-16", json.dumps(_PAYLOAD).encode("utf-16")),
+    ("text/plain", json.dumps(_PAYLOAD).encode()),
+    ("application/vnd.api+json", json.dumps(_PAYLOAD).encode()),
+]
+
+
+async def _raw(request):
+    raw = await request.body()
+    return JSONResponse({"json": await request.json(), "raw": json.loads(raw),
+                         "clen": request.headers.get("content-length"), "alen": len(raw)})
+
+
+@pytest.mark.parametrize("ctype,raw", _VARIANTS)
+def test_encoding_and_content_type_bypasses_stripped(ctype, raw):
+    app, sentry, cap = make(routes=[Route("/raw", _raw, methods=["POST"])])
+    sentry.watch("/raw").body("is_admin")
+    r = TestClient(app).post("/raw", content=raw, headers={"content-type": ctype})
+    d = r.json()
+    assert d["json"] == {"name": "x"} and d["raw"] == {"name": "x"}
+    assert int(d["clen"]) == d["alen"]
+    assert len(watch_events(cap)) == 1
+
+
+def test_non_json_unknown_body_passes_through_untouched():
+    app, sentry, cap = make(routes=[Route("/raw", _raw, methods=["POST"])])
+    sentry.watch("/raw").body("is_admin")
+    r = TestClient(app, raise_server_exceptions=False).post(
+        "/raw", content=b"\x00\x01binary", headers={"content-type": "application/octet-stream"})
+    assert r.status_code == 500 and watch_events(cap) == []

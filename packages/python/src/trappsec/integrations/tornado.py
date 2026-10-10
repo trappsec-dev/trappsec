@@ -32,6 +32,8 @@ import re
 import threading
 from urllib.parse import parse_qsl, urlencode
 
+from . import _jsonbody
+
 _NAME_RE = re.compile(r';\s*name=(?:"([^"]*)"|([^;\s]*))', re.I)
 _FILENAME_RE = re.compile(r";\s*filename\*?=", re.I)
 
@@ -388,14 +390,23 @@ class TornadoIntegration:
         media = _media_type(ctype)
         found = []
 
-        if media == "application/json" or media.endswith("+json"):
-            try:
-                obj = json.loads(body.decode("utf-8"))
-            except Exception:
-                return []
+        if media not in _jsonbody.FORM_MEDIA:
+            # handlers json-decode request.body regardless of Content-Type: sniff.
+            if _jsonbody.is_json_media(media):
+                try:
+                    obj = _jsonbody.parse_json_bytes(body)
+                except Exception:
+                    return []
+            else:
+                obj = _jsonbody.sniff_json(body)
+                if obj is None:
+                    return []
             obj, found, touched = _detect_json(self.ts, obj, rules, request)
             if touched:
-                self._set_body(request, json.dumps(obj).encode("utf-8"))
+                self._set_body(request, _jsonbody.serialize(obj))
+                ct = _jsonbody.fix_charset(ctype)
+                if ct is not None:
+                    request.headers["Content-Type"] = ct
         elif media == "application/x-www-form-urlencoded":
             pairs = parse_qsl(body.decode("utf-8", "replace"), keep_blank_values=True)
             data, found, touched = self.ts._detect_honey_fields(_group_pairs(pairs), rules, request)

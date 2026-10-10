@@ -8,6 +8,8 @@ from django.http import HttpResponse, HttpResponseNotAllowed, QueryDict
 from django.utils.datastructures import MultiValueDict
 from django.views.decorators.csrf import csrf_exempt
 
+from . import _jsonbody
+
 
 class TrapConflictError(RuntimeError):
     """A trap path exactly duplicates an existing application route."""
@@ -231,16 +233,27 @@ class DjangoIntegration:
             return found
 
         new_body = None
-        if "json" in content_type:
-            try:
-                data = json.loads(body_bytes.decode("utf-8"))
-            except Exception:
+        is_form = "application/x-www-form-urlencoded" in content_type
+        if not is_form:
+            # json.loads(bytes) auto-detects UTF-8/16/32 like the app; sniff any
+            # content type since request.body is parsed by the app regardless.
+            if "json" in content_type:
+                try:
+                    data = _jsonbody.parse_json_bytes(body_bytes)
+                except Exception:
+                    return found
+            else:
+                data = _jsonbody.sniff_json(body_bytes)
+            if data is None:
                 return found
             data, mod, touched = self.ts._detect_honey_fields(data, body_fields, request, source="body")
             found.extend(mod)
             if touched:
-                new_body = json.dumps(data).encode("utf-8")
-        elif "application/x-www-form-urlencoded" in content_type:
+                new_body = _jsonbody.serialize(data)
+                ct = _jsonbody.fix_charset(request.META.get("CONTENT_TYPE", ""))
+                if ct is not None:
+                    request.META["CONTENT_TYPE"] = ct
+        else:
             qd = QueryDict(body_bytes, encoding=request.encoding)
             data = {k: list(v) for k, v in qd.lists()}
             data, mod, touched = self.ts._detect_honey_fields(data, body_fields, request, source="body")

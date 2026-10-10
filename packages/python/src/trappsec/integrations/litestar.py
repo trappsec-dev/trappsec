@@ -32,6 +32,8 @@ import re
 import threading
 from urllib.parse import parse_qsl, urlencode
 
+from . import _jsonbody
+
 MAX_INSPECT_BYTES = 10 * 1024 * 1024
 
 _TYPED_PARAM_RE = re.compile(r"\{([^}:]+):[^}]+\}")
@@ -294,9 +296,6 @@ class LitestarIntegration:
     async def _read_body(self, scope, receive, headers):
         """Buffer the body only if it is worth inspecting; returns (messages, body) or None."""
         media = _media_type(headers.get("content-type", ""))
-        if not (media == "application/json" or media.endswith("+json")
-                or media in ("application/x-www-form-urlencoded", "multipart/form-data")):
-            return None
         try:
             length = int(headers.get("content-length", "0") or 0)
         except ValueError:
@@ -368,10 +367,17 @@ class LitestarIntegration:
         if new_qs is not None:
             scope["query_string"] = new_qs
         if new_body is not None:
-            scope["headers"] = [
-                (k, str(len(new_body)).encode("latin1")) if k.decode("latin1").lower() == "content-length" else (k, v)
-                for k, v in scope.get("headers", [])
-            ]
+            new_ct = _jsonbody.fix_charset(headers.get("content-type", ""))
+
+            def _rewrite(k, v):
+                name = k.decode("latin1").lower()
+                if name == "content-length":
+                    return k, str(len(new_body)).encode("latin1")
+                if name == "content-type" and new_ct is not None and \
+                        _jsonbody.media_type(headers.get("content-type", "")) not in _jsonbody.FORM_MEDIA:
+                    return k, new_ct.encode("latin1")
+                return k, v
+            scope["headers"] = [_rewrite(k, v) for k, v in scope.get("headers", [])]
             app_receive = _replay([{"type": "http.request", "body": new_body, "more_body": False}])
 
         if found:
@@ -386,14 +392,20 @@ class LitestarIntegration:
         ctype = headers.get("content-type", "")
         media = _media_type(ctype)
 
-        if media == "application/json" or media.endswith("+json"):
-            try:
-                obj = json.loads(body.decode("utf-8"))
-            except Exception:
-                return None
+        if media not in _jsonbody.FORM_MEDIA:
+            # request.json() ignores Content-Type, so sniff any non-form body.
+            if _jsonbody.is_json_media(media):
+                try:
+                    obj = _jsonbody.parse_json_bytes(body)
+                except Exception:
+                    return None
+            else:
+                obj = _jsonbody.sniff_json(body)
+                if obj is None:
+                    return None
             obj, mod, touched = _detect_json(self.ts, obj, rules, request)
             found.extend(mod)
-            return json.dumps(obj).encode("utf-8") if touched else None
+            return _jsonbody.serialize(obj) if touched else None
 
         if media == "application/x-www-form-urlencoded":
             pairs = parse_qsl(body.decode("utf-8", "replace"), keep_blank_values=True)

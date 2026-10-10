@@ -243,3 +243,26 @@ def test_explicit_httpserver_listen_path():
 
     events = asyncio.run(run())
     assert {e["event"] for e in events} == {"trappsec.trap_hit", "trappsec.watch_hit"}
+
+
+import codecs  # noqa: E402
+
+_PAYLOAD = {"x": "evil", "name": "n"}
+
+
+class BypassTests(SentryCase):
+    def test_encoding_and_content_type_bypasses_stripped(self):
+        variants = [
+            ("application/json", json.dumps(_PAYLOAD).encode("utf-16")),
+            ("application/json", json.dumps(_PAYLOAD).encode("utf-32")),
+            ("application/json", codecs.BOM_UTF8 + json.dumps(_PAYLOAD).encode()),
+            ("application/json; charset=utf-16", json.dumps(_PAYLOAD).encode("utf-16")),
+            ("text/plain", json.dumps(_PAYLOAD).encode()),
+            ("application/vnd.api+json", json.dumps(_PAYLOAD).encode()),
+        ]
+        for n, (ctype, raw) in enumerate(variants, 1):
+            r = self.fetch("/echo", method="POST", body=raw, headers={"Content-Type": ctype})
+            d = json.loads(r.body)
+            assert json.loads(d["body"]) == {"name": "n"}, ctype
+            assert int(d["clen"]) == len(d["body"].encode())
+            assert len(self.hits("trappsec.watch_hit")) == n

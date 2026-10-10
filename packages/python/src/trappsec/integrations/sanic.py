@@ -31,6 +31,8 @@ import re
 import threading
 from urllib.parse import parse_qsl, urlencode
 
+from . import _jsonbody
+
 _PARAM_RE = re.compile(r"<([^:>]+):[^>]+>")
 _NAME_RE = re.compile(r';\s*name=(?:"([^"]*)"|([^;\s]*))', re.I)
 _FILENAME_RE = re.compile(r";\s*filename\*?=", re.I)
@@ -290,14 +292,26 @@ class SanicIntegration:
         media = _media_type(ctype)
         found = []
 
-        if media == "application/json" or media.endswith("+json"):
-            try:
-                obj = json.loads(body)
-            except Exception:
-                return []  # let the handler produce its own 400
+        if media not in _jsonbody.FORM_MEDIA:
+            # request.json ignores Content-Type, so sniff any non-form body.
+            if _jsonbody.is_json_media(media):
+                try:
+                    obj = _jsonbody.parse_json_bytes(body)
+                except Exception:
+                    return []  # let the handler produce its own 400
+            else:
+                obj = _jsonbody.sniff_json(body)
+                if obj is None:
+                    return []
             obj, found, touched = _detect_json(self.ts, obj, rules, request)
             if touched:
-                self._set_body(request, json.dumps(obj).encode("utf-8"))
+                self._set_body(request, _jsonbody.serialize(obj))
+                ct = _jsonbody.fix_charset(ctype)
+                if ct is not None:
+                    try:
+                        request.headers["content-type"] = ct
+                    except Exception:
+                        pass
                 request.parsed_json = None  # re-parsed lazily from the stripped body
         elif media == "application/x-www-form-urlencoded":
             pairs = parse_qsl(body.decode("utf-8", "replace"), keep_blank_values=True)

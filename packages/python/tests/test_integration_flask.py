@@ -192,3 +192,53 @@ def test_trap_not_shadowed_by_catch_all():
     r = app.test_client().get("/admin")
     assert r.status_code == 401
     assert app.test_client().get("/other").data == b"app"
+
+
+import codecs  # noqa: E402
+
+_PAYLOAD = {"is_admin": True, "name": "x"}
+_VARIANTS = [
+    ("application/json", json.dumps(_PAYLOAD).encode("utf-16")),
+    ("application/json", json.dumps(_PAYLOAD).encode("utf-32")),
+    ("application/json", codecs.BOM_UTF8 + json.dumps(_PAYLOAD).encode()),
+    ("application/json; charset=utf-16", json.dumps(_PAYLOAD).encode("utf-16")),
+    ("text/plain", json.dumps(_PAYLOAD).encode()),
+    ("application/vnd.api+json", json.dumps(_PAYLOAD).encode()),
+]
+
+
+@pytest.mark.parametrize("ctype,raw", _VARIANTS)
+def test_encoding_and_content_type_bypasses_stripped_everywhere(ctype, raw):
+    app, sentry, cap = make()
+
+    @app.route("/raw", methods=["POST"])
+    def rawview():
+        a = request.get_data()
+        b = request.data  # noqa: F841
+        return jsonify(
+            forced=request.get_json(force=True, silent=True),
+            raw=json.loads(a),
+            stream=json.loads(request.stream.read()),
+            clen=request.content_length,
+            alen=len(a),
+        )
+
+    sentry.watch("/raw").body("is_admin")
+    r = app.test_client().post("/raw", data=raw, headers={"content-type": ctype})
+    d = r.get_json()
+    assert d["forced"] == {"name": "x"} and d["raw"] == {"name": "x"} and d["stream"] == {"name": "x"}
+    assert d["clen"] == d["alen"]
+    assert len(watch_events(cap)) == 1
+
+
+def test_get_data_consistent_when_get_json_read_first():
+    app, sentry, cap = make()
+
+    @app.route("/raw2", methods=["POST"])
+    def raw2():
+        first = request.get_json(silent=True)
+        return jsonify(first=first, raw=json.loads(request.get_data()))
+
+    sentry.watch("/raw2").body("is_admin")
+    d = app.test_client().post("/raw2", json=_PAYLOAD).get_json()
+    assert d["first"] == {"name": "x"} and d["raw"] == {"name": "x"}

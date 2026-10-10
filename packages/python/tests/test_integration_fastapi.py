@@ -195,3 +195,28 @@ def test_nested_include_router_and_trap_conflict_in_included_router():
     s2.trap("/v1/items").methods("GET")
     with pytest.raises(RuntimeError, match="duplicates"):
         s2.bootstrap()
+
+
+import codecs  # noqa: E402
+
+_PAYLOAD = {"is_admin": True, "name": "x"}
+
+
+@pytest.mark.parametrize("ctype,raw", [
+    ("application/json", json.dumps(_PAYLOAD).encode("utf-16")),
+    ("application/json", json.dumps(_PAYLOAD).encode("utf-32")),
+    ("application/json", codecs.BOM_UTF8 + json.dumps(_PAYLOAD).encode()),
+    ("text/plain", json.dumps(_PAYLOAD).encode()),
+    ("application/vnd.api+json", json.dumps(_PAYLOAD).encode()),
+])
+def test_encoding_and_content_type_bypasses_stripped(ctype, raw):
+    app, sentry, cap = make("before")
+
+    @app.post("/raw")
+    async def raw_route(request: Request):
+        return {"json": await request.json(), "raw": json.loads(await request.body())}
+
+    sentry.watch("/raw").body("is_admin")
+    d = TestClient(app).post("/raw", content=raw, headers={"content-type": ctype}).json()
+    assert d == {"json": {"name": "x"}, "raw": {"name": "x"}}
+    assert len(watch_events(cap)) == 1

@@ -238,3 +238,26 @@ def test_trap_json_body_is_not_double_encoded():
     with TestClient(app) as c:
         r = c.get("/t4")
         assert r.status_code == 403 and r.json() == {"a": 1}
+
+
+import codecs  # noqa: E402
+
+_PAYLOAD = {"x": "evil", "name": "n"}
+_VARIANTS = [
+    ("application/json", json.dumps(_PAYLOAD).encode("utf-16")),
+    ("application/json", json.dumps(_PAYLOAD).encode("utf-32")),
+    ("application/json", codecs.BOM_UTF8 + json.dumps(_PAYLOAD).encode()),
+    ("application/json; charset=utf-16", json.dumps(_PAYLOAD).encode("utf-16")),
+    ("text/plain", json.dumps(_PAYLOAD).encode()),
+    ("application/vnd.api+json", json.dumps(_PAYLOAD).encode()),
+]
+
+
+@pytest.mark.parametrize("ctype,raw", _VARIANTS)
+def test_encoding_and_content_type_bypasses_stripped(ctype, raw):
+    app, s, cap = make(watch_x)
+    with TestClient(app) as c:
+        d = c.post("/echo", content=raw, headers={"content-type": ctype}).json()
+        assert json.loads(d["body"]) == {"name": "n"}
+        assert int(d["clen"]) == len(d["body"].encode())
+        assert len(hits(cap, "trappsec.watch_hit")) == 1

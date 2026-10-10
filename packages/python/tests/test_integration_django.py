@@ -216,3 +216,33 @@ def test_trap_duplicate_route_fails_loud(env):
     s.trap("/items")
     with pytest.raises(RuntimeError, match="duplicates"):
         s.bootstrap()
+
+
+import codecs  # noqa: E402
+
+_PAYLOAD = {"is_admin": True, "name": "x"}
+
+
+@csrf_exempt
+def raw_view(request):
+    raw = request.body
+    return JsonResponse({"json": json.loads(raw), "clen": request.META.get("CONTENT_LENGTH"),
+                         "alen": len(raw)})
+
+
+@pytest.mark.parametrize("ctype,raw", [
+    ("application/json", json.dumps(_PAYLOAD).encode("utf-16")),
+    ("application/json", json.dumps(_PAYLOAD).encode("utf-32")),
+    ("application/json", codecs.BOM_UTF8 + json.dumps(_PAYLOAD).encode()),
+    ("application/json; charset=utf-16", json.dumps(_PAYLOAD).encode("utf-16")),
+    ("text/plain", json.dumps(_PAYLOAD).encode()),
+    ("application/vnd.api+json", json.dumps(_PAYLOAD).encode()),
+])
+def test_encoding_and_content_type_bypasses_stripped(env, ctype, raw):
+    h, s, cap = env(urlpatterns=[path("raw", raw_view)])
+    s.watch("/raw").body("is_admin")
+    r = client(h).post("/raw", data=raw, headers={"content-type": ctype})
+    d = r.get_json()
+    assert d["json"] == {"name": "x"}
+    assert int(d["clen"]) == d["alen"]
+    assert len(watch_events(cap)) == 1

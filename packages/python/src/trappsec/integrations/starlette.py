@@ -4,6 +4,8 @@ import uuid
 from contextlib import asynccontextmanager
 from urllib.parse import parse_qsl, urlencode
 
+from . import _jsonbody
+
 
 class TrapConflictError(RuntimeError):
     """A trap path+method exactly duplicates an existing application route."""
@@ -11,6 +13,7 @@ class TrapConflictError(RuntimeError):
 
 _ERRORS = "surrogateescape"
 _TAG = "__trappsec_watch__"
+MAX_SNIFF_BYTES = 10 * 1024 * 1024
 
 
 def _mime(headers):
@@ -227,17 +230,27 @@ class StarletteIntegration:
                 kind = "urlencoded"
             elif mime == "multipart/form-data":
                 kind = "multipart"
+            else:
+                # request.json() ignores Content-Type: sniff any other body.
+                kind = "sniff"
 
             if kind:
                 messages = []
                 chunks = []
+                total = 0
+                oversized = False
                 while True:
                     message = await receive()
                     messages.append(message)
                     if message["type"] != "http.request":
                         break
-                    chunks.append(message.get("body", b""))
+                    chunk = message.get("body", b"")
+                    chunks.append(chunk)
+                    total += len(chunk)
                     if not message.get("more_body", False):
+                        break
+                    if kind == "sniff" and total > MAX_SNIFF_BYTES:
+                        oversized = True  # too big to be worth sniffing: replay and stream
                         break
                 raw = b"".join(chunks)
 
@@ -254,13 +267,24 @@ class StarletteIntegration:
                 req = Request(new_scope)
                 new_body = None
                 try:
-                    if kind == "json":
-                        data = json.loads(raw.decode("utf-8"))
-                        data, mod, touched = ts._detect_honey_fields(
-                            data, body_fields, req, source="body")
-                        found_fields.extend(mod)
-                        if touched:
-                            new_body = json.dumps(data).encode("utf-8")
+                    if oversized:
+                        pass
+                    elif kind in ("json", "sniff"):
+                        if kind == "json":
+                            data = _jsonbody.parse_json_bytes(raw)
+                        else:
+                            data = _jsonbody.sniff_json(raw)
+                        if data is not None:
+                            data, mod, touched = ts._detect_honey_fields(
+                                data, body_fields, req, source="body")
+                            found_fields.extend(mod)
+                            if touched:
+                                new_body = _jsonbody.serialize(data)
+                                ct = _jsonbody.fix_charset(
+                                    next((v.decode("latin-1") for k, v in headers
+                                          if k == b"content-type"), ""))
+                                if ct is not None:
+                                    headers = _set_header(headers, b"content-type", ct.encode("latin-1"))
                     elif kind == "urlencoded":
                         form = {}
                         for k, v in parse_qsl(raw.decode("utf-8", _ERRORS),

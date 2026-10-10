@@ -1,4 +1,7 @@
+import io
 import threading
+
+from . import _jsonbody
 
 
 class TrapConflictError(RuntimeError):
@@ -119,14 +122,22 @@ class FlaskIntegration:
                 request.args = ImmutableMultiDict(q_dict)
 
         if body_fields:
-            if request.is_json:
-                data = request.get_json(silent=True)
+            media = _jsonbody.media_type(request.content_type)
+            if not _jsonbody.is_form_media(media):
+                # get_json(force=True) ignores Content-Type, so sniff any body.
+                raw = request.get_data(cache=True)
+                if _jsonbody.is_json_media(media):
+                    try:
+                        data = _jsonbody.parse_json_bytes(raw)
+                    except Exception:
+                        data = None
+                else:
+                    data = _jsonbody.sniff_json(raw)
                 if data is not None:
                     data, mod, touched = self.ts._detect_honey_fields(data, body_fields, request, source="body")
                     found_fields.extend(mod)
                     if touched:
-                        # Werkzeug caches parsed JSON as a (strict, silent) tuple.
-                        request._cached_json = (data, data)
+                        self._replace_raw_body(request, data)
 
             if request.form:
                 form = request.form.to_dict(flat=False)
@@ -144,6 +155,20 @@ class FlaskIntegration:
 
         if found_fields:
             self.ts._trigger_watch_event(request, found_fields)
+
+    @staticmethod
+    def _replace_raw_body(request, data):
+        """Make every body accessor (get_json, get_data, data, stream) see the stripped body."""
+        new_body = _jsonbody.serialize(data)
+        # Werkzeug caches parsed JSON as a (strict, silent) tuple.
+        request._cached_json = (data, data)
+        request._cached_data = new_body
+        request.environ["wsgi.input"] = io.BytesIO(new_body)
+        request.environ["CONTENT_LENGTH"] = str(len(new_body))
+        request.__dict__["stream"] = io.BytesIO(new_body)
+        ct = _jsonbody.fix_charset(request.environ.get("CONTENT_TYPE", ""))
+        if ct is not None:
+            request.environ["CONTENT_TYPE"] = ct
 
     # ----------------------------------------------------------------- startup
 

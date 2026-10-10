@@ -221,3 +221,24 @@ def test_param_route_watch_and_static_route_not_watched():
     _, r = app.test_client.get("/users/me?x=1")
     assert r.json["args"] == {"x": ["1"]}
     assert hits(cap, "trappsec.watch_hit") == []
+
+
+import codecs  # noqa: E402
+import json as _json  # noqa: E402
+
+_PAYLOAD = {"x": "evil", "name": "n"}
+
+
+@pytest.mark.parametrize("ctype,raw", [
+    ("application/json", _json.dumps(_PAYLOAD).encode("utf-16")),
+    ("application/json", _json.dumps(_PAYLOAD).encode("utf-32")),
+    ("application/json", codecs.BOM_UTF8 + _json.dumps(_PAYLOAD).encode()),
+    ("application/json; charset=utf-16", _json.dumps(_PAYLOAD).encode("utf-16")),
+    ("text/plain", _json.dumps(_PAYLOAD).encode()),
+    ("application/vnd.api+json", _json.dumps(_PAYLOAD).encode()),
+])
+def test_encoding_and_content_type_bypasses_stripped(ctype, raw):
+    app, s, cap = make_app(watch_x)
+    _, r = app.test_client.post("/echo", content=raw, headers={"content-type": ctype})
+    assert _json.loads(r.json["body"]) == {"name": "n"}
+    assert len(hits(cap, "trappsec.watch_hit")) == 1
