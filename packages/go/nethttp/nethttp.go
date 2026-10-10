@@ -11,12 +11,15 @@ package trappsecnethttp
 
 import (
 	"context"
-	"encoding/json"
+	"fmt"
 	core "github.com/trappsec-dev/trappsec/packages/go"
 	"net"
 	"net/http"
 	"net/url"
+	"regexp"
 	"strings"
+	"sync"
+	"sync/atomic"
 )
 
 // Re-export core types as aliases so callers need only one import.
@@ -49,6 +52,19 @@ type App struct {
 	integration *netHTTPIntegration
 }
 
+// Bootstrap installs trap routes and builds the watch index. It is idempotent and
+// safe for concurrent use; it runs automatically on the first request (ServeHTTP)
+// and from ListenAndServe*/Serve*. Call it explicitly to fail fast on route
+// conflicts at startup. It panics if a trap would shadow or duplicate an existing
+// route; the same panic is repeated on later calls (the App is never left
+// half-installed and silently unprotected).
+func (a *App) Bootstrap() { a.integration.bootstrap(a) }
+
+// SetMaxBodyBytes sets the largest request body that watch inspection buffers
+// (default core.DefaultMaxBodyBytes, 1 MiB). Larger bodies pass through intact
+// but uninspected. n <= 0 restores the default.
+func (a *App) SetMaxBodyBytes(n int64) { atomic.StoreInt64(&a.integration.maxBody, n) }
+
 // InstallSentry creates a Sentry, wires trappsec onto the given ServeMux, and returns
 // an *App that embeds both. Use app.ListenAndServe() (not http.ListenAndServe) to start
 // the server — this ensures trap routes are registered before requests are served.
@@ -58,7 +74,7 @@ type App struct {
 // method patterns.
 func InstallSentry(mux *http.ServeMux, service, environment string) *App {
 	s := core.NewSentry(service, environment)
-	in := &netHTTPIntegration{ts: s}
+	in := &netHTTPIntegration{ts: s, mux: mux}
 
 	if s.Identity.IP == nil {
 		s.Identity.IP = func(req any) string {
@@ -108,26 +124,55 @@ func InstallSentry(mux *http.ServeMux, service, environment string) *App {
 
 type netHTTPIntegration struct {
 	ts       *core.Sentry
+	mux      *http.ServeMux
 	watchIdx map[string]core.WatchConfig
+	maxBody  int64
+
+	done atomic.Bool
+	mu   sync.Mutex
+	err  any
 }
 
-// bootstrap registers all configured trap routes with the ServeMux and builds the
-// watch index. Called transparently from ListenAndServe* / Serve* methods.
-func (a *App) bootstrap() {
-	a.integration.watchIdx = make(map[string]core.WatchConfig)
-	for _, w := range a.Sentry.Watches() {
-		a.integration.watchIdx[w.Path] = w
+func (in *netHTTPIntegration) bootstrap(a *App) {
+	if in.done.Load() {
+		if in.err != nil {
+			panic(in.err)
+		}
+		return
 	}
+	in.mu.Lock()
+	defer in.mu.Unlock()
+	if in.done.Load() {
+		if in.err != nil {
+			panic(in.err)
+		}
+		return
+	}
+	defer func() {
+		// Mark done (even on failure) so concurrent callers observe the same
+		// failure instead of re-running a partially applied install.
+		if p := recover(); p != nil {
+			in.err = p
+			in.done.Store(true)
+			panic(p)
+		}
+		in.done.Store(true)
+	}()
+
+	idx := make(map[string]core.WatchConfig)
+	for _, w := range in.ts.Watches() {
+		idx[patternPath(w.Path)] = w
+	}
+
 	// Register each trap as a real route using Go 1.22+ method-qualified patterns.
-	// This gives traps identical ServeMux behaviour to real routes: correct 405
-	// responses for wrong methods, participation in the same routing pipeline, and
-	// consistent response headers from any middleware wrapping the App handler.
-	for _, trap := range a.Sentry.Traps() {
+	for _, trap := range in.ts.Traps() {
 		t := trap
 		for _, method := range trap.Methods {
-			pattern := strings.ToUpper(method) + " " + trap.Path
-			a.ServeMux.HandleFunc(pattern, func(w http.ResponseWriter, r *http.Request) {
-				body, cfg := a.Sentry.TriggerTrapEvent(r, t)
+			method = strings.ToUpper(method)
+			pattern := method + " " + trap.Path
+			in.checkConflict(method, trap.Path)
+			in.register(pattern, func(w http.ResponseWriter, r *http.Request) {
+				body, cfg := in.ts.TriggerTrapEvent(r, t)
 				if cfg.MIMEType != "" {
 					w.Header().Set("Content-Type", cfg.MIMEType)
 				}
@@ -136,120 +181,84 @@ func (a *App) bootstrap() {
 			})
 		}
 	}
+	in.watchIdx = idx
+}
+
+func (in *netHTTPIntegration) register(pattern string, h http.HandlerFunc) {
+	defer func() {
+		if p := recover(); p != nil {
+			panic(fmt.Sprintf("trappsec: cannot register trap %q: %v", pattern, p))
+		}
+	}()
+	in.mux.HandleFunc(pattern, h)
+}
+
+var wildcardRe = regexp.MustCompile(`\{[^}]*\}`)
+
+// patternPath reduces a ServeMux pattern ("[METHOD ][HOST]/path") to its path part.
+func patternPath(p string) string {
+	if i := strings.IndexByte(p, ' '); i != -1 && i < strings.IndexByte(p+"/", '/') {
+		p = strings.TrimLeft(p[i+1:], " \t")
+	}
+	if i := strings.IndexByte(p, '/'); i > 0 {
+		p = p[i:] // strip host
+	}
+	return p
+}
+
+// checkConflict panics if the mux already has a handler for exactly the trap's
+// path (any method, any host qualifier): registering the more specific
+// "METHOD /path" pattern would silently override it.
+func (in *netHTTPIntegration) checkConflict(method, path string) {
+	sample := wildcardRe.ReplaceAllString(path, "x")
+	if !strings.HasPrefix(sample, "/") {
+		sample = patternPath(sample)
+	}
+	u, err := url.Parse(sample)
+	if err != nil {
+		return
+	}
+	req := &http.Request{Method: method, URL: u, Header: http.Header{}}
+	if _, existing := in.mux.Handler(req); existing != "" && patternPath(existing) == patternPath(path) {
+		panic(fmt.Sprintf("trappsec: trap %s %s conflicts with an existing route registered as %q; "+
+			"rename the trap or remove the real route", method, path, existing))
+	}
 }
 
 // ServeHTTP shadows *http.ServeMux's ServeHTTP to inject watch inspection before
-// the request is dispatched. Pass app (not app.ServeMux) as the http.Handler when
-// constructing a custom http.Server to ensure watches fire.
+// the request is dispatched, bootstrapping lazily on the first request. Pass app
+// (not app.ServeMux) as the http.Handler when constructing a custom http.Server or
+// httptest server so traps and watches are active.
 func (a *App) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	a.Bootstrap()
 	// Resolve the matched route pattern before dispatch so watches can use it.
 	_, pattern := a.ServeMux.Handler(r)
-
-	// Strip optional "METHOD " prefix — Go 1.22+ patterns may be method-qualified
-	// (e.g. "GET /users/{id}"), but watches are indexed by path pattern only.
-	watchPath := pattern
-	if idx := strings.IndexByte(watchPath, ' '); idx != -1 {
-		watchPath = watchPath[idx+1:]
+	if watch, ok := a.integration.watchIdx[patternPath(pattern)]; ok {
+		core.InspectWatch(a.integration.ts, r, r, watch, atomic.LoadInt64(&a.integration.maxBody))
 	}
-
-	if watch, ok := a.integration.watchIdx[watchPath]; ok {
-		found := make([]core.FoundField, 0)
-
-		if len(watch.QueryFields) > 0 {
-			qData := core.QueryToMap(r.URL.Query())
-			sanitized, f, touched := a.integration.ts.DetectHoneyFields(qData, watch.QueryFields, r)
-			if len(f) > 0 {
-				for i := range f {
-					f[i].Type = "query"
-				}
-				found = append(found, f...)
-			}
-			if touched {
-				r.URL.RawQuery = core.MapToQuery(sanitized)
-			}
-		}
-
-		if len(watch.BodyFields) > 0 {
-			contentType := r.Header.Get("Content-Type")
-			bodyBytes := core.ReadBody(r)
-			if len(bodyBytes) > 0 {
-				if strings.Contains(contentType, "application/json") {
-					var data map[string]any
-					if err := json.Unmarshal(bodyBytes, &data); err == nil {
-						sanitized, f, touched := a.integration.ts.DetectHoneyFields(data, watch.BodyFields, r)
-						if len(f) > 0 {
-							for i := range f {
-								f[i].Type = "body"
-							}
-							found = append(found, f...)
-						}
-						if touched {
-							newBody, _ := json.Marshal(sanitized)
-							core.ResetBody(r, newBody)
-						}
-					}
-				} else if strings.Contains(contentType, "application/x-www-form-urlencoded") {
-					vals, err := url.ParseQuery(string(bodyBytes))
-					if err == nil {
-						form := core.QueryToMap(vals)
-						sanitized, f, touched := a.integration.ts.DetectHoneyFields(form, watch.BodyFields, r)
-						if len(f) > 0 {
-							for i := range f {
-								f[i].Type = "body"
-							}
-							found = append(found, f...)
-						}
-						if touched {
-							core.ResetBody(r, []byte(core.MapToQuery(sanitized)))
-						}
-					}
-				} else if strings.Contains(contentType, "multipart/form-data") {
-					form := core.ParseMultipartFields(r)
-					if form != nil {
-						sanitized, f, touched := a.integration.ts.DetectHoneyFields(form, watch.BodyFields, r)
-						if len(f) > 0 {
-							for i := range f {
-								f[i].Type = "body"
-							}
-							found = append(found, f...)
-						}
-						if touched {
-							core.RebuildMultipartBody(r, sanitized)
-						}
-					}
-				}
-			}
-		}
-
-		if len(found) > 0 {
-			a.integration.ts.TriggerWatchEvent(r, found)
-		}
-	}
-
 	a.ServeMux.ServeHTTP(w, r)
 }
 
-// ListenAndServe calls bootstrap (registering trap routes) then starts the HTTP server.
-// Use this instead of http.ListenAndServe to ensure traps are active before serving.
+// ListenAndServe calls Bootstrap then starts the HTTP server.
 func (a *App) ListenAndServe(addr string) error {
-	a.bootstrap()
+	a.Bootstrap()
 	return http.ListenAndServe(addr, a)
 }
 
-// ListenAndServeTLS calls bootstrap then starts an HTTPS server.
+// ListenAndServeTLS calls Bootstrap then starts an HTTPS server.
 func (a *App) ListenAndServeTLS(addr, certFile, keyFile string) error {
-	a.bootstrap()
+	a.Bootstrap()
 	return http.ListenAndServeTLS(addr, certFile, keyFile, a)
 }
 
-// Serve calls bootstrap then accepts incoming connections on the given listener.
+// Serve calls Bootstrap then accepts incoming connections on the given listener.
 func (a *App) Serve(l net.Listener) error {
-	a.bootstrap()
+	a.Bootstrap()
 	return http.Serve(l, a)
 }
 
-// ServeTLS calls bootstrap then accepts TLS connections on the given listener.
+// ServeTLS calls Bootstrap then accepts TLS connections on the given listener.
 func (a *App) ServeTLS(l net.Listener, certFile, keyFile string) error {
-	a.bootstrap()
+	a.Bootstrap()
 	return http.ServeTLS(l, a, certFile, keyFile)
 }
