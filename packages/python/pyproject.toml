@@ -48,6 +48,7 @@ test = [
     "flask",
     "fastapi",
     "httpx",
+    "python-multipart",
     "starlette",
     "django",
     "sanic",
