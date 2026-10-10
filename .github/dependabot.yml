@@ -1,15 +1,25 @@
+# Version-update PRs are disabled (open-pull-requests-limit: 0) while keeping
+# the per-ecosystem config, so it can be re-enabled by removing that line.
+# Dependabot security updates are controlled separately in the repository
+# settings (Settings > Advanced Security), not by this file.
+#
+# examples/ is intentionally not listed: example apps are not published and
+# their dependencies are not managed by Dependabot.
 version: 2
 updates:
   - package-ecosystem: pip
     directory: /packages/python
+    open-pull-requests-limit: 0
     schedule:
       interval: weekly
   - package-ecosystem: npm
     directory: /packages/node
+    open-pull-requests-limit: 0
     schedule:
       interval: weekly
   - package-ecosystem: npm
     directory: /packages/node/test/integrations
+    open-pull-requests-limit: 0
     schedule:
       interval: monthly
     groups:
@@ -17,6 +27,7 @@ updates:
         patterns: ["*"]
   - package-ecosystem: gomod
     directory: /packages/go
+    open-pull-requests-limit: 0
     schedule:
       interval: weekly
     groups:
@@ -24,6 +35,7 @@ updates:
         patterns: ["*"]
   - package-ecosystem: gomod
     directory: /packages/go/nethttp
+    open-pull-requests-limit: 0
     schedule:
       interval: weekly
     groups:
@@ -31,6 +43,7 @@ updates:
         patterns: ["*"]
   - package-ecosystem: gomod
     directory: /packages/go/gin
+    open-pull-requests-limit: 0
     schedule:
       interval: weekly
     groups:
@@ -38,6 +51,7 @@ updates:
         patterns: ["*"]
   - package-ecosystem: gomod
     directory: /packages/go/echo
+    open-pull-requests-limit: 0
     schedule:
       interval: weekly
     groups:
@@ -45,6 +59,7 @@ updates:
         patterns: ["*"]
   - package-ecosystem: github-actions
     directory: /
+    open-pull-requests-limit: 0
     schedule:
       interval: weekly
     groups:
