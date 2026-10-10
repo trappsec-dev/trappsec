@@ -3,7 +3,10 @@ import sys
 import unittest
 import json
 
-sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / "src"))
+try:
+    import trappsec  # noqa: F401  (prefer the installed package)
+except ImportError:
+    sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / "src"))
 
 from trappsec import handlers
 from trappsec.handlers import SlackHandler
@@ -41,7 +44,7 @@ class SlackHandlerTests(unittest.TestCase):
         self.assertIn('"attachments"', sent[0])
         self.assertIn('"blocks"', sent[0])
         payload = json.loads(sent[0])
-        self.assertEqual(payload["text"], "")
+        self.assertEqual(payload["text"], "[Alert] Honeypot endpoint hit on svc - GET /deployment/config")
         summary_text = payload["attachments"][0]["blocks"][0]["text"]["text"]
         self.assertIn("*Event:* Decoy Route Triggered", summary_text)
         self.assertIn("*Timestamp:* <!date^1712011200^", summary_text)

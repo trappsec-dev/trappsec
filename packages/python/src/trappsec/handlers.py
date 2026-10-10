@@ -2,29 +2,54 @@ import logging
 import json
 import hmac
 import hashlib
+import queue
 import threading
 import time
 from datetime import datetime, timezone
 
 try:
     import requests
-    from requests.adapters import HTTPAdapter
-    from urllib3.util.retry import Retry
 except ImportError:
     requests = None
+
+_QUEUE_SIZE = 1000
+_DROP_WARN_INTERVAL = 60.0
+_MAX_RETRIES = 2
+_STOP = object()
+
+
+def _truncate_text(value: str, limit: int = 1024) -> str:
+    if len(value) <= limit:
+        return value
+    return value[:limit] + "..."
+
+
+def _dumps(event) -> str:
+    """Serialize an event; never raises."""
+    try:
+        return json.dumps(event, default=str)
+    except Exception:
+        try:
+            return json.dumps(event, default=str, skipkeys=True, check_circular=False)
+        except Exception:
+            name = event.get("event") if isinstance(event, dict) else None
+            return json.dumps({"event": str(name), "error": "event could not be serialized"})
 
 
 class BaseHandler:
     def emit(self, event: dict): raise NotImplementedError
 
+    def close(self, timeout: float = 5.0):
+        pass
+
 class LogHandler(BaseHandler):
     def __init__(self, logger: logging.Logger):
         self.logger = logger
     def emit(self, event: dict):
-        self.logger.warning(json.dumps(event))
+        self.logger.warning(_dumps(event))
 
 class WebhookHandler(BaseHandler):
-    def __init__(self, url: str, secret: str = None, headers: dict = None, service: str = None, environment: str = None, heartbeat_interval: int = None, template: callable = None, alerts_only: bool = True):
+    def __init__(self, url: str, secret: str = None, headers: dict = None, service: str = None, environment: str = None, heartbeat_interval: int = None, template: callable = None, alerts_only: bool = True, timeout: float = 5, queue_size: int = _QUEUE_SIZE):
         if requests is None: 
             raise ImportError("requests library required for WebhookHandler")
         
@@ -34,17 +59,41 @@ class WebhookHandler(BaseHandler):
         self.environment = environment
         self.template = template
         self.alerts_only = alerts_only
+        self.timeout = timeout
+        self.retry_backoff = 0.5
+        self.heartbeat_interval = heartbeat_interval
         self.logger = logging.getLogger("trappsec")
         
         self.headers = {"Content-Type": "application/json"}
         self.headers.update(headers or {})
         
         self.session = requests.Session()
-        self.session.mount("https://", HTTPAdapter(max_retries=Retry(total=3, backoff_factor=1)))
+
+        self._queue = queue.Queue(maxsize=queue_size)
+        self._lock = threading.Lock()
+        self._worker = None
+        self._heartbeat = None
+        self._closed = False
+        self._stop = threading.Event()      # stops the heartbeat
+        self._abandon = threading.Event()   # abort retries/backoff on close timeout
+        self._last_drop_warning = None
 
         if heartbeat_interval:
-            threading.Thread(target=self._heartbeat_loop, args=(heartbeat_interval,), daemon=True).start()
-    
+            self._ensure_threads()
+
+    def _ensure_threads(self):
+        """Start (or restart, e.g. after fork) the worker and heartbeat threads."""
+        with self._lock:
+            if self._closed:
+                return
+            if self._worker is None or not self._worker.is_alive():
+                self._worker = threading.Thread(target=self._worker_loop, name="trappsec-webhook", daemon=True)
+                self._worker.start()
+            if self.heartbeat_interval and (self._heartbeat is None or not self._heartbeat.is_alive()):
+                self._heartbeat = threading.Thread(
+                    target=self._heartbeat_loop, args=(self.heartbeat_interval,), name="trappsec-heartbeat", daemon=True)
+                self._heartbeat.start()
+
     def emit(self, event: dict):
         if self.alerts_only and event.get("type") != "alert":
             return
@@ -53,32 +102,106 @@ class WebhookHandler(BaseHandler):
             try:
                 event = self.template(event)
             except Exception as e:
-                self.logger.error(f"Failed to apply webhook template: {e}")
-        
-        payload = json.dumps(event)
-        self._send(payload)
+                # Never fall back to sending the raw event.
+                self.logger.error("Failed to apply webhook template, dropping event: %s", e)
+                return
+
+        self._send(_dumps(event))
 
     def _heartbeat_loop(self, interval: int):
-        while True:
-            time.sleep(interval)
-            payload = json.dumps({
+        while not self._stop.wait(interval):
+            self._send(_dumps({
                 "timestamp": time.time(),
                 "event": "trappsec.heartbeat",
                 "service": self.service,
                 "environment": self.environment,
-            })
-            self._send(payload)
+            }))
 
     def _send(self, payload: str):
-        headers = self.headers.copy()
-        if self.secret:
-            headers["x-trappsec-signature"] = hmac.new(
-                self.secret.encode(), payload.encode(), hashlib.sha256).hexdigest()
-        
+        """Queue a payload for asynchronous delivery. Never blocks."""
+        if self._closed:
+            return
         try:
-            self.session.post(self.url, data=payload, headers=headers, timeout=5)
-        except Exception as e: 
-            self.logger.error(f"Failed to send webhook: {e}")
+            self._ensure_threads()
+            self._queue.put_nowait(payload)
+        except queue.Full:
+            self._warn_dropped()
+        except Exception as e:
+            self.logger.error("Failed to queue webhook: %s", e)
+
+    def _warn_dropped(self):
+        now = time.monotonic()
+        last = self._last_drop_warning
+        if last is None or now - last >= _DROP_WARN_INTERVAL:
+            self._last_drop_warning = now
+            self.logger.warning("trappsec webhook queue is full; dropping event")
+
+    def _worker_loop(self):
+        while True:
+            item = self._queue.get()
+            try:
+                if item is _STOP:
+                    return
+                self._deliver(item)
+            except Exception as e:
+                self.logger.error("Failed to send webhook: %s", type(e).__name__)
+            finally:
+                self._queue.task_done()
+
+    def _deliver(self, payload: str):
+        body = payload.encode("utf-8")
+        for attempt in range(_MAX_RETRIES + 1):
+            if attempt:
+                if self._abandon.wait(self.retry_backoff * (2 ** (attempt - 1))):
+                    return
+            headers = self.headers.copy()
+            if self.secret:
+                ts = str(int(time.time()))
+                digest = hmac.new(self.secret.encode(), ts.encode() + b"." + body, hashlib.sha256).hexdigest()
+                headers["x-trappsec-timestamp"] = ts
+                headers["x-trappsec-signature"] = "sha256=" + digest
+            try:
+                resp = self.session.post(self.url, data=body, headers=headers, timeout=self.timeout)
+            except Exception as e:
+                # Exception text may embed the URL, which can contain secrets.
+                self.logger.error("Failed to send webhook (attempt %d): %s", attempt + 1, type(e).__name__)
+                continue
+            try:
+                status = resp.status_code
+                resp.close()
+            except Exception:
+                status = 0
+            if 200 <= status < 300:
+                return
+            self.logger.error("Webhook endpoint returned HTTP %s (attempt %d)", status, attempt + 1)
+            if status < 500 and status != 429:
+                return
+
+    def close(self, timeout: float = 5.0):
+        """Stop the heartbeat and flush queued events (bounded by ``timeout``)."""
+        deadline = time.monotonic() + timeout
+        self._stop.set()
+        hb = self._heartbeat
+        if hb is not None and hb is not threading.current_thread():
+            hb.join(max(0.0, deadline - time.monotonic()))
+        with self._lock:
+            already = self._closed
+            self._closed = True
+        worker = self._worker
+        if worker is not None and worker.is_alive() and not already:
+            try:
+                self._queue.put(_STOP, timeout=max(0.0, deadline - time.monotonic()))
+            except queue.Full:
+                self._abandon.set()
+                return
+            worker.join(max(0.0, deadline - time.monotonic()))
+            if worker.is_alive():
+                self._abandon.set()
+
+
+def _escape(value) -> str:
+    """Escape Slack control characters in request-derived text."""
+    return str(value).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
 
 def _stringify(value):
@@ -116,10 +239,11 @@ def _slack_date_token(timestamp) -> str:
 
 
 def _notification_text(event_name: str, severity: str, svc: str, user: str, path: str, method: str, found_fields: list) -> str:
-    actor = user or "An unauthenticated request"
+    svc, path, method = _escape(svc), _escape(path), _escape(method)
+    actor = _escape(user) if user else "An unauthenticated request"
     if event_name == "trappsec.watch_hit":
         if found_fields:
-            names = ", ".join(f.get("field", "unknown") for f in found_fields[:3] if isinstance(f, dict))
+            names = ", ".join(_escape(f.get("field", "unknown")) for f in found_fields[:3] if isinstance(f, dict))
             suffix = f" ({names})" if names else ""
             return f"[{severity}] {actor} accessed a monitored field{suffix} on {svc}"
         return f"[{severity}] {actor} accessed a monitored field on {svc}"
@@ -130,10 +254,10 @@ def _notification_text(event_name: str, severity: str, svc: str, user: str, path
     return f"[{severity}] {event_name} on {svc}"
 
 
-def _kv_line(key: str, value) -> str:
+def _kv_line(key: str, value, raw: bool = False) -> str:
     if value in (None, ""):
         return None
-    rendered = str(value)
+    rendered = str(value) if raw else _escape(value)
     return f"*{key}:* {rendered}"
 
 
@@ -160,13 +284,13 @@ def _build_slack_payload(event: dict, service: str = None, environment: str = No
     ua_raw = event.get("user_agent")
     ua = _truncate(_stringify(ua_raw), 120) if ua_raw is not None else None
     when = _slack_date_token(event.get("timestamp"))
-    found_fields = event.get("found_fields") if isinstance(event.get("found_fields"), list) else []
+    found_fields = [f for f in event.get("found_fields") if isinstance(f, dict)] if isinstance(event.get("found_fields"), list) else []
 
     route = "-" if method == "-" and path == "-" else f"{method} {path}".strip()
 
     event_lines = _compact_lines([
         _kv_line("Event", _EVENT_LABELS.get(event_name, event_name)),
-        _kv_line("Timestamp", when),
+        _kv_line("Timestamp", when, raw=True),
         _kv_line("Service", svc),
         _kv_line("Environment", env),
         _kv_line("Host", host),
@@ -212,7 +336,10 @@ def _build_slack_payload(event: dict, service: str = None, environment: str = No
         blocks.append({"type": "divider"})
         blocks.append({"type": "section", "text": {"type": "mrkdwn", "text": "\n".join(details)}})
 
-    text = ""
+    text = _truncate(
+        _notification_text(event_name, "Alert" if level == "alert" else "Signal", svc, user, path, method, found_fields),
+        300,
+    )
     return {"text": text, "attachments": [{"color": color, "blocks": blocks}]}
 
 
@@ -231,10 +358,42 @@ class SlackHandler(BaseHandler):
     def emit(self, event: dict):
         self._webhook.emit(event)
 
+    def close(self, timeout: float = 5.0):
+        self._webhook.close(timeout)
+
 try:
     from opentelemetry import trace
 except ImportError:
     trace = None
+
+def _otel_value(value):
+    """Coerce a value to a valid OTel attribute value, or None to drop it."""
+    if value is None:
+        return None
+    if isinstance(value, (bool, str, float)):
+        return value
+    if isinstance(value, int):
+        return value if -(2 ** 63) <= value < 2 ** 63 else str(value)
+    if isinstance(value, (list, tuple)):
+        items = [_otel_value(v) for v in value if v is not None]
+        items = [v for v in items if v is not None]
+        for kind in (bool, str, int, float):
+            if all(type(v) is kind for v in items):
+                return items
+        return [v if isinstance(v, str) else _stringify(v) for v in items]
+    if isinstance(value, dict):
+        return _dumps(value)
+    return str(value)
+
+
+def _otel_attrs(mapping) -> dict:
+    out = {}
+    for k, v in mapping.items():
+        cv = _otel_value(v)
+        if cv is not None:
+            out[str(k)] = cv
+    return out
+
 
 class OTELHandler(BaseHandler):
     def __init__(self):
@@ -243,35 +402,37 @@ class OTELHandler(BaseHandler):
 
     def emit(self, event: dict):
         current_span = trace.get_current_span()
-        if current_span.is_recording():
-            current_span.set_attribute("trappsec.detected", True)
-            current_span.set_attribute("trappsec.event", event["event"])
-            current_span.set_attribute("trappsec.type", event["type"])
-            
-            if event.get("user"):
-                current_span.set_attribute("trappsec.user", event["user"])
-            if event.get("role"):
-                current_span.set_attribute("trappsec.role", event["role"])
-            
-            if event.get("ip"):
-                current_span.set_attribute("trappsec.ip", event["ip"])
-            
-            if event["event"] == "trappsec.watch_hit":
-                for field_info in event["found_fields"]:
-                    current_span.add_event("watch_hit", field_info)
-            
-            if event["event"] == "trappsec.trap_hit":
-                if event.get("intent"):
-                    current_span.set_attribute("trappsec.intent", event["intent"])
-            
-            if event["event"] == "trappsec.rule_hit":
-                if event.get("intent"):
-                    current_span.set_attribute("trappsec.intent", event["intent"])
-                if event.get("reason"):
-                    current_span.set_attribute("trappsec.reason", event["reason"])
-            
-            if event.get("metadata"):
-                metadata = event["metadata"]
-                if isinstance(metadata, dict):
-                    attrs = {f"metadata.{k}": v for k, v in metadata.items()}
-                    current_span.set_attributes(attrs)
+        if not current_span.is_recording():
+            return
+
+        def put(name, value):
+            cv = _otel_value(value)
+            if cv is not None:
+                current_span.set_attribute(name, cv)
+
+        current_span.set_attribute("trappsec.detected", True)
+        put("trappsec.event", event.get("event"))
+        put("trappsec.type", event.get("type"))
+
+        if event.get("user"):
+            put("trappsec.user", event["user"])
+        if event.get("role"):
+            put("trappsec.role", event["role"])
+        if event.get("ip"):
+            put("trappsec.ip", event["ip"])
+
+        if event.get("event") == "trappsec.watch_hit":
+            for field_info in event.get("found_fields") or []:
+                if isinstance(field_info, dict):
+                    current_span.add_event("watch_hit", _otel_attrs(field_info))
+
+        if event.get("event") in ("trappsec.trap_hit", "trappsec.rule_hit"):
+            if event.get("intent"):
+                put("trappsec.intent", event["intent"])
+
+        if event.get("event") == "trappsec.rule_hit" and event.get("reason"):
+            put("trappsec.reason", event["reason"])
+
+        metadata = event.get("metadata")
+        if metadata and isinstance(metadata, dict):
+            current_span.set_attributes(_otel_attrs({f"metadata.{k}": v for k, v in metadata.items()}))

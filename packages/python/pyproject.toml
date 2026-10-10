@@ -1,3 +1,7 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
 [project]
 name = "trappsec"
 version = "0.2.0"
@@ -6,11 +10,28 @@ authors = [
 ]
 description = "deception as a developer tool"
 readme = "README.md"
-requires-python = ">=3.7"
+license = { file = "LICENSE" }
+requires-python = ">=3.9"
+keywords = ["security", "deception", "honeypot", "honey fields", "decoy", "api security"]
 classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
     "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
     "License :: OSI Approved :: MIT License",
     "Operating System :: OS Independent",
+    "Topic :: Security",
+    "Topic :: Internet :: WWW/HTTP",
+    "Framework :: FastAPI",
+    "Framework :: Flask",
+    "Framework :: Django",
+    "Framework :: Tornado",
+    "Typing :: Typed",
 ]
 
 [project.urls]
@@ -21,3 +42,26 @@ classifiers = [
 [project.optional-dependencies]
 webhooks = ["requests"]
 otel = ["opentelemetry-api"]
+test = [
+    "pytest",
+    "requests",
+    "opentelemetry-sdk",
+    "flask",
+    "fastapi",
+    "httpx",
+    "starlette",
+    "django",
+    "sanic",
+    "sanic-testing",
+    "tornado",
+    "litestar",
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+trappsec = ["py.typed"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

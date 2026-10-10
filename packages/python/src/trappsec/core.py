@@ -1,11 +1,78 @@
 import time
 import json
+import math
 import typing
 import socket
 import logging
+from collections.abc import MutableMapping
 
-from .handlers import LogHandler
+from .handlers import LogHandler, _truncate_text
 from .builders import TrapBuilder, WatchBuilder, NO_DEFAULT
+
+_logger = logging.getLogger("trappsec")
+
+_MAX_STR = 1024
+_MAX_LIST = 20
+
+
+def _is_number(v) -> bool:
+    return isinstance(v, (int, float)) and not isinstance(v, bool)
+
+
+def _canonical(v) -> typing.Optional[str]:
+    """Canonical string form of a bool/number, or None for anything else."""
+    if isinstance(v, bool):
+        return "true" if v else "false"
+    if isinstance(v, int):
+        return str(v)
+    if isinstance(v, float):
+        if math.isfinite(v) and v == int(v):
+            return str(int(v))
+        return repr(v)
+    return None
+
+
+def values_match(actual, expected) -> bool:
+    """Loose equality between a request value and a configured default (C3)."""
+    try:
+        a_bool, e_bool = isinstance(actual, bool), isinstance(expected, bool)
+        if a_bool or e_bool:
+            if a_bool and e_bool:
+                return actual == expected
+        elif actual == expected:
+            return True
+        elif _is_number(actual) and _is_number(expected):
+            return actual == expected
+        if isinstance(actual, str) and not isinstance(expected, str):
+            c = _canonical(expected)
+            return c is not None and actual == c
+        if isinstance(expected, str) and not isinstance(actual, str):
+            c = _canonical(actual)
+            return c is not None and expected == c
+    except Exception:
+        return False
+    return False
+
+
+def safe_value(v):
+    """Sanitize a request-derived value for inclusion in an event (C3)."""
+    if v is None or isinstance(v, bool):
+        return v
+    if isinstance(v, int):
+        return v
+    if isinstance(v, float):
+        return v if math.isfinite(v) else str(v)
+    if isinstance(v, str):
+        return _truncate_text(v, _MAX_STR)
+    if isinstance(v, (list, tuple)):
+        return [safe_value(x) for x in list(v)[:_MAX_LIST]]
+    if isinstance(v, dict):
+        try:
+            return _truncate_text(json.dumps(v, default=str), _MAX_STR)
+        except Exception:
+            return "<dict>"
+    return "<%s>" % type(v).__name__
+
 
 class IdentityContext:
     def __init__(self):
@@ -13,18 +80,25 @@ class IdentityContext:
         self.auth = None
 
     def get_context(self, request_obj):
-        u, r = None, None
-        
-        if self.auth:
-            auth_context = self.auth(request_obj)
-            if isinstance(auth_context, dict):
-                u, r = auth_context.get("user"), auth_context.get("role")
+        u, r, ip = None, None, None
 
-        return {
-            "user": u,
-            "role": r,
-            "ip": self.ip(request_obj) if self.ip else None
-        }
+        if self.auth:
+            try:
+                auth_context = self.auth(request_obj)
+                if isinstance(auth_context, dict):
+                    u, r = auth_context.get("user"), auth_context.get("role")
+            except Exception as e:
+                _logger.error("identify_user callback failed: %s", e)
+                u, r = None, None
+
+        if self.ip:
+            try:
+                ip = self.ip(request_obj)
+            except Exception as e:
+                _logger.error("override_source_ip callback failed: %s", e)
+                ip = None
+
+        return {"user": u, "role": r, "ip": ip}
 
 class RequestContext:
     def __init__(self):
@@ -33,18 +107,19 @@ class RequestContext:
         self.method = lambda r: None
 
     def get_context(self, request_obj):
-        return {
-            "path": self.path(request_obj),
-            "user_agent": self.user_agent(request_obj),
-            "method": self.method(request_obj)
-        }
+        out = {}
+        for name in ("path", "user_agent", "method"):
+            try:
+                out[name] = getattr(self, name)(request_obj)
+            except Exception as e:
+                _logger.error("failed to extract request %s: %s", name, e)
+                out[name] = None
+        return out
 
 class Sentry:
     def __init__(self, app, service: str, environment: str):
         self.logger = logging.getLogger("trappsec")
-        if not self.logger.handlers:
-            logging.basicConfig(format="%(message)s", level=logging.WARNING)
-        
+
         self.hostname = socket.gethostname()
         self.service = service
         self.environment = environment
@@ -73,6 +148,22 @@ class Sentry:
         }
 
         self._register(app)
+
+    def bootstrap(self):
+        """Install traps and watches. Idempotent and thread-safe."""
+        fn = getattr(self.integration, "bootstrap", None)
+        if callable(fn):
+            return fn()
+
+    def close(self, timeout: float = 5.0):
+        """Stop background workers (heartbeats) and flush pending deliveries."""
+        for h in self._handlers:
+            fn = getattr(h, "close", None)
+            if callable(fn):
+                try:
+                    fn(timeout)
+                except Exception as e:
+                    self.logger.error("error closing handler: %s", e)
     
     def template(self, name: str, status_code: int, response_body: dict, mime_type: str = "application/json"):
         self._templates[name] = {"status_code": status_code, "response_body": response_body, "mime_type": mime_type}
@@ -144,27 +235,35 @@ class Sentry:
     def watches(self):
         return [r.build() if hasattr(r, "build") else r for r in self._watches]
 
-    def trigger(self, req, reason: str, intent: str = None, metadata: dict = None):
+    def _base_event(self, name, req):
         identity_ctx = self.identity.get_context(req)
         request_ctx = self.request.get_context(req)
 
-        trigger_ctx = {
+        path = request_ctx["path"]
+        ua = request_ctx["user_agent"]
+        event = {
             "timestamp": time.time(),
-            "event": "trappsec.rule_hit",
+            "event": name,
             "type": "signal",
-            "reason": reason,
-            "intent": intent,
-            "path": request_ctx["path"],
+            "path": _truncate_text(path, _MAX_STR) if isinstance(path, str) else path,
             "method": request_ctx["method"],
-            "user_agent": request_ctx["user_agent"],
+            "user_agent": _truncate_text(ua, _MAX_STR) if isinstance(ua, str) else ua,
             "ip": identity_ctx["ip"],
-            "metadata": metadata,
+            "intent": None,
+            "user": None,
+            "role": None,
         }
-
         if identity_ctx["user"]:
-            trigger_ctx["type"] = "alert"
-            trigger_ctx["user"] = identity_ctx["user"]
-            trigger_ctx["role"] = identity_ctx["role"]
+            event["type"] = "alert"
+            event["user"] = identity_ctx["user"]
+            event["role"] = identity_ctx["role"]
+        return event
+
+    def trigger(self, req, reason: str, intent: str = None, metadata: dict = None):
+        trigger_ctx = self._base_event("trappsec.rule_hit", req)
+        trigger_ctx["reason"] = reason
+        trigger_ctx["intent"] = intent
+        trigger_ctx["metadata"] = metadata
 
         self._trigger(trigger_ctx)
 
@@ -179,98 +278,115 @@ class Sentry:
             try: 
                 h.emit(trigger_ctx)
             except Exception as e:
-                self.logger.error("error invoking log handler: ", e)
+                self.logger.error("error invoking log handler: %s", e)
 
     def _trigger_watch_event(self, req, found_fields):
-        identity_ctx = self.identity.get_context(req)
-        request_ctx = self.request.get_context(req)
+        trigger_ctx = self._base_event("trappsec.watch_hit", req)
+        trigger_ctx["found_fields"] = found_fields
 
-        trigger_ctx = {
-            "timestamp": time.time(),
-            "event": "trappsec.watch_hit",
-            "type": "signal",
-            "path": request_ctx["path"],
-            "method": request_ctx["method"],
-            "user_agent": request_ctx["user_agent"],
-            "ip": identity_ctx["ip"],
-            "found_fields": found_fields
-        }
-
-        if identity_ctx["user"]:
-            trigger_ctx["type"] = "alert"
-            trigger_ctx["user"] = identity_ctx["user"]
-            trigger_ctx["role"] = identity_ctx["role"]
-        
         self._trigger(trigger_ctx)
 
     def _trigger_trap_event(self, req, trap):
-        identity_ctx = self.identity.get_context(req)
-        request_ctx = self.request.get_context(req)
-        
-        trigger_ctx = {
-            "timestamp": time.time(),
-            "event": "trappsec.trap_hit",
-            "type": "signal",
-            "path": request_ctx["path"],
-            "method": request_ctx["method"],
-            "user_agent": request_ctx["user_agent"],
-            "ip": identity_ctx["ip"],
-            "intent": trap.get("intent"),
-        }
+        trigger_ctx = self._base_event("trappsec.trap_hit", req)
+        trigger_ctx["intent"] = trap.get("intent")
 
         response_key = "response.unauthenticated"
-
-        if identity_ctx["user"]:
-            trigger_ctx["type"] = "alert"
-            trigger_ctx["user"] = identity_ctx["user"]
-            trigger_ctx["role"] = identity_ctx["role"]
+        if trigger_ctx["type"] == "alert":
             response_key = "response.authenticated"
-        
+
         self._trigger(trigger_ctx)
 
         response_config = trap[response_key]
         response_body = response_config["response_body"]
 
         if callable(response_body):
-            response_body = response_body(req)
-        
-        if response_config["mime_type"] == "application/json":
-            response_body = json.dumps(response_body)
-        
+            try:
+                response_body = response_body(req)
+            except Exception as e:
+                self.logger.error("trap response body callback failed: %s", e)
+                response_body = {}
+
+        mime = str(response_config.get("mime_type") or "").split(";")[0].strip().lower()
+        if isinstance(response_body, (str, bytes)):
+            pass  # strings are sent raw regardless of mime type
+        elif mime == "application/json":
+            try:
+                response_body = json.dumps(response_body, default=str)
+            except Exception as e:
+                self.logger.error("failed to encode trap response body: %s", e)
+                response_body = "{}"
+
         return response_body, response_config
-    
-    def _detect_honey_fields(self, data, rules, request_obj=None):
+
+    def _detect_honey_fields(self, data, rules, request_obj=None, source="body"):
+        """Detect and strip watched keys. Returns (data, found_fields, touched)."""
         found_fields = []
         touched = False
 
+        if not rules:
+            return data, found_fields, touched
+
+        if isinstance(data, list):
+            for item in data:
+                if isinstance(item, MutableMapping):
+                    _, f, t = self._detect_honey_fields(item, rules, request_obj, source)
+                    found_fields.extend(f)
+                    touched = touched or t
+            return data, found_fields, touched
+
+        if not isinstance(data, MutableMapping):
+            return data, found_fields, touched
+
         for key in list(data.keys()):
-            if key in rules:
-                touched = True
-                rule_definition = rules[key]
-                expected = rule_definition.get("default", NO_DEFAULT)
-                
-                try:
-                    if callable(expected):
-                        expected = expected(request_obj)
+            try:
+                watched = key in rules
+            except TypeError:
+                watched = False
+            if not watched:
+                continue
 
-                    actual = data[key]
-                    # Normalize single-element lists to scalars for comparison.
-                    # parse_qs and framework MultiDicts represent query params as
-                    # lists; user-defined defaults are always scalars.
-                    if isinstance(actual, list) and len(actual) == 1:
-                        actual = actual[0]
-
-                    if expected is NO_DEFAULT or actual != expected:
-                        found_fields.append({
-                            "type": "body",
-                            "field": key,
-                            "value": actual,
-                            "intent": rule_definition.get("intent", None),
-                        })
-                except Exception as e:
-                    self.logger.error(f"failed to evaluate callable expected value for body field `{key}`: ", e)            
-
+            touched = True
+            rule_definition = rules[key] or {}
+            actual = data[key]
+            # Always strip, no matter what happens while evaluating.
+            try:
                 del data[key]
+            except Exception as e:
+                self.logger.error("failed to strip watched field `%s`: %s", key, e)
+
+            try:
+                expected = rule_definition.get("default", NO_DEFAULT)
+                if callable(expected):
+                    try:
+                        expected = expected(request_obj)
+                    except Exception as e:
+                        self.logger.error("failed to evaluate callable default for %s field `%s`: %s", source, key, e)
+                        expected = NO_DEFAULT
+
+                # Multi-valued fields arrive as lists. One element is compared
+                # as a scalar; several are a violation unless all match.
+                if isinstance(actual, (list, tuple)):
+                    actual = list(actual)
+                    if len(actual) == 1:
+                        actual = actual[0]
+                        violation = expected is NO_DEFAULT or not values_match(actual, expected)
+                    elif len(actual) == 0:
+                        violation = expected is NO_DEFAULT or not values_match(actual, expected)
+                    else:
+                        violation = expected is NO_DEFAULT or not all(values_match(a, expected) for a in actual)
+                else:
+                    violation = expected is NO_DEFAULT or not values_match(actual, expected)
+            except Exception as e:
+                self.logger.error("failed to evaluate %s field `%s`: %s", source, key, e)
+                violation = True
+
+            if violation:
+                found_fields.append({
+                    "type": source,
+                    "field": key,
+                    "value": safe_value(actual),
+                    "intent": rule_definition.get("intent", None),
+                })
         return data, found_fields, touched
 
     def _register(self, app):
