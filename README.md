@@ -1,4 +1,3 @@
-![Version 0.2](https://img.shields.io/badge/version-0.2-blue)
 ## **trappsec** 
 
 trappsec is an open-source framework that helps developers detect attackers who probe API business logic. By embedding realistic decoy routes and honey fields that are difficult to distinguish from real API constructs, attackers are nudged to authenticate — converting reconnaissance into actionable security telemetry.
@@ -6,7 +5,7 @@ trappsec is an open-source framework that helps developers detect attackers who 
 > Built for the 1% of people who actually look at their security alerts, **and** the 99% who just like the idea of having them.
 
 
-[Read the Docs](https://trappsec.dev/overview/) • [Ultra Quickstart](https://trappsec.dev/ultra-quickstart/)
+[Read the Docs](https://trappsec.dev/overview/) • [Ultra Quickstart](https://trappsec.dev/ultra-quickstart/) • [Threat Model](https://trappsec.dev/threat-model/) • [Production](https://trappsec.dev/production/)
 
 <br>
 

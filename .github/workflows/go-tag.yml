@@ -1,0 +1,92 @@
+name: Tag Go Modules
+
+# Go modules in subdirectories are versioned by path-prefixed tags
+# (packages/go/v1.2.3). On a release v1.2.3 this workflow tags, IN ORDER:
+#   1. packages/go/v1.2.3            (core, the release commit itself)
+#   2. packages/go/nethttp/v1.2.3    (adapters)
+#      packages/go/gin/v1.2.3
+#      packages/go/echo/v1.2.3
+# Adapters depend on the core through a local `replace` during development. Each
+# adapter tag therefore points at a small detached commit (not on any branch) that
+# drops the replace and requires the core at the new version, so that
+# `go get` works for consumers. The core tag must exist, and be fetchable via the
+# Go proxy, before adapters are tagged, which is why the order matters.
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version tag to apply, e.g. v0.3.0"
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    uses: ./.github/workflows/test.yml
+
+  tag:
+    runs-on: ubuntu-latest
+    needs: test
+    environment: go-release
+    permissions:
+      contents: write
+    env:
+      RAW_VERSION: ${{ github.event.inputs.version || github.event.release.tag_name }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.release.target_commitish || github.sha }}
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: packages/go/go.mod
+          cache: false
+
+      - name: Configure git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Compute version
+        run: |
+          v="${RAW_VERSION#v}"
+          echo "VERSION=v${v}" >> "$GITHUB_ENV"
+
+      - name: Tag core module
+        run: |
+          RELEASE_SHA=$(git rev-parse HEAD)
+          echo "RELEASE_SHA=${RELEASE_SHA}" >> "$GITHUB_ENV"
+          git tag "packages/go/${VERSION}" "${RELEASE_SHA}"
+          git push origin "packages/go/${VERSION}"
+
+      - name: Wait for the Go proxy to serve the core module
+        run: |
+          for i in $(seq 1 30); do
+            if curl -fsS "https://proxy.golang.org/github.com/trappsec-dev/trappsec/packages/go/@v/${VERSION}.info" >/dev/null; then
+              exit 0
+            fi
+            sleep 10
+          done
+          echo "core module ${VERSION} not available from the Go proxy" >&2
+          exit 1
+
+      - name: Tag adapters
+        run: |
+          for adapter in nethttp gin echo; do
+            git checkout --detach "${RELEASE_SHA}"
+            (
+              cd "packages/go/${adapter}"
+              go mod edit -dropreplace=github.com/trappsec-dev/trappsec/packages/go
+              go mod edit -require="github.com/trappsec-dev/trappsec/packages/go@${VERSION}"
+              GOFLAGS=-mod=mod go mod tidy
+            )
+            git add "packages/go/${adapter}/go.mod" "packages/go/${adapter}/go.sum"
+            git commit -m "release packages/go/${adapter} ${VERSION}"
+            git tag "packages/go/${adapter}/${VERSION}"
+            git push origin "packages/go/${adapter}/${VERSION}"
+          done

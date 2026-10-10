@@ -1,6 +1,9 @@
+import threading
+
 import pytest
 import requests
-import threading
+
+from utils import AlertServer, AlertHandler
 
 def pytest_addoption(parser):
     parser.addoption(
@@ -16,11 +19,8 @@ def base_url(request):
 
 @pytest.fixture(scope="session")
 def api(base_url):
-    import requests
     with requests.Session() as session:
         yield session
-
-from utils import AlertServer, AlertHandler
 
 @pytest.fixture(scope="session")
 def alert_server():

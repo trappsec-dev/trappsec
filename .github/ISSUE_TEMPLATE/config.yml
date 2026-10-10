@@ -1,0 +1,5 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Questions and feature ideas
+    url: https://github.com/trappsec-dev/trappsec/discussions
+    about: Ask questions and discuss ideas in Discussions.

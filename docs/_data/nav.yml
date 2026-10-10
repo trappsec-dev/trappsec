@@ -18,6 +18,15 @@
     - title: Best Practices
       url: /best-practices/
       icon: "◎"
+    - title: Tuning False Positives
+      url: /tuning/
+      icon: "∿"
+    - title: Production Deployment
+      url: /production/
+      icon: "▣"
+    - title: Threat Model
+      url: /threat-model/
+      icon: "⚑"
 
 - label: Reference
   items:

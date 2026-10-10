@@ -30,14 +30,15 @@ The requirement differs based on how the framework resolves route conflicts:
 
 **Reference:**
 - FastAPI prepends `APIRoute` objects: `app.router.routes = new_routes + app.router.routes` — required because Starlette is order-based
-- NestJS-Express clears and restores the router stack to force trap-first ordering — required because Express is order-based
+- Express, Koa and NestJS-Express insert trap routes **immediately before the first route layer**, i.e. after ordinary middleware (auth, session, body parsers) so `identify_user` can see the user, but before any application route so traps are never shadowed. Never prepend ahead of middleware, and never append after routes.
+- If a trap path+method exactly duplicates an existing app route, fail loud (throw/panic with a clear message); never silently replace or shadow either side (see R20).
 - Sanic, Gin, Echo, Hapi, net/http: native `add_route()` / `engine.Handle()` / `app.route()` registration is sufficient — specificity-based routing provides the guarantee implicitly
 
 ---
 
 ## R3: Setup must complete before any request is processed
 
-Hook into app startup, server bind, or framework initialization — not first-request. First-request strategies create race conditions under concurrent load and add latency to the initial request.
+Hook into app startup, server bind, or framework initialization. Where the framework allows, *additionally* expose an idempotent public `bootstrap()` and call it lazily from the first request (R15) so test clients and custom servers are protected too. Lazy first-request setup must be guarded by a lock / `sync.Once`.
 
 If the framework provides a lifecycle hook (lifespan, onReady, beforeListen), use it. If you must patch, patch the `listen`/`serve`/`run` method.
 
@@ -104,8 +105,9 @@ If the framework supports nested routing (Express Router, Django URL includes, G
 If neither is possible, the limitation must be documented.
 
 **Reference:**
-- Express wraps `app._router.stack` at the top level only — routes inside sub-routers are silently missed because `req.route` isn't populated when the top-level wrapper runs
-- NestJS-Express has the same limitation
+- Express recurses into sub-routers (`Router` layers mounted with `app.use`) when wrapping the stack, so watches on nested routes fire. Routes registered *before* Sentry is installed are covered too (the stack is walked at bootstrap)
+- NestJS-Express follows the same recursive walk
+- Where a framework makes covering pre-install routes impossible, emit a loud warning at install time naming the uncovered routes and document the limitation
 - NestJS-Fastify uses `addHook('preHandler')` which fires globally after route resolution regardless of nesting — avoids the problem entirely
 
 ---
@@ -204,7 +206,7 @@ observable behavioral differences that allow attackers to identify traps.
 **Reference implementations**:
 - FastAPI: `app.router.routes = new_routes + app.router.routes`, called from a patched
   lifespan context at startup
-- Express: `app.get(path, handler)` per method, called from a patched `app.listen()`
+- Express/Koa/NestJS-Express: real route layers inserted before the first route layer (after middleware), called from bootstrap (R3/R15)
 - Go Gin: `engine.Handle(method, path, handler)`, called from the `*App.Run*()` wrappers
   returned by `InstallSentry`
 - Go Echo: `app.Add(method, path, handler)`, called from the `*App.Start*()` wrappers
@@ -212,3 +214,41 @@ observable behavioral differences that allow attackers to identify traps.
 - Go net/http: `mux.HandleFunc("GET /path", handler)` using Go 1.22+ method-qualified
   patterns, called from `*App.ListenAndServe*()` / `Serve*()` wrappers returned by
   `InstallSentry`; `App.ServeHTTP` is shadowed to inject watch inspection before dispatch
+
+---
+
+## R15: Bootstrap is public, idempotent and lazy
+
+Every language exposes a public `bootstrap()` (Go: `Bootstrap()`) on the integration/App that installs traps and watches. It must be safe to call multiple times and concurrently (lock / `sync.Once`). The startup hook (lifespan, `listen`, `Run`, `Start`) calls it. Where the framework allows, the first request also calls it (guarded) so that test clients and custom servers (`httptest`, `http.Server{Handler: app}`, supertest, `fastify.inject`, a `TestClient` without lifespan) are protected. If lazy install is impossible, log a loud warning on the first request that hits an un-bootstrapped Sentry. Routes registered before Sentry is installed must still be watched, or the uncovered routes must be named in a loud warning and documented.
+
+## R16: Delivery is asynchronous, bounded and flushable
+
+Webhook and Slack delivery never runs on the request path. Use a bounded in-memory queue (capacity 1000) drained by a background worker (Python: daemon thread + `queue.Queue`; Go: goroutine + buffered channel; Node: un-awaited `fetch` with an in-flight cap of 100). When full, drop the event and log a warning at most once per 60 s. Retries (at most 2, short backoff) happen in the worker. Non-2xx responses are logged; Go drains and closes response bodies. Expose `close()` / `Close()` which stops the heartbeat and flushes the queue with a timeout (default 5 s). Every user callback (`identify_user`, `override_source_ip`, callable defaults, dynamic bodies, webhook templates) runs in try/catch (Go: `recover`); on failure log and fall back (identity: none; ip: default extractor; callable default: no default; dynamic body: `{}`; template: drop the event for that handler, never send the raw event). Any exception inside trappsec's watch/trap code is caught and logged; the request continues unmodified (watch) or gets the normal unauthenticated decoy response (trap).
+
+## R17: Value matching is canonical and identical across languages
+
+`values_match(actual, expected)` is true when the values are equal; or both are numeric (booleans excluded) and numerically equal (`1` equals `1.0`); or one side is a string and the other a bool/number and the string equals the other's canonical form (`true`/`false` lowercase, integer-valued numbers as `5` not `5.0`, otherwise the shortest representation). Strings compare exactly. Python and Node match JSON keys case-sensitively; Go matches case-insensitively (`strings.EqualFold`) because `encoding/json` binds case-insensitively. Rule lookup uses own-property semantics (Node: `Object.hasOwn`/null-prototype maps; `constructor`, `__proto__` never match unless configured). Top-level JSON object: inspect; array: inspect each object element; anything else: skip, never crash. Always strip every occurrence of a watched key (R4), even when a callable default throws.
+
+## R18: Multi-valued fields
+
+Integrations pass multi-valued query/form fields as a list. A single-element list is compared as its scalar. With more than one element it is a violation unless **every** element matches the expected value. All occurrences of a watched key are stripped; non-watched multi-valued fields must be preserved intact on rewrite. Duplicate keys in a query string or form are therefore never a way to bypass a watch.
+
+## R19: Recorded values are sanitized; events always serialize
+
+`found_fields[].value` is passed through `safe_value`: null/bool/number unchanged; string truncated to 1024 chars (append `...`); list limited to the first 20 elements, each sanitized; dict/map rendered as a JSON string truncated to 1024; anything else (uploads, files, bytes) becomes `"<TypeName>"`. `path` and `user_agent` are truncated to 1024. Event serialization never fails (Python `default=str`, Node/Go equivalents). All event keys are always present, with `null` for absent values, including `user`/`role` on signals. `found_fields[].type` is `"query"` or `"body"`. Slack output escapes `&`, `<`, `>` in every request-derived value and sets a non-empty top-level `text`. OTel span attributes are limited to string/bool/int/float or homogeneous arrays; nulls are dropped and everything else stringified.
+
+## R20: Fail loud on duplicate traps
+
+If a trap path+method exactly duplicates an existing application route, throw/panic with a clear message at bootstrap. Never silently replace or shadow either route.
+
+## R21: Client IP extraction must not trust spoofable headers by default
+
+Default IP extractors use the transport peer address (Go gin/echo: `RemoteAddr` host) unless the framework is explicitly configured to trust proxies (Express `req.ip` respects `trust proxy`). Users override with `override_source_ip`. Never read `X-Forwarded-For` or `X-Real-IP` by default.
+
+## R22: Traps are exempt from CSRF protection
+
+Framework CSRF middleware must not block trap routes, otherwise a scanner's POST gets a CSRF error instead of the decoy response (a fingerprint). Django: `csrf_exempt`. Other frameworks: register traps outside, or exempt them from, CSRF middleware.
+
+## R23: Responses
+
+Trap response bodies that are strings are sent raw regardless of mime type; other values are JSON-encoded for `application/json`. Builder `respond(...)` uses "was provided" checks (None/undefined/nil sentinel), not truthiness, so `body={}`, `""`, `0`, `false` and status `0` are honored. Default responses are resolved when traps are built (bootstrap), not when `.trap()` is called, so configuration order does not matter. Node template cloning is a shallow copy that preserves function bodies.

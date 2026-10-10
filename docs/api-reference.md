@@ -312,20 +312,56 @@ watch.Body("is_admin", false, "PrivEsc")
 *   **default / defaultValue**: (Optional) If provided, alerts only if the value differs from this default. If omitted (or `trappsec.NoDefault` in Go), alerts on any presence of the key.
 *   **intent**: The intent label for the alert.
 
+## `query`
+
+Monitors the URL query string for specific keys. Same semantics as `body`; events record `found_fields[].type` as `"query"`.
+
+<div class="lang-content" data-lang="python" markdown="1">
+
+```python
+watch.query(name: str, default: Any = NO_DEFAULT, intent: str = None)
+watch.query("debug", default="false", intent="Recon")
+```
+
+</div>
+<div class="lang-content" data-lang="node" markdown="1">
+
+```javascript
+watch.query("debug", { defaultValue: "false", intent: "Recon" });
+```
+
+</div>
+<div class="lang-content" data-lang="go" markdown="1">
+
+```go
+watch.Query("debug", "false", "Recon")
+```
+
+</div>
+
+**Matching semantics** (identical for `query` and `body`):
+
+*   Values are compared with canonical matching: `1` equals `1.0`, `true` equals `"true"`, `5` equals `"5"`. Strings compare exactly. See [Event Reference](/events/#value-matching).
+*   Multi-valued fields (`?debug=a&debug=b`): a single value is compared as a scalar; with several values it is a violation unless **every** value equals the default. All occurrences are stripped before your handler runs.
+*   Every occurrence of a watched key is removed from the request your handler sees, so a honey field can never influence real logic.
+*   Go matches JSON keys case-insensitively (as `encoding/json` does); Python and Node are case-sensitive.
+*   A JSON body that is an array is inspected element by element (object elements only). Other body shapes are skipped.
+*   `body` watches need a parsed body. On Express and Koa, register your body parser **before** installing Sentry (see [Production](/production/#body-parsers)).
+
 ## Configuration
 
 Global configuration methods.
 
 ## `identify_user`
 
-Registers a callback to extract user identity from the request.
+Registers a callback to extract user identity from the request. It must return an object/dict with the keys **`user`** and **`role`** (or `null`/`nil` when unauthenticated). Any other key names (such as `id` or `user_id`) are ignored and no alert will fire. In Go, return `*trappsec.AuthContext{User, Role}`.
 
 <div class="lang-content" data-lang="python" markdown="1">
 
 ```python
 # Extract user info from your authentication middleware (e.g. Flask-Login, JWT)
 ts.identify_user(lambda r: {
-    "id": getattr(r.user, "id", None),
+    "user": getattr(r.user, "id", None),
     "role": getattr(r.user, "role", "guest")
 })
 ```
@@ -336,7 +372,7 @@ ts.identify_user(lambda r: {
 ```javascript
 // Extract user info from your authentication middleware (e.g. Passport, Clerk)
 ts.identify_user((req) => ({
-    "id": req.user?.id,
+    "user": req.user?.id,
     "role": req.user?.role || "guest"
 }));
 ```
@@ -423,9 +459,61 @@ ts.AddWebhook("https://...", &trappsec.WebhookOptions{AlertsOnly: &alertsOnly})
 By default, webhook integration is `alerts_only=true`, so only events with `type="alert"` are delivered.
 Set `alerts_only` to `false` in `add_webhook` options to forward both alert and signal events.
 
+**Options**
+
+| Option | Description |
+|---|---|
+| `secret` | If set, every request (including heartbeats) is signed. See [signing](/events/#webhook-signing). |
+| `headers` | Extra HTTP headers (e.g. `Authorization`). |
+| `heartbeat_interval` | Seconds between `trappsec.heartbeat` events, so your receiver can detect a silent sensor. Omit to disable. |
+| `template` | A function mapping the event to the payload you want to send. If it raises, the event is dropped for this handler. |
+| `alerts_only` | Default `true`: signals are dropped. Set `false` to also forward signals. |
+
+<div class="lang-content" data-lang="python" markdown="1">
+
+```python
+ts.add_webhook(
+    "https://siem.example.com/hooks/trappsec",
+    secret="s3cret",
+    headers={"Authorization": "Bearer ..."},
+    heartbeat_interval=300,
+    template=lambda e: {"text": f"{e['event']} {e['path']}"},
+    alerts_only=True,
+)
+```
+
+</div>
+<div class="lang-content" data-lang="node" markdown="1">
+
+```javascript
+ts.add_webhook("https://siem.example.com/hooks/trappsec", {
+    secret: "s3cret",
+    headers: { Authorization: "Bearer ..." },
+    heartbeat_interval: 300,
+    template: (e) => ({ text: `${e.event} ${e.path}` }),
+    alerts_only: true,
+});
+```
+
+</div>
+<div class="lang-content" data-lang="go" markdown="1">
+
+```go
+ts.AddWebhook("https://siem.example.com/hooks/trappsec", &trappsec.WebhookOptions{
+    Secret:            "s3cret",
+    Headers:           map[string]string{"Authorization": "Bearer ..."},
+    HeartbeatInterval: 300,
+    Template:          func(e trappsec.TriggerContext) any { return map[string]any{"text": e.Event} },
+})
+```
+
+</div>
+
+Use `add_webhook` for generic HTTP receivers. For Slack incoming webhooks use `add_slack`, which sends a Slack-formatted payload.
+
 ## `add_slack`
 
-Adds a Slack-optimized output using an incoming webhook URL.
+Adds a Slack-optimized output using an incoming webhook URL. Request-derived values are escaped (`&`, `<`, `>`) before being placed in the message, and a plain-text fallback is always set. Signals are dropped unless `alerts_only` is `false`.
 
 <div class="lang-content" data-lang="python" markdown="1">
 
@@ -483,5 +571,147 @@ ts.AddOTEL()
 
 </div>
 
+## `template`
 
+Registers a named, reusable response that traps can reference via `respond(template=...)` / `if_unauthenticated(template=...)`. A template cannot be combined with `status`, `body` or `mime_type` in the same call.
 
+<div class="lang-content" data-lang="python" markdown="1">
+
+```python
+ts.template("deprecated_api", 410, {"error": "This API version is retired"})
+ts.trap("/v1/users").respond(template="deprecated_api")
+```
+
+</div>
+<div class="lang-content" data-lang="node" markdown="1">
+
+```javascript
+ts.template("deprecated_api", 410, { error: "This API version is retired" });
+ts.trap("/v1/users").respond({ template: "deprecated_api" });
+```
+
+</div>
+<div class="lang-content" data-lang="go" markdown="1">
+
+```go
+ts.Template("deprecated_api", 410, map[string]any{"error": "This API version is retired"}, "application/json")
+ts.Trap("/v1/users").Respond(trappsec.ResponseConfig{Template: "deprecated_api"})
+```
+
+</div>
+
+*   String bodies are sent raw regardless of `mime_type`; other values are JSON-encoded for `application/json`.
+*   `respond` uses "was provided" checks, so `body={}`, `""`, `0`, `false` and a status of `0` are honored rather than ignored.
+
+## Default responses
+
+`default_responses` (Python/Node dict) or `SetDefaultAuthenticated` / `SetDefaultUnauthenticated` (Go) set the global response profiles used when a trap does not configure `respond` / `if_unauthenticated`. Defaults are resolved when traps are built (at bootstrap), **not** when `.trap()` is called, so you may set them before or after declaring traps. See [Getting Started](/getting-started/#default-responses) for examples.
+
+## `trigger`
+
+Emits a `trappsec.rule_hit` event from your own business logic. Available in Python, Node and Go.
+
+<div class="lang-content" data-lang="python" markdown="1">
+
+```python
+ts.trigger(request, "Velocity limit exceeded", intent="fraud_attempt",
+           metadata={"amount": 50000})
+```
+
+</div>
+<div class="lang-content" data-lang="node" markdown="1">
+
+```javascript
+ts.trigger(req, "Velocity limit exceeded", "fraud_attempt", { amount: 50000 });
+```
+
+</div>
+<div class="lang-content" data-lang="go" markdown="1">
+
+```go
+ts.Trigger(c, "Velocity limit exceeded", "fraud_attempt", map[string]any{"amount": 50000})
+```
+
+</div>
+
+*   **req**: The framework request object (the same type you receive in `identify_user`).
+*   **reason**: Free-text explanation.
+*   **intent**, **metadata**: Optional; `null` in the event when omitted.
+
+`trigger` never raises into your handler; failures are logged.
+
+## `bootstrap` / `Bootstrap`
+
+Installs traps and watches. It is public, idempotent, and safe to call repeatedly or concurrently. You normally do not need it: the startup hook (lifespan / `listen` / `Run` / `Start`) calls it, and the first request calls it lazily where the framework allows (test clients, `http.Server{Handler: app}`, `supertest`, `fastify.inject`). Call it explicitly after finishing your configuration if you use a custom server or want traps installed before the first request.
+
+<div class="lang-content" data-lang="python" markdown="1">
+
+```python
+ts.bootstrap()
+```
+
+</div>
+<div class="lang-content" data-lang="node" markdown="1">
+
+```javascript
+ts.bootstrap();
+```
+
+</div>
+<div class="lang-content" data-lang="go" markdown="1">
+
+```go
+app := trappsecnethttp.InstallSentry(mux, "svc", "prod")
+// ... configure traps ...
+app.Bootstrap()
+srv := &http.Server{Addr: ":8080", Handler: app} // *App implements http.Handler
+srv.ListenAndServe()
+```
+
+`*App` implements `http.Handler` (net/http), so `http.Server{Handler: app}`, `httptest.NewServer(app)` and custom servers are protected. For Gin and Echo, `app` also implements `ServeHTTP`.
+
+</div>
+
+Routes registered before Sentry was installed are still watched where the framework allows it; otherwise a warning names the uncovered routes.
+A trap whose path and method exactly duplicate an existing application route raises an error at bootstrap instead of silently replacing either.
+
+## `close` / `Close`
+
+Stops webhook heartbeats and flushes the asynchronous delivery queue (default timeout 5 s: Python `close(timeout=5.0)` seconds, Node `await close(5000)` milliseconds, Go `Close(ctx)` bounded by the context). Call it on shutdown, otherwise queued events can be lost.
+
+<div class="lang-content" data-lang="python" markdown="1">
+
+```python
+import atexit
+atexit.register(ts.close)   # or call ts.close(timeout=5) in your shutdown hook
+```
+
+</div>
+<div class="lang-content" data-lang="node" markdown="1">
+
+```javascript
+process.on("SIGTERM", async () => { await ts.close(); process.exit(0); });
+```
+
+</div>
+<div class="lang-content" data-lang="go" markdown="1">
+
+```go
+ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+defer cancel()
+_ = ts.Close(ctx) // flush pending deliveries
+```
+
+</div>
+
+## Delivery model
+
+Webhook and Slack delivery is asynchronous. Events go to a bounded in-memory queue (capacity 1000) drained by a background worker (Python: daemon thread; Go: goroutine; Node: un-awaited `fetch` capped at 100 in flight). When the queue is full the event is dropped and a warning is logged (at most once per 60 s). Failed deliveries are retried at most twice with short backoff, in the worker, never on the request path. Non-2xx responses are logged. A slow or down webhook can never delay your HTTP responses.
+
+## Callback safety
+
+Every callback you provide (`identify_user`, `override_source_ip`, callable defaults, dynamic response bodies, webhook `template`) runs in a try/catch. On failure trappsec logs the error and falls back: identity becomes "no user", the IP falls back to the default extractor, a failing callable default is treated as "no default" (presence is a violation), a failing dynamic body becomes `{}`, and a failing webhook template drops that event for that handler (the raw event is never sent instead).
+
+## Go request body limit
+
+The Go adapters read request bodies in order to inspect `watch.Body` fields. Bodies up to `DefaultMaxBodyBytes` (1 MiB) are buffered and inspected; larger bodies are passed through to your handler uninspected (query watches still apply). Adjust it with `app.SetMaxBodyBytes(n)` on the Gin/Echo/net/http `App`. Keep your own `http.MaxBytesReader` limits in place for the real application.

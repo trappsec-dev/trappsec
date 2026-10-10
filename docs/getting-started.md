@@ -273,7 +273,7 @@ To make alerts actionable, we need to know *who* is attacking.
 ```python
 # Extract user info from your authentication middleware (e.g. Flask-Login, JWT)
 ts.identify_user(lambda r: {
-    "user_id": getattr(r.user, "id", None), # assuming request.user is set
+    "user": getattr(r.user, "id", None),  # assuming request.user is set
     "role": getattr(r.user, "role", "guest")
 })
 
@@ -287,7 +287,7 @@ ts.override_source_ip(lambda r: r.headers.get("x-real-ip", r.remote_addr))
 ```javascript
 // Extract user info from your authentication middleware (e.g. Passport, Clerk)
 ts.identify_user((req) => ({
-    "user_id": req.user?.id,
+    "user": req.user?.id,
     "role": req.user?.role || "guest"
 }));
 
@@ -330,33 +330,33 @@ ts.OverrideSourceIP(func(req any) string {
 trappsec can integrate directly into your existing workflows. Events are written to your standard logging handlers by default, but can be configured to also integrate into **OpenTelemetry** for observability or **Webhooks** to trigger automated responses or notify security teams.
 
 ### Webhooks
-Send alerts to Slack, Discord, or custom incident response tools.
+Send alerts to a SIEM, incident response tool or any HTTP endpoint that accepts a JSON `POST` (the raw trappsec event, see the [Event Reference](/events/)). For Slack, use `add_slack` below, which sends a Slack-formatted payload. Delivery is asynchronous and never blocks your request path; call `close()` on shutdown to flush (see [Production](/production/)).
 Webhook delivery is `alerts_only` by default, so only `type: "alert"` events are sent unless you override it.
 
 <div class="lang-content" data-lang="python" markdown="1">
 
 ```python
-ts.add_webhook("https://hooks.slack.com/services/...")
-ts.add_webhook("https://hooks.slack.com/services/...", alerts_only=False)
+ts.add_webhook("https://siem.example.com/hooks/trappsec")
+ts.add_webhook("https://siem.example.com/hooks/trappsec", alerts_only=False)
 ```
 
 </div>
 <div class="lang-content" data-lang="node" markdown="1">
 
 ```javascript
-ts.add_webhook("https://hooks.slack.com/services/...");
-ts.add_webhook("https://hooks.slack.com/services/...", { alerts_only: false });
+ts.add_webhook("https://siem.example.com/hooks/trappsec");
+ts.add_webhook("https://siem.example.com/hooks/trappsec", { alerts_only: false });
 ```
 
 </div>
 <div class="lang-content" data-lang="go" markdown="1">
 
 ```go
-ts.AddWebhook("https://hooks.slack.com/services/...", nil)
+ts.AddWebhook("https://siem.example.com/hooks/trappsec", nil)
 // Send all events (not just alerts)
 alertsOnly := false
 ts.AddWebhook(
-    "https://hooks.slack.com/services/...",
+    "https://siem.example.com/hooks/trappsec",
     &trappsec.WebhookOptions{AlertsOnly: &alertsOnly},
 )
 ```
@@ -364,7 +364,7 @@ ts.AddWebhook(
 </div>
 
 ### Slack
-Use a Slack incoming webhook with a presentation-optimized payload out of the box.
+Use a Slack incoming webhook with a presentation-optimized payload out of the box. Do not point `add_webhook` at a Slack URL: Slack rejects the raw event payload.
 
 <div class="lang-content" data-lang="python" markdown="1">
 
@@ -415,6 +415,8 @@ ts.AddOTEL()
 
 ## default responses
 You can globally configure how trappsec responds to events. This is useful for maintaining consistency across all your traps without repeating configuration.
+
+Defaults are resolved when traps are built (at bootstrap), not when `.trap()` is called, so you can set them **before or after** declaring traps; the order does not matter.
 
 There are two default profiles you can override:
 1.  **authenticated**: Used when `respond()` is not configured (defaults to `200 OK` with empty JSON).

@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import argparse
+import csv
 import os
 import re
 import shutil
@@ -215,6 +216,28 @@ def _run_pytest(url: str, timeout_sec: int) -> subprocess.CompletedProcess:
     )
 
 
+_INSTALLED: Set[Path] = set()
+
+
+def _install_dependencies(case: Case, log_dir: Optional[Path]) -> Tuple[bool, str]:
+    """Run `npm install` for Node cases (once per directory), plus the local node package."""
+    if case.command[0] not in ("node", "npm"):
+        return True, ""
+    targets = [REPO_ROOT / "packages" / "node", case.cwd]
+    for target in targets:
+        if target in _INSTALLED or not (target / "package.json").exists():
+            continue
+        cmd = _resolve_command(["npm", "install", "--no-audit", "--no-fund"])
+        print(f"    installing node dependencies in {target.relative_to(REPO_ROOT)}")
+        cp = subprocess.run(cmd, cwd=str(target), capture_output=True, text=True, check=False)
+        if log_dir is not None:
+            (log_dir / f"{case.name}.npm-install.log").write_text((cp.stdout or "") + (cp.stderr or ""))
+        if cp.returncode != 0:
+            return False, f"npm install failed in {target} (exit {cp.returncode}): {(cp.stderr or '').strip()[-500:]}"
+        _INSTALLED.add(target)
+    return True, ""
+
+
 def _format_command(cmd: List[str]) -> str:
     return " ".join(cmd)
 
@@ -343,14 +366,20 @@ def main() -> int:
     parser.add_argument(
         "--kill-port-blockers",
         action="store_true",
-        default=True,
-        help="If port is still busy after waiting, kill listener processes blocking the port.",
+        default=False,
+        help="Opt-in: if the port is still busy after waiting, kill the listener processes blocking it. "
+        "Off by default because it can terminate unrelated processes.",
     )
     parser.add_argument(
-        "--no-kill-port-blockers",
-        dest="kill_port_blockers",
-        action="store_false",
-        help="Disable auto-kill of processes blocking the port.",
+        "--install",
+        action=argparse.BooleanOptionalAction,
+        default=bool(os.environ.get("CI")),
+        help="Run `npm install` for Node examples before starting them (default: on when $CI is set).",
+    )
+    parser.add_argument(
+        "--log-dir",
+        default=None,
+        help="Directory for per-case app logs, pytest output and summary.csv (created if missing).",
     )
     parser.add_argument("--pytest-timeout", type=int, default=240, help="Seconds before pytest is force-terminated.")
     parser.add_argument(
@@ -359,6 +388,9 @@ def main() -> int:
         help="Comma-separated case names to run. Empty means run all.",
     )
     args = parser.parse_args()
+    log_dir: Optional[Path] = Path(args.log_dir).resolve() if args.log_dir else None
+    if log_dir is not None:
+        log_dir.mkdir(parents=True, exist_ok=True)
 
     all_cases = _default_cases(args.webhook_url)
     selected: List[Case]
@@ -400,13 +432,33 @@ def main() -> int:
             continue
 
         proc: Optional[subprocess.Popen] = None
+        app_log = None
         case_result: Optional[Dict[str, object]] = None
+        if args.install:
+            inst_ok, inst_msg = _install_dependencies(case, log_dir)
+            if not inst_ok:
+                print(f"    {inst_msg}")
+                results.append({
+                    "case": case.name,
+                    "status": "fail",
+                    "code": "install-failed",
+                    "counts": _parse_pytest_counts(""),
+                    "failure_reason": inst_msg,
+                })
+                failure_details.append(f"[{case.name}] {inst_msg}")
+                continue
         try:
             try:
+                if log_dir is not None:
+                    app_log = open(log_dir / f"{case.name}.app.log", "w")
+                    app_out = app_err = app_log
+                else:
+                    app_log = None
+                    app_out = app_err = subprocess.DEVNULL
                 popen_kwargs = {
                     "cwd": str(case.cwd),
-                    "stdout": subprocess.DEVNULL,
-                    "stderr": subprocess.DEVNULL,
+                    "stdout": app_out,
+                    "stderr": subprocess.STDOUT if app_log else app_err,
                     "text": True,
                 }
                 if os.name != "nt":
@@ -448,6 +500,8 @@ def main() -> int:
                 try:
                     test_result = _run_pytest(args.url, args.pytest_timeout)
                     combined = (test_result.stdout or "") + (test_result.stderr or "")
+                    if log_dir is not None:
+                        (log_dir / f"{case.name}.pytest.log").write_text(combined)
                     counts = _parse_pytest_counts(combined)
                     status = "pass" if test_result.returncode == 0 else "fail"
                     case_result = {
@@ -472,6 +526,8 @@ def main() -> int:
         finally:
             if proc is not None:
                 _terminate_process_tree(proc)
+                if app_log is not None:
+                    app_log.close()
                 release_ok, release_msg = _ensure_port_free(
                     args.host,
                     args.port,
@@ -515,6 +571,17 @@ def main() -> int:
 
     report = _build_summary_report(results, failure_details)
     print(f"\n{report}")
+
+    if log_dir is not None:
+        with open(log_dir / "summary.csv", "w", newline="") as fh:
+            writer = csv.writer(fh)
+            writer.writerow(["case", "status", "code", "passed", "failed", "errors", "skipped", "xfailed", "xpassed"])
+            for r in results:
+                c = r["counts"]
+                writer.writerow([r["case"], r["status"], r.get("code", ""), c["passed"], c["failed"],
+                                 c["errors"], c["skipped"], c["xfailed"], c["xpassed"]])
+        (log_dir / "summary.txt").write_text(report + "\n")
+        print(f"Logs and summary.csv written to {log_dir}")
 
     failures = [r for r in results if r["status"] != "pass"]
     return 0 if not failures else 1

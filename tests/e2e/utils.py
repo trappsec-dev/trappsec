@@ -3,13 +3,13 @@ from http.server import HTTPServer, BaseHTTPRequestHandler
 
 class AlertHandler(BaseHTTPRequestHandler):
     def do_POST(self):
-        content_length = int(self.headers['Content-Length'])
+        content_length = int(self.headers.get('Content-Length') or 0)
         post_data = self.rfile.read(content_length)
         
         try:
             data = json.loads(post_data)
             self.server.alerts.append(data)
-        except:
+        except (ValueError, UnicodeDecodeError):
             pass
         
         self.send_response(200)
