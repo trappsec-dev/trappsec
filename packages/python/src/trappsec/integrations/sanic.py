@@ -32,6 +32,7 @@ import threading
 from urllib.parse import parse_qsl, urlencode
 
 from . import _jsonbody
+from ._version import warn_if_older
 
 _PARAM_RE = re.compile(r"<([^:>]+):[^>]+>")
 _NAME_RE = re.compile(r';\s*name=(?:"([^"]*)"|([^;\s]*))', re.I)
@@ -117,6 +118,7 @@ class SanicIntegration:
         self.watch_map = {}
         self._lock = threading.RLock()
         self._bootstrapped = False
+        warn_if_older(ts.logger, "sanic", (24, 6), "query honey fields may not be detected or stripped")
 
         if not self.ts.identity.ip:
             self.ts.identity.ip = lambda r: r.remote_addr or "0.0.0.0"

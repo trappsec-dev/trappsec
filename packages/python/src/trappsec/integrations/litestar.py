@@ -33,6 +33,7 @@ import threading
 from urllib.parse import parse_qsl, urlencode
 
 from . import _jsonbody
+from ._version import warn_if_older
 
 MAX_INSPECT_BYTES = 10 * 1024 * 1024
 
@@ -144,6 +145,7 @@ class LitestarIntegration:
         self.watch_map = {}  # normalized route template -> watch, built once (R13)
         self._lock = threading.RLock()
         self._bootstrapped = False
+        warn_if_older(ts.logger, "litestar", (2, 13), "honey fields may not be detected or stripped")
         self._bootstrap_error = None
         self._routing_warned = False
 

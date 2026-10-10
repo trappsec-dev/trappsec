@@ -256,3 +256,23 @@ def test_watched_key_lookup_does_not_match_object_attributes():
     ts = make_sentry()
     data, found, touched = ts._detect_honey_fields({"constructor": 1}, {"a": {}})
     assert not touched and data == {"constructor": 1}
+
+
+def test_warn_if_older_than_tested_minimum(caplog):
+    from trappsec.integrations._version import warn_if_older
+
+    log = logging.getLogger("trappsec-test-version")
+    with mock.patch("importlib.metadata.version", return_value="2.12.4"):
+        with caplog.at_level(logging.ERROR, logger="trappsec-test-version"):
+            warn_if_older(log, "litestar", (2, 13), "honey fields may be missed")
+    assert "litestar 2.12.4 is older than the oldest supported version 2.13" in caplog.text
+
+    caplog.clear()
+    for installed in ("2.13.0", "3.0", "2.13.0rc1"):
+        with mock.patch("importlib.metadata.version", return_value=installed):
+            warn_if_older(log, "litestar", (2, 13), "x")
+    with mock.patch("importlib.metadata.version", side_effect=Exception("not installed")):
+        warn_if_older(log, "litestar", (2, 13), "x")
+    with mock.patch("importlib.metadata.version", return_value="weird"):
+        warn_if_older(log, "litestar", (2, 13), "x")
+    assert caplog.text == ""

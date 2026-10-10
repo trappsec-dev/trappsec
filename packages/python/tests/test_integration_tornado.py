@@ -6,7 +6,7 @@ pytest.importorskip("tornado")
 
 import tornado.web  # noqa: E402
 from tornado.httpserver import HTTPServer  # noqa: E402
-from tornado.testing import AsyncHTTPTestCase, bind_unused_port  # noqa: E402
+import tornado.testing  # noqa: E402  (module import: pytest must not collect the base TestCase)
 
 from trappsec.core import Sentry  # noqa: E402
 
@@ -49,7 +49,7 @@ class MeHandler(tornado.web.RequestHandler):
         self.write({"who": "me", "args": {k: [v.decode() for v in vs] for k, vs in self.request.arguments.items()}})
 
 
-class SentryCase(AsyncHTTPTestCase):
+class SentryCase(tornado.testing.AsyncHTTPTestCase):
     watches = staticmethod(lambda s: s.watch("/echo").query("x", intent="q").body("x", intent="b"))
     identify = None
     traps = staticmethod(lambda s: s.trap("/admin/secret"))
@@ -73,6 +73,9 @@ class SentryCase(AsyncHTTPTestCase):
 
     def hits(self, event):
         return [e for e in self.cap.events if e["event"] == event]
+
+    def runTest(self):  # Tornado < 6.4 looks this name up when pytest instantiates the class
+        pass
 
 
 class TestTraps(SentryCase):
@@ -228,7 +231,7 @@ def test_explicit_httpserver_listen_path():
         s._handlers.append(cap)
         s.trap("/admin/secret")
         s.watch("/echo").query("x")
-        sock, port = bind_unused_port()
+        sock, port = tornado.testing.bind_unused_port()
         server = HTTPServer(app)
         server.add_sockets([sock])
         from tornado.httpclient import AsyncHTTPClient

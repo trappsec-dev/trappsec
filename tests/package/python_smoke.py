@@ -14,7 +14,7 @@ src = pathlib.Path(trappsec.__file__).resolve()
 assert "site-packages" in src.parts, f"imported trappsec from {src}, not an installed distribution"
 assert (src.parent / "py.typed").exists(), "py.typed missing: type information is not shipped"
 
-for mod in ("core", "builders", "handlers", "integrations._jsonbody", "integrations.flask", "integrations.fastapi",
+for mod in ("core", "builders", "handlers", "integrations._jsonbody", "integrations._version", "integrations.flask", "integrations.fastapi",
             "integrations.starlette", "integrations.litestar", "integrations.django", "integrations.sanic",
             "integrations.tornado"):
     assert importlib.util.find_spec(f"trappsec.{mod}") is not None, f"trappsec.{mod} missing from the distribution"
