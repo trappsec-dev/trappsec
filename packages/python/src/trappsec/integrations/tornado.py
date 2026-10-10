@@ -1,47 +1,145 @@
+"""Tornado integration.
+
+Design notes
+------------
+* ``bootstrap()`` (public, idempotent, thread-safe) installs traps and builds
+  the watch index. It is called from the patched ``Application.listen`` and,
+  lazily, from a wrapped ``Application.find_handler`` so that
+  ``HTTPServer(app).listen()``, ``AsyncHTTPTestCase`` and any other custom
+  server are protected as well. ``find_handler`` is what every Tornado server
+  entry point (``Router.start_request`` / ``Application.__call__``) goes through.
+* Traps are installed with ``Application.add_handlers(".*$", ...)``. Tornado
+  consults host rules *before* the wildcard router that holds the ordinary
+  application handlers, and trappsec moves its own host rule to the very front
+  of ``default_router.rules``, so traps always win over app routes
+  (no reordering of ``wildcard_router`` is needed or performed).
+  If a trap path is also an application route, bootstrap raises when the
+  methods overlap (never silently shadows/replaces) and otherwise restricts the
+  trap to its own methods so the application route keeps serving the others.
+* A trap answers only its declared methods; every other method gets a 405 with
+  an ``Allow`` header, like a real Tornado route. Traps skip XSRF checks.
+* Watches wrap the per-request ``_HandlerDelegate.execute`` of requests whose
+  matched handler class/route has a watch; user handler classes are never
+  patched. The raw ``request.body`` is the source of truth: it is rewritten
+  (JSON, urlencoded and multipart) and Tornado's parsed ``arguments`` are kept
+  consistent. Streaming-body handlers (``@stream_request_body``) are not
+  inspected because their body is not available at this point.
+* Handlers added with ``add_handlers`` *after* the first request / ``listen``
+  are not watched (the watch index is built once, R13).
+"""
 import json
-from urllib.parse import parse_qs, urlencode
+import re
+import threading
+from urllib.parse import parse_qsl, urlencode
+
+_NAME_RE = re.compile(r';\s*name=(?:"([^"]*)"|([^;\s]*))', re.I)
+_FILENAME_RE = re.compile(r";\s*filename\*?=", re.I)
 
 
-def _make_trap_handler(trap, methods, ts):
+def _media_type(content_type):
+    return (content_type or "").split(";")[0].strip().lower()
+
+
+def _group_pairs(pairs):
+    """[(k, v), ...] -> {k: scalar | [v, v, ...]} (lists only for repeated keys)."""
+    out = {}
+    for k, v in pairs:
+        if k in out:
+            if isinstance(out[k], list):
+                out[k].append(v)
+            else:
+                out[k] = [out[k], v]
+        else:
+            out[k] = v
+    return out
+
+
+def _multipart_boundary(content_type):
+    for param in (content_type or "").split(";")[1:]:
+        param = param.strip()
+        if param.lower().startswith("boundary="):
+            return param.split("=", 1)[1].strip().strip('"')
+    return None
+
+
+def _multipart_parts(body, boundary):
+    """Split a multipart body into (preamble, parts, tail); raw bytes are kept so
+    unrelated parts can be re-emitted byte-for-byte."""
+    delim = b"--" + boundary.encode("utf-8")
+    chunks = body.split(delim)
+    preamble, tail, parts = chunks[0], b"", []
+    for seg in chunks[1:]:
+        if seg.startswith(b"--"):
+            tail = seg
+            break
+        head, sep, rest = seg.partition(b"\r\n\r\n")
+        name, is_file = None, False
+        for line in head.split(b"\r\n"):
+            text = line.decode("latin1")
+            if text.lower().startswith("content-disposition"):
+                m = _NAME_RE.search(text)
+                if m:
+                    name = m.group(1) if m.group(1) is not None else m.group(2)
+                is_file = bool(_FILENAME_RE.search(text))
+        value = rest[:-2] if rest.endswith(b"\r\n") else rest
+        parts.append({"name": name, "is_file": is_file, "raw": seg, "value": value.decode("utf-8", "replace")})
+    return preamble, parts, tail or b"--\r\n"
+
+
+def _rebuild_multipart(preamble, parts, tail, boundary, drop):
+    delim = b"--" + boundary.encode("utf-8")
+    kept = [p["raw"] for p in parts if p["is_file"] or p["name"] not in drop]
+    return preamble + b"".join(delim + raw for raw in kept) + delim + tail
+
+
+def _detect_json(ts, obj, rules, req):
+    """Top-level object -> inspect; array -> inspect every object element; else skip."""
+    found, touched = [], False
+    if isinstance(obj, dict):
+        obj, mod, touched = ts._detect_honey_fields(obj, rules, req)
+        found.extend(mod or [])
+    elif isinstance(obj, list):
+        for i, el in enumerate(obj):
+            if isinstance(el, dict):
+                el, mod, t = ts._detect_honey_fields(el, rules, req)
+                obj[i] = el
+                found.extend(mod or [])
+                touched = touched or t
+    return obj, found, touched
+
+
+def _make_trap_handler(trap, methods, ts, fallback):
     """Factory that captures trap/methods/ts by value, avoiding the loop-variable closure bug."""
     import tornado.web
 
+    allow = ", ".join(sorted(methods))
+
     class TrapHandler(tornado.web.RequestHandler):
-        def _serve(self):
-            response_body, response_config = ts._trigger_trap_event(self.request, trap)
-            self.set_status(response_config["status_code"])
-            self.set_header("Content-Type", response_config["mime_type"])
-            self.write(response_body)
+        _trappsec_trap = True
+        SUPPORTED_METHODS = tuple(sorted(methods))
 
-        async def get(self):
-            if "GET" in methods:
-                self._serve()
-            else:
-                self.set_status(405)
+        def check_xsrf_cookie(self):  # traps must never be blocked by XSRF protection
+            return
 
-        async def post(self):
-            if "POST" in methods:
-                self._serve()
-            else:
-                self.set_status(405)
+        def write_error(self, status_code, **kwargs):
+            if status_code == 405:
+                self.set_header("Allow", allow)
+            super().write_error(status_code, **kwargs)
 
-        async def put(self):
-            if "PUT" in methods:
-                self._serve()
-            else:
-                self.set_status(405)
+        async def _serve(self, *args, **kwargs):
+            try:
+                body, cfg = ts._trigger_trap_event(self.request, trap)
+            except Exception as e:  # C1: serve the plain decoy
+                ts.logger.error("trappsec trap error: %s", e)
+                body, cfg = fallback()
+            self.set_status(cfg["status_code"])
+            self.set_header("Content-Type", cfg["mime_type"])
+            if not isinstance(body, (str, bytes)):
+                body = json.dumps(body, default=str)
+            self.write(body)
 
-        async def patch(self):
-            if "PATCH" in methods:
-                self._serve()
-            else:
-                self.set_status(405)
-
-        async def delete(self):
-            if "DELETE" in methods:
-                self._serve()
-            else:
-                self.set_status(405)
+    for m in methods:
+        setattr(TrapHandler, m.lower(), TrapHandler._serve)
 
     return TrapHandler
 
@@ -51,179 +149,278 @@ class TornadoIntegration:
         self.ts = ts
         self.app = app
         self.watch_map = {}
-        self._patched_handlers = set()
+        self._class_rules = {}  # handler class -> [(matcher, watch), ...]
+        self._lock = threading.RLock()
+        self._bootstrapped = False
+        self._bootstrap_error = None
 
         if not self.ts.identity.ip:
-            self.ts.identity.ip = lambda r: getattr(r, "remote_ip", "0.0.0.0")
+            self.ts.identity.ip = lambda r: getattr(r, "remote_ip", None) or "0.0.0.0"
 
         self.ts.request.path = lambda r: getattr(r, "path", getattr(r, "uri", "").split("?")[0])
         self.ts.request.user_agent = lambda r: r.headers.get("User-Agent", "unknown")
         self.ts.request.method = lambda r: getattr(r, "method", None)
 
         self._patch_startup()
+        self._patch_find_handler()
+
+    # ------------------------------------------------------------------ setup
+    def bootstrap(self):
+        """Install traps and watches. Public, idempotent and thread-safe."""
+        with self._lock:
+            if not self._bootstrapped:
+                self._bootstrapped = True  # never half-install twice
+                try:
+                    self.inject_traps()
+                    self.setup_watches()
+                except Exception as e:
+                    self._bootstrap_error = e
+            if self._bootstrap_error is not None:
+                raise self._bootstrap_error
+
+    def _leaf_rules(self, router=None, _seen=None):
+        """Yield (handler_class, matcher) for every class-targeted rule, recursing into sub-routers."""
+        router = router if router is not None else self.app.default_router
+        _seen = _seen if _seen is not None else set()
+        if id(router) in _seen:
+            return
+        _seen.add(id(router))
+        for rule in list(getattr(router, "rules", [])):
+            target = getattr(rule, "target", None)
+            if hasattr(target, "rules"):
+                yield from self._leaf_rules(target, _seen)
+            elif isinstance(target, type):
+                yield target, getattr(rule, "matcher", None)
+
+    @staticmethod
+    def _handled_methods(cls):
+        import tornado.web
+
+        base = tornado.web.RequestHandler
+        out = set()
+        for m in getattr(cls, "SUPPORTED_METHODS", ()):
+            attr = getattr(cls, m.lower(), None)
+            if attr is not None and attr is not getattr(base, m.lower(), None):
+                out.add(m.upper())
+        return out
 
     def inject_traps(self):
-        trap_handler_classes = set()
+        from tornado.routing import PathMatches, Rule
 
-        for idx, trap in enumerate(self.ts.traps):
+        class MethodPathMatches(PathMatches):
+            def __init__(self, pattern, methods):
+                super().__init__(pattern)
+                self._methods = methods
+
+            def match(self, request):
+                if request.method not in self._methods:
+                    return None
+                return super().match(request)
+
+        traps = self.ts.traps
+        if not traps:
+            return
+
+        existing = [(c, m) for c, m in self._leaf_rules() if not getattr(c, "_trappsec_trap", False)]
+        rules = []
+        for idx, trap in enumerate(traps):
             methods = frozenset(m.upper() for m in trap["methods"])
-            handler_cls = _make_trap_handler(trap, methods, self.ts)
+            probe = PathMatches(trap["path"])
+            restricted = False
+            for cls, matcher in existing:
+                regex = getattr(matcher, "regex", None)
+                if regex is None or regex.pattern != probe.regex.pattern:
+                    continue
+                overlap = methods & self._handled_methods(cls)
+                if overlap:
+                    raise RuntimeError(
+                        f"trappsec: trap {sorted(overlap)} {trap['path']} duplicates an existing "
+                        f"application route ({cls.__name__}); refusing to shadow or replace it"
+                    )
+                restricted = True
+            handler_cls = _make_trap_handler(trap, methods, self.ts, self._fallback_response)
             handler_cls.__name__ = f"TrappsecTrapHandler{idx}"
-            self.app.add_handlers(r".*$", [(trap["path"], handler_cls)])
-            trap_handler_classes.add(handler_cls)
+            matcher = MethodPathMatches(trap["path"], methods) if restricted else PathMatches(trap["path"])
+            rules.append(Rule(matcher, handler_cls))
 
-        # R2: reorder rules so trap handlers come first (Tornado is order-based)
-        rules = getattr(self.app.wildcard_router, "rules", None)
-        if rules is not None:
-            trap_rules = [r for r in rules if getattr(r, "target", None) in trap_handler_classes]
-            other_rules = [r for r in rules if getattr(r, "target", None) not in trap_handler_classes]
-            self.app.wildcard_router.rules = trap_rules + other_rules
+        # R2: Tornado checks host rules before the wildcard router that holds the
+        # application's handlers. Register one host rule and move it to the front so
+        # that it also precedes any host rule added by the application earlier.
+        before = list(self.app.default_router.rules)
+        self.app.add_handlers(r".*$", rules)
+        new = [r for r in self.app.default_router.rules if r not in before]
+        for r in new:
+            self.app.default_router.rules.remove(r)
+        self.app.default_router.rules[0:0] = new
+
+    def _fallback_response(self):
+        cfg = dict(self.ts.default_responses.get("unauthenticated") or {})
+        cfg.setdefault("status_code", 401)
+        cfg.setdefault("mime_type", "application/json")
+        body = cfg.get("response_body", {})
+        if callable(body):
+            body = {}
+        return body, cfg
 
     def setup_watches(self):
         self.watch_map = {w["path"]: w for w in self.ts.watches}
-
-        # R1: build a per-handler-class list of (matcher, watch) pairs so that
-        # a class registered on multiple routes resolves the right watch per request.
-        # matcher._path is the canonical plain-string path (e.g. "/auth/register"),
-        # which matches the watch key directly — no regex loop needed for static routes.
-        class_rules = {}  # handler_cls -> [(matcher, watch), ...]
-
-        for rule in getattr(self.app.wildcard_router, "rules", []):
-            handler_cls = getattr(rule, "target", None)
-            if not handler_cls:
+        self._class_rules = {}
+        if not self.watch_map:
+            return
+        for cls, matcher in self._leaf_rules():
+            if getattr(cls, "_trappsec_trap", False) or matcher is None:
                 continue
-            matcher = getattr(rule, "matcher", None)
-            if not matcher:
+            regex = getattr(matcher, "regex", None)
+            if regex is None:
                 continue
-
             path = getattr(matcher, "_path", None)
             watch = self.watch_map.get(path) if path else None
             if watch is None:
-                # Fallback for parameterized routes: Tornado replaces capture groups with %s
-                # in _path, so look up by the raw regex pattern (strip trailing $).
-                regex_attr = getattr(matcher, "regex", None)
-                if regex_attr is not None:
-                    normalized = regex_attr.pattern.rstrip("$")
-                    watch = self.watch_map.get(normalized)
-            if watch is None:
-                continue
-
-            class_rules.setdefault(handler_cls, []).append((matcher, watch))
-
-        for handler_cls, rules in class_rules.items():
-            if handler_cls in self._patched_handlers:
-                continue
-
-            original_prepare = getattr(handler_cls, "prepare", None)
-            integration = self
-            _rules = rules  # [(matcher, watch), ...]
-
-            async def wrapped_prepare(self, _orig=original_prepare, _rules=_rules):
-                if _orig:
-                    result = _orig(self)
-                    if result is not None:
-                        await result
-
-                # R1: resolve the watch for this specific request path by testing
-                # each rule's regex — O(1) for the common single-route case
-                watch = None
-                for matcher, w in _rules:
-                    if matcher.regex.match(self.request.path):
-                        watch = w
-                        break
-
-                if not watch:
-                    return
-
-                found_fields = []
-                query_fields = watch["query_fields"]
-                body_fields = watch["body_fields"]
-
-                if query_fields and self.request.query_arguments:
-                    q_dict = {
-                        k: vals[0].decode("utf-8", errors="ignore") if len(vals) == 1
-                        else [v.decode("utf-8", errors="ignore") for v in vals]
-                        for k, vals in self.request.query_arguments.items()
-                    }
-                    # R4: unpack touched; use touched (not mod) to gate mutation
-                    q_dict, mod, touched_q = integration.ts._detect_honey_fields(q_dict, query_fields, self.request)
-                    if mod:
-                        found_fields.extend(mod)
-                    if touched_q:
-                        # R6: update query_arguments and arguments so get_argument() sees the change
-                        for k in list(self.request.query_arguments.keys()):
-                            if k not in q_dict:
-                                del self.request.query_arguments[k]
-                                self.request.arguments.pop(k, None)
-                        self.request.query = urlencode(q_dict, doseq=True)
-
-                if body_fields and self.request.body:
-                    ctype = self.request.headers.get("Content-Type", "")
-                    try:
-                        if "application/json" in ctype:
-                            data = json.loads(self.request.body.decode("utf-8"))
-                            # R4: unpack touched; use touched to gate mutation
-                            data, mod, touched_b = integration.ts._detect_honey_fields(data, body_fields, self.request)
-                            if mod:
-                                found_fields.extend(mod)
-                            if touched_b:
-                                self.request.body = json.dumps(data).encode("utf-8")
-                                # R6: update body_arguments and arguments so get_body_argument() sees the change
-                                for k in list(self.request.body_arguments.keys()):
-                                    if k not in data:
-                                        del self.request.body_arguments[k]
-                                        self.request.arguments.pop(k, None)
-                        elif "application/x-www-form-urlencoded" in ctype:
-                            form_data = {k: v[0] if isinstance(v, list) else v for k, v in parse_qs(self.request.body.decode("utf-8")).items()}
-                            # R4: unpack touched; use touched to gate mutation
-                            form_data, mod, touched_b = integration.ts._detect_honey_fields(form_data, body_fields, self.request)
-                            if mod:
-                                found_fields.extend(mod)
-                            if touched_b:
-                                self.request.body = urlencode(form_data, doseq=True).encode("utf-8")
-                                # R6: update body_arguments and arguments so get_body_argument() sees the change
-                                for k in list(self.request.body_arguments.keys()):
-                                    if k not in form_data:
-                                        del self.request.body_arguments[k]
-                                        self.request.arguments.pop(k, None)
-                        elif "multipart/form-data" in ctype:
-                            # Tornado eagerly parses multipart into body_arguments;
-                            # operate on that rather than rebuilding raw bytes.
-                            mp_data = {
-                                k: [v.decode("utf-8", errors="ignore") for v in vals]
-                                for k, vals in self.request.body_arguments.items()
-                            }
-                            mp_flat = {
-                                k: v[0] if isinstance(v, list) and len(v) == 1 else v
-                                for k, v in mp_data.items()
-                            }
-                            mp_flat, mod, touched_b = integration.ts._detect_honey_fields(mp_flat, body_fields, self.request)
-                            if mod:
-                                found_fields.extend(mod)
-                            if touched_b:
-                                for k in list(self.request.body_arguments.keys()):
-                                    if k not in mp_flat:
-                                        del self.request.body_arguments[k]
-                                        self.request.arguments.pop(k, None)
-                    except Exception as e:
-                        integration.ts.logger.error("error reading body: %s", e)
-
-                if found_fields:
-                    # R12: fire-and-forget — never let handler emission crash the request
-                    try:
-                        integration.ts._trigger_watch_event(self.request, found_fields)
-                    except Exception as e:
-                        integration.ts.logger.error("error triggering watch event: %s", e)
-
-            handler_cls.prepare = wrapped_prepare
-            self._patched_handlers.add(handler_cls)
+                watch = self.watch_map.get(regex.pattern.rstrip("$"))
+            if watch is not None:
+                self._class_rules.setdefault(cls, []).append((matcher, watch))
 
     def _patch_startup(self):
         original_listen = self.app.listen
 
         def wrapped_listen(*args, **kwargs):
-            self.inject_traps()
-            self.setup_watches()
+            self.bootstrap()
             return original_listen(*args, **kwargs)
 
         self.app.listen = wrapped_listen
+
+    def _patch_find_handler(self):
+        original = self.app.find_handler
+
+        def find_handler(request, **kwargs):
+            if not self._bootstrapped:
+                try:
+                    self.bootstrap()
+                except Exception as e:  # C1: the host app keeps serving
+                    self.ts.logger.error("trappsec: bootstrap failed: %s", e)
+            delegate = original(request, **kwargs)
+            if self._class_rules:
+                try:
+                    self._wrap_delegate(delegate)
+                except Exception as e:
+                    self.ts.logger.error("trappsec watch setup error: %s", e)
+            return delegate
+
+        self.app.find_handler = find_handler
+
+    # ---------------------------------------------------------------- watching
+    def _wrap_delegate(self, delegate):
+        cls = getattr(delegate, "handler_class", None)
+        rules = self._class_rules.get(cls)
+        request = getattr(delegate, "request", None)
+        if not rules or request is None or not hasattr(delegate, "execute"):
+            return
+        watch = None
+        for matcher, w in rules:  # R1: the route that actually matched this request
+            if matcher.regex.match(request.path):
+                watch = w
+                break
+        if watch is None:
+            return
+
+        original_execute = delegate.execute
+
+        def execute():
+            try:
+                found = self._inspect(request, watch, getattr(delegate, "stream_request_body", False))
+            except Exception as e:  # C1
+                self.ts.logger.error("trappsec watch error: %s", e)
+                found = []
+            if found:
+                try:
+                    self.ts._trigger_watch_event(request, found)
+                except Exception as e:
+                    self.ts.logger.error("trappsec watch event error: %s", e)
+            return original_execute()
+
+        delegate.execute = execute
+
+    def _inspect(self, request, watch, streaming):
+        found = []
+        query_fields = watch.get("query_fields") or {}
+        body_fields = watch.get("body_fields") or {}
+
+        if query_fields and request.query:
+            try:
+                found.extend(self._inspect_query(request, query_fields))
+            except Exception as e:
+                self.ts.logger.error("trappsec query inspection error: %s", e)
+
+        if body_fields and request.body and not streaming:
+            try:
+                found.extend(self._inspect_body(request, body_fields))
+            except Exception as e:
+                self.ts.logger.error("trappsec body inspection error: %s", e)
+        return found
+
+    def _inspect_query(self, request, rules):
+        from tornado.escape import parse_qs_bytes
+
+        pairs = parse_qsl(request.query, keep_blank_values=True)
+        data, found, touched = self.ts._detect_honey_fields(_group_pairs(pairs), rules, request, source="query")
+        if touched:
+            new_qs = urlencode([(k, v) for k, v in pairs if k in data])
+            request.query = new_qs
+            request.uri = request.path + ("?" + new_qs if new_qs else "")
+            request.query_arguments.clear()
+            request.query_arguments.update(parse_qs_bytes(new_qs, keep_blank_values=True))
+            self._rebuild_arguments(request)
+        return found or []
+
+    @staticmethod
+    def _rebuild_arguments(request):
+        import copy
+
+        merged = copy.deepcopy(request.query_arguments)
+        for k, v in request.body_arguments.items():
+            merged.setdefault(k, []).extend(v)
+        request.arguments.clear()
+        request.arguments.update(merged)
+
+    def _inspect_body(self, request, rules):
+        body = request.body
+        ctype = request.headers.get("Content-Type", "")
+        media = _media_type(ctype)
+        found = []
+
+        if media == "application/json" or media.endswith("+json"):
+            try:
+                obj = json.loads(body.decode("utf-8"))
+            except Exception:
+                return []
+            obj, found, touched = _detect_json(self.ts, obj, rules, request)
+            if touched:
+                self._set_body(request, json.dumps(obj).encode("utf-8"))
+        elif media == "application/x-www-form-urlencoded":
+            pairs = parse_qsl(body.decode("utf-8", "replace"), keep_blank_values=True)
+            data, found, touched = self.ts._detect_honey_fields(_group_pairs(pairs), rules, request)
+            if touched:
+                self._set_body(request, urlencode([(k, v) for k, v in pairs if k in data]).encode("utf-8"))
+        elif media == "multipart/form-data":
+            boundary = _multipart_boundary(ctype)
+            if not boundary:
+                return []
+            preamble, parts, tail = _multipart_parts(body, boundary)
+            pairs = [(p["name"], p["value"]) for p in parts if p["name"] and not p["is_file"]]
+            data, found, touched = self.ts._detect_honey_fields(_group_pairs(pairs), rules, request)
+            if touched:
+                drop = {k for k, _ in pairs if k not in data}
+                self._set_body(request, _rebuild_multipart(preamble, parts, tail, boundary, drop))
+        return found or []
+
+    def _set_body(self, request, new_body):
+        request.body = new_body
+        if "Content-Length" in request.headers:
+            request.headers["Content-Length"] = str(len(new_body))
+        # Tornado >= 6.5 parses the body later (inside RequestHandler._execute) and will
+        # simply see the stripped body. Older versions already parsed it: redo it.
+        if request.body_arguments or request.files:
+            request.body_arguments.clear()
+            request.files.clear()
+            self._rebuild_arguments(request)
+            request._parse_body()

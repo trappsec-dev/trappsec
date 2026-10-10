@@ -1,4 +1,111 @@
+"""Sanic integration.
+
+Design notes
+------------
+* Traps are registered as real Sanic routes (Sanic is a specificity-based
+  router, so static trap paths cannot be shadowed). An exact path+method
+  duplicate of an application route makes ``bootstrap()`` raise (Sanic's own
+  ``RouteExists``, re-raised with a trappsec message) instead of silently
+  replacing either route.
+* Watches run in a single ``on_request`` middleware that is registered when
+  the integration is constructed. The middleware only looks at requests whose
+  *resolved* route (``request.route``) has a watch. No global ``Request`` class
+  patching is performed: when a watched field is stripped, only the affected
+  request instance is modified (its parsed caches ``parsed_args`` /
+  ``parsed_json`` / ``parsed_form`` / ``body`` and, for query strings, the
+  private ``_parsed_url`` slot, which is the only way to keep
+  ``request.query_string`` / ``query_args`` consistent; this is a Sanic
+  internal, so it is guarded and covered by tests).
+* ``request.args`` / ``request.form`` stay ``RequestParameters`` (``get`` returns
+  the first value, ``getlist`` returns all values) because the cached objects
+  are rebuilt from the original multi-value pairs.
+* Setup is idempotent and thread-safe (``bootstrap()``). It runs from
+  ``before_server_start`` and lazily on the first request as a safety net.
+  Routes cannot be added once Sanic's router is finalised, so a lazy
+  bootstrap that has to add traps after startup logs a loud warning if that
+  fails; always let Sanic run ``before_server_start`` (it does for the real
+  server, ``app.test_client`` and ``app.asgi_client``).
+"""
+import json
 import re
+import threading
+from urllib.parse import parse_qsl, urlencode
+
+_PARAM_RE = re.compile(r"<([^:>]+):[^>]+>")
+_NAME_RE = re.compile(r';\s*name=(?:"([^"]*)"|([^;\s]*))', re.I)
+_FILENAME_RE = re.compile(r";\s*filename\*?=", re.I)
+
+
+def _media_type(content_type):
+    return (content_type or "").split(";")[0].strip().lower()
+
+
+def _group_pairs(pairs):
+    """[(k, v), ...] -> {k: scalar | [v, v, ...]} (lists only for repeated keys)."""
+    out = {}
+    for k, v in pairs:
+        if k in out:
+            if isinstance(out[k], list):
+                out[k].append(v)
+            else:
+                out[k] = [out[k], v]
+        else:
+            out[k] = v
+    return out
+
+
+def _multipart_boundary(content_type):
+    for param in (content_type or "").split(";")[1:]:
+        param = param.strip()
+        if param.lower().startswith("boundary="):
+            return param.split("=", 1)[1].strip().strip('"')
+    return None
+
+
+def _multipart_parts(body, boundary):
+    """Split a multipart body into (preamble, parts, tail); raw bytes are kept so
+    unrelated parts can be re-emitted byte-for-byte."""
+    delim = b"--" + boundary.encode("utf-8")
+    chunks = body.split(delim)
+    preamble, tail, parts = chunks[0], b"", []
+    for seg in chunks[1:]:
+        if seg.startswith(b"--"):
+            tail = seg
+            break
+        head, sep, rest = seg.partition(b"\r\n\r\n")
+        name, is_file = None, False
+        for line in head.split(b"\r\n"):
+            text = line.decode("latin1")
+            if text.lower().startswith("content-disposition"):
+                m = _NAME_RE.search(text)
+                if m:
+                    name = m.group(1) if m.group(1) is not None else m.group(2)
+                is_file = bool(_FILENAME_RE.search(text))
+        value = rest[:-2] if rest.endswith(b"\r\n") else rest
+        parts.append({"name": name, "is_file": is_file, "raw": seg, "value": value.decode("utf-8", "replace")})
+    return preamble, parts, tail or b"--\r\n"
+
+
+def _rebuild_multipart(preamble, parts, tail, boundary, drop):
+    delim = b"--" + boundary.encode("utf-8")
+    kept = [p["raw"] for p in parts if p["is_file"] or p["name"] not in drop]
+    return preamble + b"".join(delim + raw for raw in kept) + delim + tail
+
+
+def _detect_json(ts, obj, rules, req):
+    """Top-level object -> inspect; array -> inspect every object element; else skip."""
+    found, touched = [], False
+    if isinstance(obj, dict):
+        obj, mod, touched = ts._detect_honey_fields(obj, rules, req)
+        found.extend(mod or [])
+    elif isinstance(obj, list):
+        for i, el in enumerate(obj):
+            if isinstance(el, dict):
+                el, mod, t = ts._detect_honey_fields(el, rules, req)
+                obj[i] = el
+                found.extend(mod or [])
+                touched = touched or t
+    return obj, found, touched
 
 
 class SanicIntegration:
@@ -6,7 +113,8 @@ class SanicIntegration:
         self.ts = ts
         self.app = app
         self.watch_map = {}
-        self._typed_param_pattern = re.compile(r"<([^:>]+):[^>]+>")
+        self._lock = threading.RLock()
+        self._bootstrapped = False
 
         if not self.ts.identity.ip:
             self.ts.identity.ip = lambda r: r.remote_addr or "0.0.0.0"
@@ -15,118 +123,207 @@ class SanicIntegration:
         self.ts.request.user_agent = lambda r: r.headers.get("user-agent", "unknown")
         self.ts.request.method = lambda r: r.method
 
-        self._patch_request_accessors()
-        self._patch_startup()
+        self._install_hooks()
+
+    # ------------------------------------------------------------------ setup
+    def _install_hooks(self):
+        # Registered once, at construction time, so routes registered before
+        # Sentry was installed are covered and restarts do not stack middleware.
+        @self.app.before_server_start
+        async def trappsec_init(_app, _loop=None):
+            self.bootstrap()
+
+        @self.app.on_request
+        async def trappsec_watcher(request):
+            await self._on_request(request)
+
+    def bootstrap(self):
+        """Install traps and watches. Public, idempotent and thread-safe."""
+        with self._lock:
+            if self._bootstrapped:
+                return
+            self._bootstrapped = True  # never half-install twice
+            self.inject_traps()
+            self.setup_watches()
 
     def inject_traps(self):
         from sanic.response import HTTPResponse
 
-        for trap in self.ts.traps:
-            async def endpoint(request, d=trap):
-                response_body, response_config = self.ts._trigger_trap_event(request, d)
-                return HTTPResponse(
-                    body=response_body,
-                    status=response_config["status_code"],
-                    content_type=response_config["mime_type"],
-                )
+        ts = self.ts
 
-            self.app.add_route(endpoint, trap["path"], methods=trap["methods"], name=f"trappsec_{trap['path']}")
+        def make_endpoint(trap):
+            async def endpoint(request, **_params):
+                try:
+                    body, cfg = ts._trigger_trap_event(request, trap)
+                except Exception as e:  # C1: serve the plain decoy
+                    ts.logger.error("trappsec trap error: %s", e)
+                    body, cfg = self._fallback_response()
+                if not isinstance(body, (str, bytes)):
+                    body = json.dumps(body, default=str)
+                return HTTPResponse(body=body, status=cfg["status_code"], content_type=cfg["mime_type"])
+
+            return endpoint
+
+        for idx, trap in enumerate(ts.traps):
+            try:
+                self.app.add_route(
+                    make_endpoint(trap),
+                    trap["path"],
+                    methods=trap["methods"],
+                    name=f"trappsec_trap_{idx}",
+                )
+            except Exception as e:
+                if type(e).__name__ == "RouteExists":
+                    raise RuntimeError(
+                        f"trappsec: trap {trap['methods']} {trap['path']} duplicates an existing "
+                        f"application route; refusing to shadow or replace it ({e})"
+                    ) from e
+                raise
+
+    def _fallback_response(self):
+        cfg = dict(self.ts.default_responses.get("unauthenticated") or {})
+        cfg.setdefault("status_code", 401)
+        cfg.setdefault("mime_type", "application/json")
+        body = cfg.get("response_body", {})
+        if callable(body):
+            body = {}
+        if not isinstance(body, (str, bytes)):
+            body = json.dumps(body, default=str)
+        return body, cfg
 
     def setup_watches(self):
         self.watch_map = {self._normalize_route_pattern(w["path"]): w for w in self.ts.watches}
 
-        @self.app.on_request
-        async def trappsec_watcher(request):
-            route = getattr(request, "route", None)
-            watch = None
-
-            candidates = []
-            if route is not None:
-                for attr in ("path", "uri", "pattern"):
-                    value = getattr(route, attr, None)
-                    if value:
-                        candidates.append(str(value))
-            candidates.append(request.path)
-
-            for raw_path in candidates:
-                matched_path = self._normalize_route_pattern(raw_path)
-                watch = self.watch_map.get(matched_path)
-                if watch:
-                    break
-
-            if not watch:
-                return
-
-            found_fields = []
-            query_fields = watch["query_fields"]
-            body_fields = watch["body_fields"]
-
-            if query_fields and request.args:
-                args_dict = dict(request.args)
-                args_dict, mod, touched = self.ts._detect_honey_fields(args_dict, query_fields, request)
-                if mod:
-                    found_fields.extend(mod)
-                if touched:
-                    setattr(request.ctx, "_trappsec_override_args", args_dict)
-
-            if body_fields:
-                content_type = request.content_type or ""
-                if "application/json" in content_type and isinstance(request.json, dict):
-                    data, mod, touched = self.ts._detect_honey_fields(dict(request.json), body_fields, request)
-                    if mod:
-                        found_fields.extend(mod)
-                    if touched:
-                        setattr(request.ctx, "_trappsec_override_json", data)
-
-                if request.form:
-                    form_dict = dict(request.form)
-                    data, mod, touched = self.ts._detect_honey_fields(form_dict, body_fields, request)
-                    if mod:
-                        found_fields.extend(mod)
-                    if touched:
-                        setattr(request.ctx, "_trappsec_override_form", data)
-
-            if found_fields:
-                self.ts._trigger_watch_event(request, found_fields)
-
     def _normalize_route_pattern(self, path):
-        # Normalize dynamic param syntax so `/x/<id:str>` and `/x/<id>` match.
-        normalized = self._typed_param_pattern.sub(r"<\1>", str(path))
+        normalized = _PARAM_RE.sub(r"<\1>", str(path))
         if not normalized.startswith("/"):
             normalized = f"/{normalized}"
         if len(normalized) > 1:
             normalized = normalized.rstrip("/")
         return normalized
 
-    def _patch_request_accessors(self):
-        from sanic.request import Request
+    # ------------------------------------------------------------ request path
+    def _resolve_watch(self, request):
+        route = getattr(request, "route", None)
+        if route is None:
+            return None  # 404: no route, nothing to watch (R1)
+        for attr in ("uri", "path", "pattern"):
+            value = getattr(route, attr, None)
+            if value:
+                watch = self.watch_map.get(self._normalize_route_pattern(value))
+                if watch:
+                    return watch
+        return None
 
-        if getattr(Request, "_trappsec_overrides_patched", False):
+    async def _on_request(self, request):
+        try:
+            if not self._bootstrapped:
+                try:
+                    self.bootstrap()
+                except Exception as e:
+                    self.ts.logger.error(
+                        "trappsec: lazy bootstrap failed (traps may be missing; make sure "
+                        "before_server_start runs): %s", e)
+            if not self.watch_map:
+                return
+            watch = self._resolve_watch(request)
+            if watch is None:
+                return
+            found = self._inspect(request, watch)
+        except Exception as e:  # C1: never break the host request
+            self.ts.logger.error("trappsec watch error: %s", e)
             return
 
-        def patch_property(name):
-            prop = getattr(Request, name, None)
-            if not isinstance(prop, property) or not prop.fget:
-                return
+        if found:
+            try:
+                self.ts._trigger_watch_event(request, found)
+            except Exception as e:
+                self.ts.logger.error("trappsec watch event error: %s", e)
 
-            original_getter = prop.fget
-            marker = f"_trappsec_override_{name}"
+    def _inspect(self, request, watch):
+        found = []
+        query_fields = watch.get("query_fields") or {}
+        body_fields = watch.get("body_fields") or {}
 
-            def patched_getter(req, _orig=original_getter, _marker=marker):
-                ctx = getattr(req, "ctx", None)
-                if ctx is not None and hasattr(ctx, _marker):
-                    return getattr(ctx, _marker)
-                return _orig(req)
+        if query_fields:
+            try:
+                found.extend(self._inspect_query(request, query_fields))
+            except Exception as e:
+                self.ts.logger.error("trappsec query inspection error: %s", e)
 
-            setattr(Request, name, property(patched_getter, prop.fset, prop.fdel, prop.__doc__))
+        if body_fields:
+            try:
+                found.extend(self._inspect_body(request, body_fields))
+            except Exception as e:
+                self.ts.logger.error("trappsec body inspection error: %s", e)
+        return found
 
-        patch_property("args")
-        patch_property("json")
-        patch_property("form")
-        Request._trappsec_overrides_patched = True
+    def _inspect_query(self, request, rules):
+        qs = request.query_string
+        if not qs:
+            return []
+        pairs = parse_qsl(qs, keep_blank_values=True)
+        data, found, touched = self.ts._detect_honey_fields(_group_pairs(pairs), rules, request, source="query")
+        if touched:
+            new_qs = urlencode([(k, v) for k, v in pairs if k in data])
+            self._set_query(request, new_qs)
+        return found or []
 
-    def _patch_startup(self):
-        @self.app.before_server_start
-        async def trappsec_init(_app, loop):
-            self.inject_traps()
-            self.setup_watches()
+    def _set_query(self, request, new_qs):
+        from httptools import parse_url
+
+        raw = request.raw_url
+        path = raw.split(b"?", 1)[0]
+        new_raw = path + (b"?" + new_qs.encode("utf-8") if new_qs else b"")
+        request._parsed_url = parse_url(new_raw)  # private slot, see module docstring
+        request.raw_url = new_raw
+        # Drop derived caches so args / query_args / query_string are all rebuilt
+        # from the stripped query (RequestParameters keeps its multi-value API).
+        request.parsed_args.clear()
+        request.parsed_not_grouped_args.clear()
+
+    def _inspect_body(self, request, rules):
+        body = request.body
+        if not body:
+            return []
+        ctype = request.headers.get("content-type", "")
+        media = _media_type(ctype)
+        found = []
+
+        if media == "application/json" or media.endswith("+json"):
+            try:
+                obj = json.loads(body)
+            except Exception:
+                return []  # let the handler produce its own 400
+            obj, found, touched = _detect_json(self.ts, obj, rules, request)
+            if touched:
+                self._set_body(request, json.dumps(obj).encode("utf-8"))
+                request.parsed_json = None  # re-parsed lazily from the stripped body
+        elif media == "application/x-www-form-urlencoded":
+            pairs = parse_qsl(body.decode("utf-8", "replace"), keep_blank_values=True)
+            data, found, touched = self.ts._detect_honey_fields(_group_pairs(pairs), rules, request)
+            if touched:
+                self._set_body(request, urlencode([(k, v) for k, v in pairs if k in data]).encode("utf-8"))
+                request.parsed_form = None
+                request.parsed_files = None
+        elif media == "multipart/form-data":
+            boundary = _multipart_boundary(ctype)
+            if not boundary:
+                return []
+            preamble, parts, tail = _multipart_parts(body, boundary)
+            pairs = [(p["name"], p["value"]) for p in parts if p["name"] and not p["is_file"]]
+            data, found, touched = self.ts._detect_honey_fields(_group_pairs(pairs), rules, request)
+            if touched:
+                drop = {k for k, _ in pairs if k not in data}
+                self._set_body(request, _rebuild_multipart(preamble, parts, tail, boundary, drop))
+                request.parsed_form = None
+                request.parsed_files = None
+        return found or []
+
+    @staticmethod
+    def _set_body(request, new_body):
+        request.body = new_body
+        try:
+            request.headers["content-length"] = str(len(new_body))
+        except Exception:
+            pass

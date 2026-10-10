@@ -1,121 +1,132 @@
-from functools import partial
+from .starlette import StarletteIntegration, TrapConflictError  # noqa: F401
 
-class FastAPIIntegration:
-    def __init__(self, ts, app):
-        self.ts = ts
-        self.app = app
-        self.watch_map = None
 
-        if not self.ts.identity.ip: 
-            self.ts.identity.ip = lambda r: r.client.host if r.client else "0.0.0.0"
+class FastAPIIntegration(StarletteIntegration):
+    """FastAPI integration.
 
-        self.ts.request.path = lambda r: str(r.url.path)
-        self.ts.request.user_agent = lambda r: r.headers.get("user-agent", "unknown")
-        self.ts.request.method = lambda r: r.method
-        
-        self.setup_middleware()
-        self._patch_startup()
+    Shares the ASGI-level machinery of the Starlette integration: every matched
+    route (defined before or after ``Sentry(app)``, directly on the app or via
+    ``include_router``) is wrapped at ``route.app`` when bootstrap runs, and the
+    request body is replayed to FastAPI after inspection, so no private Starlette
+    ``Request`` attributes are mutated. Bootstrap runs on the first request or
+    lifespan scope, so ``TestClient`` without ``with`` is protected too.
+    """
 
-    def inject_traps(self):
+    def _build_trap_routes(self, traps):
+        from functools import partial
         from fastapi import Request, Response
         from fastapi.routing import APIRoute
 
         async def endpoint(req: Request, trap):
-            response_body, response_config = self.ts._trigger_trap_event(req, trap)
+            try:
+                response_body, response_config = self.ts._trigger_trap_event(req, trap)
+            except Exception as e:
+                self.ts.logger.error("trappsec trap handling failed: %s", e)
+                response_body, response_config = self._fallback(trap)
 
-            return Response(response_body, 
-                status_code=response_config["status_code"], 
+            return Response(response_body,
+                status_code=response_config["status_code"],
                 media_type=response_config["mime_type"])
 
-        new_routes = []
-        for idx, trap in enumerate(self.ts.traps):
-            new_routes.append(APIRoute(trap["path"], partial(endpoint, trap=trap), 
-                methods=trap["methods"], name=f"trappsec_{idx}", include_in_schema=False))
-    
-        self.app.router.routes = new_routes + self.app.router.routes
+        return [
+            APIRoute(trap["path"], partial(endpoint, trap=trap),
+                methods=trap["methods"], name="trappsec_%d" % idx, include_in_schema=False)
+            for idx, trap in enumerate(traps)
+        ]
 
-    def setup_watches(self):
-        watch_map = dict()
-        for watch in self.ts.watches:
-            watch_map[watch["path"]] = watch
-        self.watch_map = watch_map
-    
-    def setup_middleware(self):        
-        from fastapi import Request, Depends
-        from starlette.datastructures import FormData
-        from starlette.middleware.base import BaseHTTPMiddleware
-        from urllib.parse import parse_qs, urlencode
+    # -------------------------------------------------- included routers (new)
+    #
+    # Recent FastAPI versions keep ``include_router`` routes lazily inside
+    # ``_IncludedRouter`` objects instead of copying them onto the app, and build
+    # their handlers from each original route's ``get_route_handler()`` (the
+    # public custom-route hook). Older versions copy the routes, in which case
+    # the base class already wraps them through ``route.app``.
 
-        async def trappsec_watcher(request: Request):
-            route = request.scope.get("route")
-            if route is None:
-                return
+    @staticmethod
+    def _is_included_router(route):
+        return hasattr(route, "original_router") and hasattr(route, "include_context")
 
-            if route.path not in self.watch_map:
-                return
-            
-            matched_rule = self.watch_map[route.path]
-            query_fields = matched_rule["query_fields"]
-            body_fields = matched_rule["body_fields"]
-            found_fields = []
-            
-            if query_fields:
-                qs = request.scope.get("query_string", b"").decode("utf-8")
-                if qs:
-                    q_dict = {k: v[0] if len(v) == 1 else v for k, v in parse_qs(qs).items()}
-                    q_dict, mod, touched = self.ts._detect_honey_fields(q_dict, query_fields, request)
-                    
-                    if mod:
-                        found_fields.extend(mod)
-                    if touched:
-                        request.scope["query_string"] = urlencode(q_dict, doseq=True).encode("utf-8")
-                        if hasattr(request, "_query_params"):
-                            del request._query_params
-                
-            if body_fields:
-                ctype = request.headers.get("content-type", "")
-                if "application/json" in ctype:
-                    try:
-                        body = await request.json()
-                        b, mod, touched = self.ts._detect_honey_fields(body, body_fields, request)
-                        if mod:
-                            found_fields.extend(mod)
-                        if touched:
-                            request._json = b
-                    except Exception as e: 
-                        self.ts.logger.error("error reading json body: %s", e)
-                elif "application/x-www-form-urlencoded" in ctype or "multipart/form-data" in ctype:
-                    try:
-                        form_data = await request.form()
-                        data = dict(form_data)
-                        b, mod, touched = self.ts._detect_honey_fields(data, body_fields, request)
-                        if mod:
-                            found_fields.extend(mod)
-                        if touched:
-                            request._form = FormData(b)
-                    except Exception as e: 
-                        self.ts.logger.error("error reading form body: %s", e)
-            
-            if found_fields:
-                self.ts._trigger_watch_event(request, found_fields)
+    def _included_existing(self, routes):
+        for route in routes:
+            if not self._is_included_router(route):
+                continue
+            try:
+                for ctx in route.effective_route_contexts():
+                    path = getattr(ctx, "path", "")
+                    methods = getattr(ctx, "methods", None)
+                    if path and methods:
+                        yield path, methods
+            except Exception as e:
+                self.ts.logger.warning("trappsec: could not inspect included router: %s", e)
 
-        if self.app.router.dependencies is None:
-            self.app.router.dependencies = []
+    def _check_conflicts(self, traps):
+        super()._check_conflicts(traps)
+        existing = list(self._included_existing(self.app.router.routes))
+        for trap in traps:
+            wanted = set(m.upper() for m in trap["methods"])
+            for path, methods in existing:
+                if path == trap["path"] and set(methods) & wanted:
+                    raise TrapConflictError(
+                        "trappsec error: trap %s %s duplicates an existing route."
+                        % (sorted(wanted), trap["path"])
+                    )
 
-        self.app.router.dependencies.append(Depends(trappsec_watcher))
-    
-    def _patch_startup(self):
-        from contextlib import asynccontextmanager
-        original_lifespan = self.app.router.lifespan_context
+    def _wrap_routes(self, routes):
+        super()._wrap_routes(routes)
+        self._wrap_included(routes, set())
 
-        @asynccontextmanager
-        async def wrapped_lifespan(app_instance):
-            self.inject_traps()
-            self.setup_watches()
+    def _wrap_included(self, routes, seen):
+        from fastapi.routing import APIRoute
 
-            async with original_lifespan(app_instance) as state:
-                yield state
+        for route in routes:
+            if getattr(route, "routes", None) is not None and not hasattr(route, "endpoint"):
+                self._wrap_included(list(route.routes), seen)  # mounts
+                continue
+            if not self._is_included_router(route):
+                continue
+            # Drop effective-route caches so handlers are rebuilt through our hook.
+            for attr in ("_effective_candidates_version", "_effective_low_priority_routes_version"):
+                if hasattr(route, attr):
+                    setattr(route, attr, None)
+            router = route.original_router
+            if id(router) in seen:
+                continue
+            seen.add(id(router))
+            for inner in list(router.routes):
+                if self._is_included_router(inner):
+                    self._wrap_included([inner], seen)
+                elif isinstance(inner, APIRoute):
+                    self._patch_route_handler(inner)
 
-        self.app.router.lifespan_context = wrapped_lifespan
-        
-    
+    def _patch_route_handler(self, route):
+        if getattr(route, "_trappsec_patched", False):
+            return
+        original = route.get_route_handler
+        integration = self
+
+        def get_route_handler():
+            handler = original()
+
+            async def trappsec_handler(request):
+                from starlette.requests import Request
+                try:
+                    scope = request.scope
+                    ctx = (scope.get("fastapi") or {}).get("effective_route_context")
+                    pattern = getattr(ctx, "path", None) or route.path
+                    watch = integration.watch_map.get(pattern)
+                    if watch is not None:
+                        new_scope, new_receive = await integration._inspect(scope, request.receive, watch)
+                        if new_scope is not scope or new_receive is not request.receive:
+                            request = Request(new_scope, new_receive, getattr(request, "_send", None) or _noop_send)
+                except Exception as e:
+                    integration.ts.logger.error("trappsec watch failed: %s", e)
+                return await handler(request)
+
+            return trappsec_handler
+
+        route.get_route_handler = get_route_handler
+        route._trappsec_patched = True
+
+
+async def _noop_send(message):
+    return None

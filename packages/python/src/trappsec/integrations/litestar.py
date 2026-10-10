@@ -1,108 +1,149 @@
+"""Litestar integration.
+
+Design notes
+------------
+* Traps are registered as real Litestar routes (specificity-based router, R2).
+  A trap that exactly duplicates an application route (same path template and a
+  shared method) makes ``bootstrap()`` raise instead of shadowing/replacing it.
+* Watches are matched on the *resolved* route: the app's own routing table is
+  asked which route handler / ``path_template`` a request resolves to (the same
+  cached lookup Litestar performs for the request), so a watch on
+  ``/users/{id}`` fires for ``/users/5`` but not for a static ``/users/me`` route.
+  This uses ``app.asgi_router.handle_routing`` (internal but stable across the
+  2.x series); if it is unavailable an error is logged once and watches are
+  inactive rather than falling back to raw-URL guessing.
+* Only requests that resolve to a watched route are touched. The body is only
+  buffered when the watch has body fields, the content type is JSON /
+  urlencoded / multipart and the declared ``Content-Length`` is below
+  ``MAX_INSPECT_BYTES``; otherwise the request streams untouched. When a body is
+  rewritten the ``Content-Length`` header is updated to match.
+* ``identify_user`` and callable defaults receive a real ``litestar.Request``
+  built on an isolated copy of the ASGI scope (so cookies/headers work and no
+  parsed state leaks into the application's own ``Request``). Litestar
+  authentication middleware runs *inside* the route stack, after this hook, so
+  ``request.user`` / ``request.auth`` are not populated; identify from headers
+  or cookies.
+* ``bootstrap()`` is public, idempotent and thread-safe; it runs from
+  ``on_startup`` and lazily on the first request (e.g. ``TestClient`` used
+  without a lifespan).
+"""
 import json
 import re
-from urllib.parse import parse_qs, urlencode
+import threading
+from urllib.parse import parse_qsl, urlencode
+
+MAX_INSPECT_BYTES = 10 * 1024 * 1024
+
+_TYPED_PARAM_RE = re.compile(r"\{([^}:]+):[^}]+\}")
+_NAME_RE = re.compile(r';\s*name=(?:"([^"]*)"|([^;\s]*))', re.I)
+_FILENAME_RE = re.compile(r";\s*filename\*?=", re.I)
 
 
-def _extract_multipart_boundary(content_type):
-    for param in content_type.split(";"):
+def _media_type(content_type):
+    return (content_type or "").split(";")[0].strip().lower()
+
+
+def _group_pairs(pairs):
+    """[(k, v), ...] -> {k: scalar | [v, v, ...]} (lists only for repeated keys)."""
+    out = {}
+    for k, v in pairs:
+        if k in out:
+            if isinstance(out[k], list):
+                out[k].append(v)
+            else:
+                out[k] = [out[k], v]
+        else:
+            out[k] = v
+    return out
+
+
+def _multipart_boundary(content_type):
+    for param in (content_type or "").split(";")[1:]:
         param = param.strip()
         if param.lower().startswith("boundary="):
             return param.split("=", 1)[1].strip().strip('"')
     return None
 
 
-def _parse_content_disposition(value):
-    if not value:
-        return {}
-    params = {}
-    for part in value.split(";"):
-        part = part.strip()
-        if "=" in part:
-            k, v = part.split("=", 1)
-            params[k.strip().lower()] = v.strip().strip('"')
-    return params
-
-
-def _parse_multipart_parts(body_bytes, boundary):
-    delimiter = b"--" + boundary.encode("utf-8")
-    segments = body_bytes.split(delimiter)
-    parts = []
-
-    for segment in segments[1:]:
-        # Final boundary marker.
-        if segment.startswith(b"--"):
+def _multipart_parts(body, boundary):
+    """Split a multipart body into (preamble, parts, tail); raw bytes are kept so
+    unrelated parts can be re-emitted byte-for-byte."""
+    delim = b"--" + boundary.encode("utf-8")
+    chunks = body.split(delim)
+    preamble, tail, parts = chunks[0], b"", []
+    for seg in chunks[1:]:
+        if seg.startswith(b"--"):
+            tail = seg
             break
-        if segment.startswith(b"\r\n"):
-            segment = segment[2:]
-        if segment.endswith(b"\r\n"):
-            segment = segment[:-2]
-        if not segment:
-            continue
-
-        header_end = segment.find(b"\r\n\r\n")
-        if header_end == -1:
-            continue
-
-        header_block = segment[:header_end]
-        body = segment[header_end + 4:]
-        header_lines = header_block.split(b"\r\n")
-        headers = {}
-        for line in header_lines:
-            if b":" not in line:
-                continue
-            key, val = line.split(b":", 1)
-            headers[key.decode("latin1").strip().lower()] = val.decode("latin1").strip()
-
-        disp = _parse_content_disposition(headers.get("content-disposition", ""))
-        parts.append(
-            {
-                "headers_raw": header_lines,
-                "headers": headers,
-                "name": disp.get("name"),
-                "is_file": "filename" in disp,
-                "body": body,
-            }
-        )
-
-    return parts
+        head, sep, rest = seg.partition(b"\r\n\r\n")
+        name, is_file = None, False
+        for line in head.split(b"\r\n"):
+            text = line.decode("latin1")
+            if text.lower().startswith("content-disposition"):
+                m = _NAME_RE.search(text)
+                if m:
+                    name = m.group(1) if m.group(1) is not None else m.group(2)
+                is_file = bool(_FILENAME_RE.search(text))
+        value = rest[:-2] if rest.endswith(b"\r\n") else rest
+        parts.append({"name": name, "is_file": is_file, "raw": seg, "value": value.decode("utf-8", "replace")})
+    return preamble, parts, tail or b"--\r\n"
 
 
-def _rebuild_multipart_body(parts, boundary):
-    delimiter = b"--" + boundary.encode("utf-8")
-    chunks = []
-    for part in parts:
-        chunks.append(delimiter + b"\r\n")
-        chunks.append(b"\r\n".join(part["headers_raw"]) + b"\r\n\r\n")
-        chunks.append(part["body"] + b"\r\n")
-    chunks.append(delimiter + b"--\r\n")
-    return b"".join(chunks)
+def _rebuild_multipart(preamble, parts, tail, boundary, drop):
+    delim = b"--" + boundary.encode("utf-8")
+    kept = [p["raw"] for p in parts if p["is_file"] or p["name"] not in drop]
+    return preamble + b"".join(delim + raw for raw in kept) + delim + tail
 
 
-class _ASGIRequestURL:
-    __slots__ = ("path",)
+def _detect_json(ts, obj, rules, req):
+    """Top-level object -> inspect; array -> inspect every object element; else skip."""
+    found, touched = [], False
+    if isinstance(obj, dict):
+        obj, mod, touched = ts._detect_honey_fields(obj, rules, req)
+        found.extend(mod or [])
+    elif isinstance(obj, list):
+        for i, el in enumerate(obj):
+            if isinstance(el, dict):
+                el, mod, t = ts._detect_honey_fields(el, rules, req)
+                obj[i] = el
+                found.extend(mod or [])
+                touched = touched or t
+    return obj, found, touched
 
-    def __init__(self, path):
-        self.path = path
+
+def _normalize_template(path):
+    path = _TYPED_PARAM_RE.sub(r"{\1}", str(path))
+    if not path.startswith("/"):
+        path = "/" + path
+    if len(path) > 1:
+        path = path.rstrip("/")
+    return path
 
 
-class _ASGIRequest:
-    def __init__(self, scope, headers, body_data=None):
-        self.scope = scope
-        self.headers = headers
-        self.path = scope.get("path", "/")
-        self.url = _ASGIRequestURL(self.path)
-        self.method = scope.get("method", "GET")
-        client = scope.get("client") or ("0.0.0.0", 0)
-        self.client = type("Client", (), {"host": client[0]})()
-        self.body_data = body_data or {}
+def _replay(messages, fallback=None):
+    """A fresh ASGI ``receive`` that yields ``messages`` and then ``fallback()`` / an empty body."""
+    it = iter(list(messages))
+
+    async def receive():
+        try:
+            return next(it)
+        except StopIteration:
+            if fallback is not None:
+                return await fallback()
+            return {"type": "http.request", "body": b"", "more_body": False}
+
+    return receive
 
 
 class LitestarIntegration:
     def __init__(self, ts, app):
         self.ts = ts
         self.app = app
-        self.watch_map = {}      # route pattern -> watch dict, built once at init (R13)
-        self.watch_patterns = [] # [(pattern, compiled_regex, watch)] for parameterized paths (R1)
+        self.watch_map = {}  # normalized route template -> watch, built once (R13)
+        self._lock = threading.RLock()
+        self._bootstrapped = False
+        self._bootstrap_error = None
+        self._routing_warned = False
 
         if not self.ts.identity.ip:
             self.ts.identity.ip = lambda r: r.client.host if r.client else "0.0.0.0"
@@ -111,43 +152,73 @@ class LitestarIntegration:
         self.ts.request.user_agent = lambda r: r.headers.get("user-agent", "unknown")
         self.ts.request.method = lambda r: r.method
 
-        # R3 + R10: defer trap registration and watch setup to app startup so that
-        # all ts.trap() / ts.watch() calls in user code have run first.
         self.app.on_startup.append(self._startup)
         self._patch_asgi_handler()
 
+    # ------------------------------------------------------------------ setup
     def _startup(self):
-        self._inject_traps()   # R14: real Litestar routes; R10: traps before watches
-        self._setup_watches()  # R13: build O(1) watch_map
+        self.bootstrap()
+
+    def bootstrap(self):
+        """Install traps and watches. Public, idempotent and thread-safe."""
+        with self._lock:
+            if not self._bootstrapped:
+                self._bootstrapped = True  # never half-install twice
+                try:
+                    self._inject_traps()    # R10: traps before watches
+                    self._setup_watches()
+                except Exception as e:
+                    self._bootstrap_error = e
+            if self._bootstrap_error is not None:
+                raise self._bootstrap_error
+
+    def _fallback_response(self):
+        cfg = dict(self.ts.default_responses.get("unauthenticated") or {})
+        cfg.setdefault("status_code", 401)
+        cfg.setdefault("mime_type", "application/json")
+        body = cfg.get("response_body", {})
+        if callable(body):
+            body = {}
+        return body, cfg
 
     def _inject_traps(self):
-        # R14: register traps as real Litestar routes so they appear in the route
-        # table and are indistinguishable from application endpoints during scanning.
-        # app.register() calls construct_routing_trie() on the live asgi_router, so
-        # routes propagate into the already-built asgi_handler.
-        # Handler must have a clean (request: Request) -> Response signature —
-        # Litestar's DI system inspects parameters and cannot resolve arbitrary defaults.
         from litestar import Request, Response
         from litestar.handlers import HTTPRouteHandler
+        from litestar.routes import HTTPRoute
 
         ts = self.ts
+        traps = ts.traps
+        if not traps:
+            return
 
-        for idx, trap in enumerate(self.ts.traps):
-            def make_handler(_trap):
-                async def trap_handler(request: Request) -> Response:
-                    try:  # R12: fire-and-forget, never block the request
-                        response_body, response_config = ts._trigger_trap_event(request, _trap)
-                    except Exception as e:
-                        ts.logger.error("trappsec trap error: %s", e)
-                        response_body = ""
-                        response_config = {"status_code": 200, "mime_type": "application/json"}
-                    return Response(
-                        content=response_body,
-                        status_code=response_config["status_code"],
-                        media_type=response_config["mime_type"],
-                    )
-                return trap_handler
+        existing = {}
+        for route in self.app.routes:
+            if isinstance(route, HTTPRoute):
+                existing.setdefault(_normalize_template(route.path_format), set()).update(
+                    m.upper() for m in route.methods)
 
+        def make_handler(_trap):
+            async def trap_handler(request: Request) -> Response:
+                try:  # C1: a failing callback must still yield the decoy response
+                    body, cfg = ts._trigger_trap_event(request, _trap)
+                except Exception as e:
+                    ts.logger.error("trappsec trap error: %s", e)
+                    body, cfg = self._fallback_response()
+                if not isinstance(body, (str, bytes)):
+                    body = json.dumps(body, default=str)
+                if isinstance(body, str):
+                    body = body.encode("utf-8")  # bytes are sent verbatim for any media type
+                return Response(content=body, status_code=cfg["status_code"], media_type=cfg["mime_type"])
+
+            return trap_handler
+
+        for idx, trap in enumerate(traps):
+            methods = {m.upper() for m in trap["methods"]}
+            clash = methods & existing.get(_normalize_template(trap["path"]), set())
+            if clash:
+                raise RuntimeError(
+                    f"trappsec: trap {sorted(clash)} {trap['path']} duplicates an existing "
+                    f"application route; refusing to shadow or replace it")
             route_handler = HTTPRouteHandler(
                 path=trap["path"],
                 http_method=trap["methods"],
@@ -156,27 +227,39 @@ class LitestarIntegration:
             )(make_handler(trap))
             self.app.register(route_handler)
 
+        self._clear_routing_cache()
+
+    def _clear_routing_cache(self):
+        try:
+            self.app.asgi_router.handle_routing.cache_clear()
+        except Exception:
+            pass
+
     def _setup_watches(self):
-        # R13: build O(1) watch lookup map indexed by route pattern.
-        for watch in self.ts.watches:
-            self.watch_map[watch["path"]] = watch
+        self.watch_map = {_normalize_template(w["path"]): w for w in self.ts.watches}
 
-            # R1: compile regex for parameterized patterns (e.g., /users/{id})
-            if "{" in watch["path"]:
-                escaped = re.escape(watch["path"])
-                regex = re.compile("^" + re.sub(r"\\\{[^}]+\\\}", "[^/]+", escaped) + "$")
-                self.watch_patterns.append((watch["path"], regex, watch))
+    # ------------------------------------------------------------ request path
+    def _resolve_watch(self, scope):
+        """R1: resolve the request to its route and look the route template up."""
+        from litestar.utils import normalize_path
 
-    def _resolve_watch(self, path):
-        # R1: match raw URL path to a watch using its route pattern.
-        # O(1) for exact-match paths; O(k) for parameterized (k = parameterized watch count).
-        watch = self.watch_map.get(path)
-        if watch:
-            return watch
-        for _, regex, w in self.watch_patterns:
-            if regex.match(path):
-                return w
-        return None
+        path = scope.get("path", "/")
+        root_path = scope.get("root_path", "")
+        if root_path:
+            path = path.split(root_path, maxsplit=1)[-1]
+        try:
+            _, _, _, _, template = self.app.asgi_router.handle_routing(
+                path=normalize_path(path), method=scope.get("method"))
+        except (AttributeError, TypeError, ValueError) as e:
+            if not self._routing_warned:
+                self._routing_warned = True
+                self.ts.logger.error(
+                    "trappsec: cannot resolve Litestar routes (unsupported litestar version?); "
+                    "watches are inactive: %s", e)
+            return None
+        except Exception:
+            return None  # unmatched path / method not allowed: nothing to watch
+        return self.watch_map.get(_normalize_template(template))
 
     def _patch_asgi_handler(self):
         original_handler = self.app.asgi_handler
@@ -185,124 +268,148 @@ class LitestarIntegration:
             if scope.get("type") != "http":
                 return await original_handler(scope, receive, send)
 
-            headers = {
-                k.decode("latin1").lower(): v.decode("latin1")
-                for k, v in scope.get("headers", [])
-            }
-            path = scope.get("path", "/")
+            if not self._bootstrapped:
+                try:
+                    self.bootstrap()
+                except Exception as e:  # C1: keep serving the application
+                    self.ts.logger.error("trappsec: bootstrap failed: %s", e)
 
-            # Traps are handled by real Litestar routes registered in _inject_traps (R14).
-            # Watch handling — R1: resolve raw path to watch using route pattern
-            watch = self._resolve_watch(path)
-            if not watch:
+            watch = None
+            if self.watch_map:
+                try:
+                    watch = self._resolve_watch(scope)
+                except Exception as e:
+                    self.ts.logger.error("trappsec watch resolution error: %s", e)
+            if watch is None:
                 return await original_handler(scope, receive, send)
 
-            body_bytes = b""
-            more_body = True
-            while more_body:
-                message = await receive()
-                body_bytes += message.get("body", b"")
-                more_body = message.get("more_body", False)
-
-            found_fields = []
-            query_fields = watch.get("query_fields", {})
-            body_fields = watch.get("body_fields", {})
-
-            if query_fields:
-                qs = scope.get("query_string", b"").decode("utf-8")
-                q_dict = {k: v[0] if len(v) == 1 else v for k, v in parse_qs(qs).items()} if qs else {}
-                q_dict, mod, touched = self.ts._detect_honey_fields(q_dict, query_fields, None)
-                if mod:
-                    found_fields.extend(mod)
-                if touched:
-                    scope["query_string"] = urlencode(q_dict, doseq=True).encode("utf-8")
-
-            content_type = headers.get("content-type", "")
-            body_data = {}
-            new_body = body_bytes
-            if body_fields and body_bytes:
-                try:
-                    if "application/json" in content_type:
-                        body_data = json.loads(body_bytes.decode("utf-8"))
-                        if isinstance(body_data, dict):
-                            # R4: always strip — field removed regardless of value (Python convention)
-                            body_data, mod, touched = self.ts._detect_honey_fields(body_data, body_fields, None)
-                            if mod:
-                                found_fields.extend(mod)
-                            if touched:
-                                new_body = json.dumps(body_data).encode("utf-8")
-                    elif "application/x-www-form-urlencoded" in content_type:
-                        body_data = {k: v[0] if isinstance(v, list) and v else v for k, v in parse_qs(body_bytes.decode("utf-8")).items()}
-                        # R4: always strip — field removed regardless of value (Python convention)
-                        body_data, mod, touched = self.ts._detect_honey_fields(body_data, body_fields, None)
-                        if mod:
-                            found_fields.extend(mod)
-                        if touched:
-                            new_body = urlencode(body_data, doseq=True).encode("utf-8")
-                    elif "multipart/form-data" in content_type:
-                        boundary = _extract_multipart_boundary(content_type)
-                        if boundary:
-                            parts = _parse_multipart_parts(body_bytes, boundary)
-                            text_fields = {}
-                            for part in parts:
-                                name = part.get("name")
-                                if not name or part.get("is_file"):
-                                    continue
-                                value = part["body"].decode("utf-8", errors="replace")
-                                if name in text_fields:
-                                    existing = text_fields[name]
-                                    if isinstance(existing, list):
-                                        existing.append(value)
-                                    else:
-                                        text_fields[name] = [existing, value]
-                                else:
-                                    text_fields[name] = value
-
-                            if text_fields:
-                                body_data = text_fields
-                                body_data, mod, touched = self.ts._detect_honey_fields(body_data, body_fields, None)
-                                if mod:
-                                    found_fields.extend(mod)
-                                if touched:
-                                    kept_parts = []
-                                    for part in parts:
-                                        name = part.get("name")
-                                        if part.get("is_file") or not name:
-                                            kept_parts.append(part)
-                                            continue
-                                        if name in body_data:
-                                            kept_parts.append(part)
-
-                                    new_body = _rebuild_multipart_body(kept_parts, boundary)
-
-                                    # Preserve content-type boundary and sync content-length with rewritten body.
-                                    new_headers = []
-                                    for k_h, v_h in scope.get("headers", []):
-                                        key = k_h.decode("latin1").lower()
-                                        if key == "content-length":
-                                            new_headers.append((k_h, str(len(new_body)).encode("latin1")))
-                                        else:
-                                            new_headers.append((k_h, v_h))
-                                    scope["headers"] = new_headers
-                except Exception as e:
-                    self.ts.logger.error("error reading body: %s", e)
-
-            if found_fields:
-                req = _ASGIRequest(scope, headers, body_data=body_data)
-                try:  # R12: fire-and-forget, never block the request
-                    self.ts._trigger_watch_event(req, found_fields)
-                except Exception as e:
-                    self.ts.logger.error("trappsec watch event error: %s", e)
-
-            sent = False
-
-            async def new_receive():
-                nonlocal sent
-                if sent:
-                    return {"type": "http.request", "body": b"", "more_body": False}
-                sent = True
-                return {"type": "http.request", "body": new_body, "more_body": False}
-
-            return await original_handler(scope, new_receive, send)
+            try:
+                receive = await self._handle_watch(scope, receive, watch)
+            except Exception as e:  # C1: request continues unmodified
+                self.ts.logger.error("trappsec watch error: %s", e)
+            return await original_handler(scope, receive, send)
 
         self.app.asgi_handler = wrapped
+
+    async def _read_body(self, scope, receive, headers):
+        """Buffer the body only if it is worth inspecting; returns (messages, body) or None."""
+        media = _media_type(headers.get("content-type", ""))
+        if not (media == "application/json" or media.endswith("+json")
+                or media in ("application/x-www-form-urlencoded", "multipart/form-data")):
+            return None
+        try:
+            length = int(headers.get("content-length", "0") or 0)
+        except ValueError:
+            length = 0
+        if length > MAX_INSPECT_BYTES:
+            return None
+        messages, chunks, total = [], [], 0
+        while True:
+            message = await receive()
+            messages.append(message)
+            if message.get("type") != "http.request":
+                break  # http.disconnect: hand everything back as-is
+            chunk = message.get("body", b"")
+            total += len(chunk)
+            chunks.append(chunk)
+            if not message.get("more_body", False):
+                break
+            if total > MAX_INSPECT_BYTES:
+                # too large to inspect: replay what was read, then stream the rest
+                return messages, None
+        return messages, b"".join(chunks)
+
+    async def _handle_watch(self, scope, receive, watch):
+        """Inspect (and strip) the watched fields. Returns the ``receive`` to hand to the app."""
+        from litestar import Request
+
+        headers = {k.decode("latin1").lower(): v.decode("latin1") for k, v in scope.get("headers", [])}
+        query_fields = watch.get("query_fields") or {}
+        body_fields = watch.get("body_fields") or {}
+
+        messages, body = [], None
+        app_receive = receive
+        if body_fields:
+            read = await self._read_body(scope, receive, headers)
+            if read is not None:
+                messages, body = read
+                app_receive = _replay(messages, fallback=receive)
+
+        # Real Request on an isolated scope copy: cookies/headers work and nothing it
+        # caches (body, json, ...) can leak into the application's own Request.
+        iso = dict(scope)
+        iso["state"] = {k: v for k, v in dict(scope.get("state") or {}).items() if k != "_ls_connection_state"}
+        request = Request(scope=iso, receive=_replay(messages))
+
+        found = []
+        new_qs = None
+        new_body = None
+
+        try:
+            if query_fields:
+                qs = scope.get("query_string", b"").decode("utf-8", "replace")
+                if qs:
+                    pairs = parse_qsl(qs, keep_blank_values=True)
+                    data, mod, touched = self.ts._detect_honey_fields(
+                        _group_pairs(pairs), query_fields, request, source="query")
+                    found.extend(mod or [])
+                    if touched:
+                        new_qs = urlencode([(k, v) for k, v in pairs if k in data]).encode("utf-8")
+
+            if body:
+                new_body = self._inspect_body(body, headers, body_fields, request, found)
+        except Exception as e:
+            self.ts.logger.error("trappsec watch inspection error: %s", e)
+            new_qs = new_body = None
+            if not found:
+                return app_receive
+
+        # Strip first, notify second: a failing callback can never leave the field in place.
+        if new_qs is not None:
+            scope["query_string"] = new_qs
+        if new_body is not None:
+            scope["headers"] = [
+                (k, str(len(new_body)).encode("latin1")) if k.decode("latin1").lower() == "content-length" else (k, v)
+                for k, v in scope.get("headers", [])
+            ]
+            app_receive = _replay([{"type": "http.request", "body": new_body, "more_body": False}])
+
+        if found:
+            try:
+                self.ts._trigger_watch_event(request, found)
+            except Exception as e:
+                self.ts.logger.error("trappsec watch event error: %s", e)
+        return app_receive
+
+    def _inspect_body(self, body, headers, rules, request, found):
+        """Returns the rewritten body bytes if something was stripped, else None."""
+        ctype = headers.get("content-type", "")
+        media = _media_type(ctype)
+
+        if media == "application/json" or media.endswith("+json"):
+            try:
+                obj = json.loads(body.decode("utf-8"))
+            except Exception:
+                return None
+            obj, mod, touched = _detect_json(self.ts, obj, rules, request)
+            found.extend(mod)
+            return json.dumps(obj).encode("utf-8") if touched else None
+
+        if media == "application/x-www-form-urlencoded":
+            pairs = parse_qsl(body.decode("utf-8", "replace"), keep_blank_values=True)
+            data, mod, touched = self.ts._detect_honey_fields(_group_pairs(pairs), rules, request)
+            found.extend(mod or [])
+            return urlencode([(k, v) for k, v in pairs if k in data]).encode("utf-8") if touched else None
+
+        if media == "multipart/form-data":
+            boundary = _multipart_boundary(ctype)
+            if not boundary:
+                return None
+            preamble, parts, tail = _multipart_parts(body, boundary)
+            pairs = [(p["name"], p["value"]) for p in parts if p["name"] and not p["is_file"]]
+            data, mod, touched = self.ts._detect_honey_fields(_group_pairs(pairs), rules, request)
+            found.extend(mod or [])
+            if touched:
+                drop = {k for k, _ in pairs if k not in data}
+                return _rebuild_multipart(preamble, parts, tail, boundary, drop)
+        return None
