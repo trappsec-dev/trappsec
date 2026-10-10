@@ -715,3 +715,7 @@ Every callback you provide (`identify_user`, `override_source_ip`, callable defa
 ## Go request body limit
 
 The Go adapters read request bodies in order to inspect `watch.Body` fields. Bodies up to `DefaultMaxBodyBytes` (1 MiB) are buffered and inspected; larger bodies are passed through to your handler uninspected (query watches still apply). Adjust it with `app.SetMaxBodyBytes(n)` on the Gin/Echo/net/http `App`. Keep your own `http.MaxBytesReader` limits in place for the real application.
+
+> **Avoid a padding bypass:** a body larger than the limit is not inspected, so an attacker could pad a request past it to slip a honey field through. Make sure `SetMaxBodyBytes` is at least as large as the maximum body your watched routes accept (for example, the `http.MaxBytesReader` limit you already apply). Then no oversize body can reach your handler.
+
+> **Gin route groups:** routes registered before `InstallSentry` are still inspected. A route *group* created before `InstallSentry` does not inherit the watch middleware, though, so routes added to it later are not watched. Call `InstallSentry` before creating route groups.
