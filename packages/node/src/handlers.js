@@ -147,7 +147,7 @@ class WebhookHandler {
                 });
                 try { await res.body?.cancel(); } catch (e) { /* ignore */ }
                 if (res.ok) return;
-                this.logger.error(`trappsec webhook: non-2xx response ${res.status} from ${this.url}`);
+                this.logger.error(`trappsec webhook: non-2xx response ${res.status}`);
                 lastErr = new Error(`HTTP ${res.status}`);
                 retryable = res.status >= 500 || res.status === 429;
             } catch (e) {

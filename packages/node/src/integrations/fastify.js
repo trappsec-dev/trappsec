@@ -1,127 +1,130 @@
+'use strict';
+
+const {
+    normalizePath, isObject, buildWatchMap, hasFields, replaceInPlace, detect,
+    resolveTrap, emitWatch
+} = require('./_common');
+
+// Traps and the watch hook are installed by a non-encapsulated plugin that is
+// registered when Sentry is constructed. Fastify loads it at ready() time (before
+// listen(), inject() or ready() resolve), after synchronous configuration code ran
+// and with routes still addable, so `await app.ready()` / `app.inject()` before
+// `listen()` work and nothing is registered inside a patched listen().
+//
+// Watches run in `preValidation`: the body is already parsed, but JSON-schema
+// validation has not run yet, so honey fields are seen and stripped even when the
+// route schema would otherwise reject or silently remove them (additionalProperties /
+// removeAdditional). Consequence: identify_user sees only request state set in
+// onRequest/preParsing/preValidation hooks registered BEFORE Sentry; state set by
+// preHandler-phase auth hooks is not visible to watch events (traps run as handlers
+// and see everything).
 class FastifyIntegration {
-    constructor(ts, app) {
+    // options.hookListen (default true): also call bootstrap() from app.listen().
+    constructor(ts, app, options = {}) {
         this.ts = ts;
         this.app = app;
+        this._registered = false;
 
         if (!this.ts.identity.ip) {
             this.ts.identity.ip = (req) => req.ip || req.socket?.remoteAddress || req.raw?.socket?.remoteAddress || "0.0.0.0";
         }
 
-        this.ts.requestContext.path = (req) => this._normalizePath(req.url || req.raw?.url);
+        this.ts.requestContext.path = (req) => normalizePath(req.url || req.raw?.url);
         this.ts.requestContext.userAgent = (req) => req.headers?.["user-agent"] || req.raw?.headers?.["user-agent"] || null;
         this.ts.requestContext.method = (req) => req.method || req.raw?.method || null;
 
+        if (options.hookListen !== false && typeof app.listen === 'function') {
+            const integration = this;
+            const originalListen = app.listen;
+            app.listen = function (...args) {
+                integration.bootstrap();
+                return originalListen.apply(this, args);
+            };
+        }
+
+        this.bootstrap();
+    }
+
+    // Public and idempotent. Registers the plugin that installs traps and watches.
+    bootstrap() {
+        if (this._registered) return;
+        this._registered = true;
+
         const integration = this;
-        const originalListen = this.app.listen.bind(this.app);
-        this.app.listen = function (...args) {
-            integration._bootstrap();
-            return originalListen(...args);
+        const plugin = function trappsecPlugin(instance, _opts, done) {
+            try {
+                integration.inject_traps(instance);
+                integration.setup_watches(instance);
+                done();
+            } catch (e) {
+                done(e);
+            }
         };
+        plugin[Symbol.for('skip-override')] = true; // do not encapsulate: hooks apply app-wide
+        plugin[Symbol.for('fastify.display-name')] = 'trappsec';
+
+        try {
+            this.app.register(plugin);
+        } catch (e) {
+            this._registered = false;
+            this.ts.logger.error('Trappsec could not register with Fastify (was the instance already started? Install Sentry before ready()/listen()): ', e);
+            throw e;
+        }
     }
 
-    _bootstrap() {
-        this.inject_traps();
-        this.setup_watches();
-    }
-
-    inject_traps() {
+    inject_traps(instance = this.app) {
         for (const decoy of this.ts.traps) {
-            const methods = decoy.methods.map((method) => method.toUpperCase());
-            this.app.route({
+            const methods = [...new Set(decoy.methods.map((m) => String(m).toUpperCase()))];
+            instance.route({
                 method: methods,
                 url: decoy.path,
                 handler: (req, reply) => {
+                    const { response_body, response_config } = resolveTrap(this.ts, decoy, req, 'Fastify');
                     try {
-                        const { response_body, response_config } = this.ts._trigger_trap_event(req, decoy);
-                        reply
-                            .code(response_config.status_code)
-                            .header("content-type", response_config.mime_type)
-                            .send(response_body);
+                        if (response_config.mime_type) reply.type(response_config.mime_type);
+                        return reply.code(response_config.status_code).send(response_body);
                     } catch (e) {
-                        this.ts.logger.error("Trappsec error in Fastify trap handler:", e);
-                        reply
-                            .code(500)
-                            .header("content-type", "application/json")
-                            .send(JSON.stringify({ error: "internal error" }));
+                        this.ts.logger.error('Trappsec error sending Fastify trap response: ', e);
+                        return reply.code(response_config.status_code || 401).send('');
                     }
                 },
             });
         }
     }
 
-    setup_watches() {
-        if (this.ts.watches.length === 0) {
-            return;
-        }
+    setup_watches(instance = this.app) {
+        if (this.ts.watches.length === 0) return;
 
-        const watchMap = {};
-        for (const watch of this.ts.watches) {
-            const path = this._normalizePath(watch.path);
-            if (path) {
-                watchMap[path] = watch;
-            }
-        }
+        const watchMap = buildWatchMap(this.ts);
 
-        this.app.addHook("preHandler", (req, _reply, done) => {
+        instance.addHook('preValidation', (req, _reply, done) => {
             try {
-                const routePath = this._normalizePath(req.routeOptions?.url || req.routerPath || req.context?.config?.url || req.url);
+                const routePath = normalizePath(req.routeOptions?.url || req.routerPath || req.context?.config?.url);
                 const watch = routePath ? watchMap[routePath] : null;
-                if (!watch) {
-                    done();
-                    return;
-                }
-
-                const found = [];
-                const queryFields = watch.query_fields || {};
-                const bodyFields = watch.body_fields || {};
-
-                if (req.query && Object.keys(queryFields).length > 0) {
-                    const { data, found_fields, touched } = this.ts._detect_honey_fields(req.query, queryFields, req);
-                    if (found_fields.length > 0) {
-                        found.push(...found_fields.map((f) => ({ ...f, type: "query" })));
-                    }
-                    if (touched) {
-                        req.query = data;
-                    }
-                }
-
-                if (req.body && Object.keys(bodyFields).length > 0 && typeof req.body === "object") {
-                    const { data, found_fields, touched } = this.ts._detect_honey_fields(req.body, bodyFields, req);
-                    if (found_fields.length > 0) {
-                        found.push(...found_fields.map((f) => ({ ...f, type: "body" })));
-                    }
-                    if (touched) {
-                        req.body = data;
-                    }
-                }
-
-                if (found.length > 0) {
-                    this.ts._trigger_watch_event(req, found);
-                }
+                if (watch) this._inspect(req, watch);
             } catch (e) {
-                this.ts.logger.error("Trappsec error in Fastify watch handler:", e);
+                this.ts.logger.error("Trappsec error in Fastify watch handler: ", e);
             }
             done();
         });
-
     }
 
-    _normalizePath(path) {
-        if (!path || typeof path !== "string") {
-            return null;
+    _inspect(req, watch) {
+        const found = [];
+
+        if (hasFields(watch.query_fields) && isObject(req.query)) {
+            const { found: f, data, touched } = detect(this.ts, req.query, watch.query_fields, req, 'query');
+            found.push(...f);
+            if (touched) replaceInPlace(req.query, data); // in place: req.query may be getter-only
         }
 
-        let normalized = path.split("?")[0].split("#")[0].trim();
-        if (!normalized) {
-            return null;
+        if (hasFields(watch.body_fields) && isObject(req.body)) {
+            const { found: f, data, touched } = detect(this.ts, req.body, watch.body_fields, req, 'body');
+            found.push(...f);
+            if (touched) replaceInPlace(req.body, data);
         }
-        if (!normalized.startsWith("/")) {
-            normalized = `/${normalized}`;
-        }
-        if (normalized.length > 1 && normalized.endsWith("/")) {
-            normalized = normalized.slice(0, -1);
-        }
-        return normalized;
+
+        emitWatch(this.ts, req, found, 'Fastify');
     }
 }
 

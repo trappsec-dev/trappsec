@@ -181,6 +181,7 @@ function server(handler) {
   return new Promise((resolve) => {
     const reqs = [];
     const s = http.createServer((req, res) => {
+      res.setHeader("connection", "close");
       const chunks = [];
       req.on("data", (c) => chunks.push(c));
       req.on("end", () => {
@@ -189,6 +190,9 @@ function server(handler) {
         handler ? handler(rec, res, reqs) : res.end("ok");
       });
     });
+    // Test servers must never keep the test process alive.
+    s.on("connection", (sock) => sock.unref());
+    s.unref();
     s.listen(0, "127.0.0.1", () => resolve({ s, reqs, url: `http://127.0.0.1:${s.address().port}/h` }));
   });
 }
@@ -208,6 +212,7 @@ test("webhook: signature format, non-blocking, close flushes", async () => {
   assert.match(ts, /^\d+$/);
   const expect = crypto.createHmac("sha256", "sek").update(`${ts}.${body}`).digest("hex");
   assert.equal(headers["x-trappsec-signature"], `sha256=${expect}`);
+  s.closeAllConnections();
   s.close();
 });
 
@@ -217,6 +222,7 @@ test("webhook: no signature headers without secret", async () => {
   h.emit({ type: "alert" });
   await h.close();
   assert.equal(reqs[0].headers["x-trappsec-signature"], undefined);
+  s.closeAllConnections();
   s.close();
 });
 
@@ -227,6 +233,7 @@ test("webhook: template throw drops event", async () => {
   h.emit({ type: "alert", secret: "raw" });
   await h.close();
   assert.equal(reqs.length, 0);
+  s.closeAllConnections();
   s.close();
 });
 
@@ -254,6 +261,7 @@ test("webhook: non-2xx logged and 5xx retried at most twice", async () => {
   await h.close(5000);
   assert.equal(reqs.length, 3);
   assert.ok(errs.some((m) => /500/.test(m)));
+  s.closeAllConnections();
   s.close();
 });
 
@@ -264,6 +272,7 @@ test("webhook: 4xx not retried", async () => {
   h.emit({ type: "alert" });
   await h.close();
   assert.equal(reqs.length, 1);
+  s.closeAllConnections();
   s.close();
 });
 
@@ -279,6 +288,7 @@ test("webhook: heartbeat is stoppable and unref'd", async () => {
   await new Promise((r) => setTimeout(r, 150));
   assert.equal(reqs.length, n);
   assert.ok(reqs[0].headers["x-trappsec-signature"].startsWith("sha256="));
+  s.closeAllConnections();
   s.close();
 });
 
