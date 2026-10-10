@@ -56,5 +56,8 @@
     "@opentelemetry/api": {
       "optional": true
     }
+  },
+  "devDependencies": {
+    "@opentelemetry/api": "^1.9.1"
   }
 }
