@@ -18,7 +18,7 @@ pip install "trappsec[webhooks]"   # webhook and Slack delivery (requests)
 pip install "trappsec[otel]"       # OpenTelemetry span events
 ```
 
-Supported frameworks: Flask, FastAPI, Starlette, Litestar, Django, Sanic, Tornado. Python 3.9+.
+Supported frameworks: Flask, FastAPI, Starlette, Litestar, Django, Sanic, Tornado. Python 3.10+.
 
 ## Usage
 

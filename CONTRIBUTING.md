@@ -19,7 +19,7 @@ Thanks for helping. trappsec ships three parallel SDKs (Python, Node.js, Go) tha
 
 ## Development setup
 
-### Python (3.9+)
+### Python (3.10+)
 
 ```bash
 python -m venv .venv && source .venv/bin/activate
