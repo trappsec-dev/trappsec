@@ -343,6 +343,7 @@ watch.Query("debug", "false", "Recon")
 
 *   Values are compared with canonical matching: `1` equals `1.0`, `true` equals `"true"`, `5` equals `"5"`. Strings compare exactly. See [Event Reference](/events/#value-matching).
 *   Multi-valued fields (`?debug=a&debug=b`): a single value is compared as a scalar; with several values it is a violation unless **every** value equals the default. All occurrences are stripped before your handler runs.
+*   List and object defaults (`default=[]`, `default={}`) are compared element by element and key by key with the same rules, so a request that sends exactly the default is not an alert.
 *   Every occurrence of a watched key is removed from the request your handler sees, so a honey field can never influence real logic.
 *   Go matches JSON keys case-insensitively (as `encoding/json` does); Python and Node are case-sensitive.
 *   A JSON body that is an array is inspected element by element (object elements only). Other body shapes are skipped.

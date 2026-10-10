@@ -37,6 +37,19 @@ function canonical(v) {
 /** Loose-but-safe equality between a received value and the configured default (C3). */
 function values_match(actual, expected) {
     if (actual === expected) return true;
+    // Containers compare element-wise / key-wise with these same rules.
+    const aArr = Array.isArray(actual), eArr = Array.isArray(expected);
+    if (aArr || eArr) {
+        return aArr && eArr && actual.length === expected.length
+            && actual.every((a, i) => values_match(a, expected[i]));
+    }
+    const aObj = isPlainObject(actual), eObj = isPlainObject(expected);
+    if (aObj || eObj) {
+        if (!aObj || !eObj) return false;
+        const keys = Object.keys(actual);
+        return keys.length === Object.keys(expected).length
+            && keys.every(k => hasOwn(expected, k) && values_match(actual[k], expected[k]));
+    }
     const isNum = (x) => typeof x === 'number' || typeof x === 'bigint';
     if (isNum(actual) && isNum(expected)) return Number(actual) === Number(expected);
     const scalar = (x) => typeof x === 'boolean' || isNum(x);
@@ -288,16 +301,22 @@ class Sentry {
                 }
 
                 let actual = data[key];
-                if (Array.isArray(actual) && actual.length === 1) actual = actual[0];
 
+                // Multi-valued fields arrive as arrays: unless the whole array
+                // matches (an array default), every element must match.
                 let violation;
                 if (expected === NO_DEFAULT) {
                     violation = true;
-                } else if (Array.isArray(actual) && actual.length > 1) {
+                } else if (values_match(actual, expected)) {
+                    violation = false;
+                } else if (Array.isArray(actual) && actual.length > 0) {
                     violation = !actual.every(a => values_match(a, expected));
                 } else {
-                    violation = !values_match(actual, expected);
+                    violation = true;
                 }
+
+                // A one-element array is reported as its scalar.
+                if (Array.isArray(actual) && actual.length === 1) actual = actual[0];
 
                 if (violation) {
                     found_fields.push({

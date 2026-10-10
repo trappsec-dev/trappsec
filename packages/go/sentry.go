@@ -532,7 +532,7 @@ func (s *Sentry) DetectHoneyFields(data map[string]any, rules map[string]WatchFi
 			found = append(found, FoundField{
 				Type:   src,
 				Field:  ruleName,
-				Value:  SafeValue(value),
+				Value:  SafeValue(reportedValue(value)),
 				Intent: rule.Intent,
 			})
 		}
@@ -603,6 +603,22 @@ func (s *Sentry) isViolation(value any, rule WatchFieldRule, requestObj any) (vi
 		}
 	}
 	return false
+}
+
+// reportedValue returns the value recorded for a violation: a one-element
+// list is reported as its element, matching how it is compared.
+func reportedValue(v any) any {
+	switch l := v.(type) {
+	case []any:
+		if len(l) == 1 {
+			return l[0]
+		}
+	case []string:
+		if len(l) == 1 {
+			return l[0]
+		}
+	}
+	return v
 }
 
 func (s *Sentry) callDefault(fn func(any) any, req any) (out any) {

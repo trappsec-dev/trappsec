@@ -4,7 +4,7 @@ import math
 import typing
 import socket
 import logging
-from collections.abc import MutableMapping
+from collections.abc import Mapping, MutableMapping
 
 from .handlers import LogHandler, _truncate_text
 from .builders import TrapBuilder, WatchBuilder, NO_DEFAULT
@@ -35,6 +35,16 @@ def _canonical(v) -> typing.Optional[str]:
 def values_match(actual, expected) -> bool:
     """Loose equality between a request value and a configured default (C3)."""
     try:
+        # Containers compare element-wise with these same rules, never with ==
+        # (which would let True match 1 inside a list).
+        a_seq, e_seq = isinstance(actual, (list, tuple)), isinstance(expected, (list, tuple))
+        if a_seq or e_seq:
+            return (a_seq and e_seq and len(actual) == len(expected)
+                    and all(values_match(a, e) for a, e in zip(actual, expected)))
+        a_map, e_map = isinstance(actual, Mapping), isinstance(expected, Mapping)
+        if a_map or e_map:
+            return (a_map and e_map and actual.keys() == expected.keys()
+                    and all(values_match(actual[k], expected[k]) for k in actual))
         a_bool, e_bool = isinstance(actual, bool), isinstance(expected, bool)
         if a_bool or e_bool:
             if a_bool and e_bool:
@@ -363,22 +373,23 @@ class Sentry:
                         self.logger.error("failed to evaluate callable default for %s field `%s`: %s", source, key, e)
                         expected = NO_DEFAULT
 
-                # Multi-valued fields arrive as lists. One element is compared
-                # as a scalar; several are a violation unless all match.
-                if isinstance(actual, (list, tuple)):
-                    actual = list(actual)
-                    if len(actual) == 1:
-                        actual = actual[0]
-                        violation = expected is NO_DEFAULT or not values_match(actual, expected)
-                    elif len(actual) == 0:
-                        violation = expected is NO_DEFAULT or not values_match(actual, expected)
-                    else:
-                        violation = expected is NO_DEFAULT or not all(values_match(a, expected) for a in actual)
+                # Multi-valued fields arrive as lists: unless the whole list
+                # matches (a list default), every element must match.
+                if expected is NO_DEFAULT:
+                    violation = True
+                elif values_match(actual, expected):
+                    violation = False
+                elif isinstance(actual, (list, tuple)) and len(actual) > 0:
+                    violation = not all(values_match(a, expected) for a in actual)
                 else:
-                    violation = expected is NO_DEFAULT or not values_match(actual, expected)
+                    violation = True
             except Exception as e:
                 self.logger.error("failed to evaluate %s field `%s`: %s", source, key, e)
                 violation = True
+
+            # A one-element list is reported as its scalar.
+            if isinstance(actual, (list, tuple)) and len(actual) == 1:
+                actual = actual[0]
 
             if violation:
                 found_fields.append({
