@@ -50,7 +50,7 @@ test('koa: traps are served at the unprefixed path, not shadowed by app routes, 
     r1.get('/things', (ctx) => { ctx.body = 'v1'; });
     const r2 = new Router();
     r2.get('/api/:x', (ctx) => { ctx.body = 'param'; });
-    r2.all('/(.*)', (ctx) => { ctx.body = 'catchall'; });
+    r2.all('/{*rest}', (ctx) => { ctx.body = 'catchall'; });
     app.use(r1.routes());
     app.use(r2.routes());
     const { server, close } = await serve(app.callback());

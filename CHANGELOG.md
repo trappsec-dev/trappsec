@@ -4,6 +4,12 @@ All notable changes to trappsec are documented here. The format follows [Keep a 
 
 ## Unreleased
 
+### Dependencies
+
+- Go: OpenTelemetry v1.47.0 (all modules now require **Go 1.26+**), golang.org/x/net v0.61.0, x/crypto v0.58.0 and quic-go v0.59.1 (GO-2026-5676); govulncheck reports no reachable vulnerabilities.
+- Node integration tests now run against Koa 3, @koa/router 15, Fastify 5 and NestJS 12.
+- GitHub Actions: checkout v7, setup-python v7, upload-artifact v7, download-artifact v8, configure-pages v6. Dependabot now groups updates per ecosystem.
+
 ### Fixed
 
 - **Docs:** `identify_user` examples returned `user_id` / `id`, but the SDKs read only `user` and `role`, so copied examples never produced alerts. Fixed everywhere. The Node quickstart now logs the port it listens on, and the `add_webhook` example no longer targets Slack with a raw payload (use `add_slack`).

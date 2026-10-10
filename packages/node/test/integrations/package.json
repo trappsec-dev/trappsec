@@ -3,18 +3,20 @@
   "version": "0.0.0",
   "private": true,
   "description": "Real-framework integration tests for trappsec (run with `node --test` from this directory)",
-  "scripts": { "test": "node --test" },
+  "scripts": {
+    "test": "node --test"
+  },
   "devDependencies": {
     "@hapi/hapi": "^21.3.0",
-    "@koa/router": "^13.1.0",
-    "@nestjs/common": "^10.4.0",
-    "@nestjs/core": "^10.4.0",
-    "@nestjs/platform-express": "^10.4.0",
-    "@nestjs/platform-fastify": "^10.4.0",
+    "@koa/router": "^15.7.0",
+    "@nestjs/common": "^12.1.2",
+    "@nestjs/core": "^12.1.2",
+    "@nestjs/platform-express": "^12.1.2",
+    "@nestjs/platform-fastify": "^12.1.2",
     "express": "^5.1.0",
     "express4": "npm:express@^4.21.0",
-    "fastify": "^4.28.0",
-    "koa": "^2.15.0",
+    "fastify": "^5.12.5",
+    "koa": "^3.2.1",
     "koa-bodyparser": "^4.4.1",
     "reflect-metadata": "^0.2.2",
     "rxjs": "^7.8.1"
