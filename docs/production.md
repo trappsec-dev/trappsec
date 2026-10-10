@@ -105,6 +105,6 @@ Order does not matter for configuration: default responses are resolved at boots
 *   **Express / NestJS-Express:** sub-routers are covered. Routes registered before Sentry is installed are covered too; where a framework cannot do that, a startup warning names the uncovered routes.
 *   **Koa / Express trap placement:** traps sit after middleware and before your first route. Middleware that rejects unauthenticated users before routes will also reject unauthenticated scanners, hiding the decoy; keep the decoy reachable if you want `signal` events.
 *   **Gin / Echo:** the default IP is the RemoteAddr host; configure trusted proxies or `OverrideSourceIP`.
-*   **Go net/http:** requires Go 1.22+ method-qualified patterns for traps.
+*   **Go:** all modules require Go 1.26+ (the OpenTelemetry dependency requires it). net/http traps use method-qualified mux patterns.
 *   **Tornado, Sanic, Litestar, Starlette:** run the app normally; no extra configuration beyond the usual `Sentry(app, ...)` call.
 *   **Logging:** trappsec uses the `trappsec` logger and never calls `logging.basicConfig`. Attach a handler at INFO or above or alerts will not appear in your logs.

@@ -12,23 +12,41 @@ updates:
     directory: /packages/node/test/integrations
     schedule:
       interval: monthly
+    groups:
+      test-frameworks:
+        patterns: ["*"]
   - package-ecosystem: gomod
     directory: /packages/go
     schedule:
       interval: weekly
+    groups:
+      go-deps:
+        patterns: ["*"]
   - package-ecosystem: gomod
     directory: /packages/go/nethttp
     schedule:
       interval: weekly
+    groups:
+      go-deps:
+        patterns: ["*"]
   - package-ecosystem: gomod
     directory: /packages/go/gin
     schedule:
       interval: weekly
+    groups:
+      go-deps:
+        patterns: ["*"]
   - package-ecosystem: gomod
     directory: /packages/go/echo
     schedule:
       interval: weekly
+    groups:
+      go-deps:
+        patterns: ["*"]
   - package-ecosystem: github-actions
     directory: /
     schedule:
       interval: weekly
+    groups:
+      actions:
+        patterns: ["*"]
