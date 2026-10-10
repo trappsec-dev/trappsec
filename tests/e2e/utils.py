@@ -19,7 +19,7 @@ class AlertHandler(BaseHTTPRequestHandler):
     def do_POST(self):
         content_length = int(self.headers.get('Content-Length') or 0)
         body = self.rfile.read(content_length)
-        self.server.record(body, {k.lower(): v for k, v in self.headers.items()})
+        self.server.record(self.path, body, {k.lower(): v for k, v in self.headers.items()})
         self.send_response(200)
         self.send_header("content-length", "0")
         self.end_headers()
@@ -35,10 +35,11 @@ class AlertServer(ThreadingHTTPServer):
         super().__init__(server_address, RequestHandlerClass)
         self.secret = secret
         self.alerts = []
+        self.alerts_only = []  # deliveries to /alerts: a second handler registered with alerts_only=True
         self.problems = []  # bad signatures or unparseable bodies, across the session
         self._lock = threading.Lock()
 
-    def record(self, body, headers):
+    def record(self, path, body, headers):
         problem = self._check_signature(body, headers)
         try:
             data = json.loads(body)
@@ -49,7 +50,7 @@ class AlertServer(ThreadingHTTPServer):
             if problem:
                 self.problems.append((problem, body[:200]))
             if isinstance(data, dict):
-                self.alerts.append(data)
+                (self.alerts_only if path.startswith("/alerts") else self.alerts).append(data)
 
     def _check_signature(self, body, headers):
         if not self.secret:
@@ -70,10 +71,12 @@ class AlertServer(ThreadingHTTPServer):
     def clear(self):
         with self._lock:
             self.alerts = []
+            self.alerts_only = []
 
-    def get_alerts_for_agent(self, user_agent):
+    def get_alerts_for_agent(self, user_agent, alerts_only=False):
         with self._lock:
-            return [a for a in self.alerts if a.get("user_agent") == user_agent]
+            pool = self.alerts_only if alerts_only else self.alerts
+            return [a for a in pool if a.get("user_agent") == user_agent]
 
 
 def unique_ua():
@@ -83,10 +86,11 @@ def unique_ua():
 class Alerts:
     """Assertion helpers around the alert server, bound to one app under test."""
 
-    def __init__(self, server, api, base_url):
+    def __init__(self, server, api, base_url, check_alerts_only=False):
         self.server = server
         self.api = api
         self.base_url = base_url
+        self.check_alerts_only = check_alerts_only
 
     def expect(self, user_agent, count=1, timeout=5):
         """Wait for `count` events from `user_agent`, then settle and require exactly that many."""
@@ -98,6 +102,10 @@ class Alerts:
         assert len(alerts) == count, f"expected {count} event(s) for {user_agent}, got {len(alerts)}: {alerts}"
         for a in alerts:
             check_event_shape(a, user_agent)
+        if self.check_alerts_only:
+            # The alerts_only=True receiver gets exactly the alerts, never a signal.
+            filtered = self.server.get_alerts_for_agent(user_agent, alerts_only=True)
+            assert [a["event"] for a in filtered] == [a["event"] for a in alerts if a["type"] == "alert"], filtered
         return alerts
 
     def expect_none(self, user_agent):
@@ -112,6 +120,7 @@ class Alerts:
         assert r.status_code == 401
         self.expect(sentinel)
         assert self.server.get_alerts_for_agent(user_agent) == []
+        assert self.server.get_alerts_for_agent(user_agent, alerts_only=True) == []
 
 
 def check_event_shape(event, user_agent):

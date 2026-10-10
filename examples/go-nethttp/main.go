@@ -219,9 +219,13 @@ func main() {
 		alertsOnly := false
 		app.AddWebhook(*webhook, &trappsec.WebhookOptions{Secret: os.Getenv("TRAPPSEC_WEBHOOK_SECRET"), AlertsOnly: &alertsOnly})
 	}
+	if u := os.Getenv("TRAPPSEC_ALERTS_WEBHOOK"); u != "" { // second receiver with the default AlertsOnly
+		app.AddWebhook(u, &trappsec.WebhookOptions{Secret: os.Getenv("TRAPPSEC_WEBHOOK_SECRET")})
+	}
 
-	log.Println("Starting server on http://127.0.0.1:8000")
-	if err := app.ListenAndServe("127.0.0.1:8000"); err != nil && err != http.ErrServerClosed {
+	addr := "127.0.0.1:" + listenPort()
+	log.Printf("Starting server on http://%s", addr)
+	if err := app.ListenAndServe(addr); err != nil && err != http.ErrServerClosed {
 		log.Fatal(err)
 	}
 }
@@ -242,4 +246,12 @@ func setupOpenTelemetry() {
 		sdktrace.WithSampler(sdktrace.AlwaysSample()),
 	)
 	otel.SetTracerProvider(tp)
+}
+
+// listenPort is $PORT, or 8000.
+func listenPort() string {
+	if p := os.Getenv("PORT"); p != "" {
+		return p
+	}
+	return "8000"
 }

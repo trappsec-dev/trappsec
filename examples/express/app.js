@@ -134,8 +134,11 @@ if (values.otel) {
 if (values.webhook) {
     ts.add_webhook(values.webhook, { secret: process.env.TRAPPSEC_WEBHOOK_SECRET || null, alerts_only: false });
 }
+if (process.env.TRAPPSEC_ALERTS_WEBHOOK) {  // second receiver with the default alerts_only: true
+    ts.add_webhook(process.env.TRAPPSEC_ALERTS_WEBHOOK, { secret: process.env.TRAPPSEC_WEBHOOK_SECRET || null });
+}
 
-const port = 8000;
+const port = Number(process.env.PORT || 8000);
 app.listen(port, () => {
     console.log(`Starting server on http://127.0.0.1:${port}`);
 });

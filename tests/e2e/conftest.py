@@ -28,6 +28,12 @@ def pytest_addoption(parser):
         help="Verify every delivery's HMAC signature with this secret (default: $TRAPPSEC_WEBHOOK_SECRET)"
     )
     parser.addoption(
+        "--check-alerts-only",
+        action="store_true",
+        default=False,
+        help="The app also sends to <receiver>/alerts with alerts_only=True ($TRAPPSEC_ALERTS_WEBHOOK); check it"
+    )
+    parser.addoption(
         "--unsupported",
         action="store",
         default="",
@@ -67,5 +73,5 @@ def alert_server(request):
 
 
 @pytest.fixture
-def alerts(alert_server, api, base_url):
-    return Alerts(alert_server, api, base_url)
+def alerts(alert_server, api, base_url, request):
+    return Alerts(alert_server, api, base_url, check_alerts_only=request.config.getoption("--check-alerts-only"))

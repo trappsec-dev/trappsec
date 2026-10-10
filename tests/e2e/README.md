@@ -13,7 +13,7 @@ python examples/flask/app.py --webhook=http://127.0.0.1:5050/webhook
 pytest tests/e2e/test_example.py --url=http://127.0.0.1:8000   # also reads $TRAPPSEC_WEBHOOK_SECRET
 ```
 
-The examples register the webhook with `alerts_only=False`, so the suite sees both `alert` and `signal` events. Every delivery is checked:
+The examples register the webhook with `alerts_only=False`, so the suite sees both `alert` and `signal` events. If `TRAPPSEC_ALERTS_WEBHOOK` is set, they also register a second webhook with the default `alerts_only=True`; pass `--check-alerts-only` (the harness does) and point it at `http://127.0.0.1:5050/alerts` to check that receiver gets every alert and no signal. Every example listens on `$PORT` (default 8000). Every delivery is checked:
 
 - its HMAC signature must verify against the secret (when one is set);
 - it must carry exactly the keys in `tests/conformance/event_keys.json`, with sane values;
@@ -46,7 +46,7 @@ python tests/e2e/run_examples.py --install
 python tests/e2e/run_examples.py --kill-port-blockers
 ```
 
-The harness generates a fresh signing secret per run, waits for each app to answer HTTP before testing it, and reads results from pytest's JUnit XML. When `--log-dir` is given, per-case app logs (`<case>.app.log`), pytest output (`<case>.pytest.log`), `summary.csv` and `summary.txt` are written there. Without it, app output is discarded.
+The harness runs cases in parallel (`--jobs`, default 4): case N listens on port 8000+N and its receiver on 5050+N. It generates a fresh signing secret per run, waits for each app to answer HTTP before testing it, and reads results from pytest's JUnit XML. When `--log-dir` is given, per-case app logs (`<case>.app.log`), pytest output (`<case>.pytest.log`), `summary.csv` and `summary.txt` are written there. Without it, app output is discarded.
 
 ### Requirements
 

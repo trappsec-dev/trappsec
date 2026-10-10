@@ -20,6 +20,8 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../.
 
 import trappsec
 
+PORT = int(os.environ.get("PORT", "8000"))
+
 logging.basicConfig(level=logging.INFO)
 
 # Define static folder path (lure-frontend is parallel to flask folder)
@@ -199,6 +201,9 @@ if __name__ == "__main__":
     if args.webhook:
         ts.add_webhook(url=args.webhook, secret=os.environ.get("TRAPPSEC_WEBHOOK_SECRET"), alerts_only=False)
 
-    print("Starting server on http://127.0.0.1:8000")
-    app.run(port=8000, debug=True)
+    if os.environ.get("TRAPPSEC_ALERTS_WEBHOOK"):  # second receiver with the default alerts_only=True
+        ts.add_webhook(url=os.environ["TRAPPSEC_ALERTS_WEBHOOK"], secret=os.environ.get("TRAPPSEC_WEBHOOK_SECRET"))
+
+    print(f"Starting server on http://127.0.0.1:{PORT}")
+    app.run(port=PORT, debug=True)
 

@@ -18,7 +18,7 @@ const trappsec = require('../../packages/node/src/index');
 
 async function bootstrap() {
     const server = Hapi.server({
-        port: 8000,
+        port: Number(process.env.PORT || 8000),
         host: '0.0.0.0',
         routes: {
             payload: {
@@ -204,9 +204,12 @@ async function bootstrap() {
     if (values.webhook) {
         ts.add_webhook(values.webhook, { secret: process.env.TRAPPSEC_WEBHOOK_SECRET || null, alerts_only: false });
     }
+    if (process.env.TRAPPSEC_ALERTS_WEBHOOK) {  // second receiver with the default alerts_only: true
+        ts.add_webhook(process.env.TRAPPSEC_ALERTS_WEBHOOK, { secret: process.env.TRAPPSEC_WEBHOOK_SECRET || null });
+    }
 
     await server.start();
-    console.log('HapiApp listening on http://127.0.0.1:8000');
+    console.log('HapiApp listening on http://127.0.0.1:' + (process.env.PORT || 8000));
 }
 
 bootstrap();

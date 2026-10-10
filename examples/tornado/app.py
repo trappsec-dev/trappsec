@@ -21,6 +21,8 @@ import tornado.web
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../packages/python/src")))
 import trappsec
 
+PORT = int(os.environ.get("PORT", "8000"))
+
 
 class RegisterHandler(tornado.web.RequestHandler):
     def post(self):
@@ -232,7 +234,10 @@ if __name__ == "__main__":
     if args.webhook:
         ts.add_webhook(url=args.webhook, secret=os.environ.get("TRAPPSEC_WEBHOOK_SECRET"), alerts_only=False)
 
-    app.listen(8000, address="127.0.0.1")
-    print("Starting server on http://127.0.0.1:8000")
+    if os.environ.get("TRAPPSEC_ALERTS_WEBHOOK"):  # second receiver with the default alerts_only=True
+        ts.add_webhook(url=os.environ["TRAPPSEC_ALERTS_WEBHOOK"], secret=os.environ.get("TRAPPSEC_WEBHOOK_SECRET"))
+
+    app.listen(PORT, address="127.0.0.1")
+    print(f"Starting server on http://127.0.0.1:{PORT}")
     tornado.ioloop.IOLoop.current().start()
 
