@@ -49,7 +49,7 @@ jobs:
           python -m pip install --upgrade pip
           pip install -e "packages/python[test,webhooks,otel]"
           # Explicit list so the job also works if an extra is missing from pyproject.
-          pip install pytest flask fastapi httpx starlette django sanic sanic-testing tornado litestar opentelemetry-sdk requests
+          pip install pytest flask fastapi httpx python-multipart starlette django sanic sanic-testing tornado litestar opentelemetry-sdk requests
       - name: Run tests
         run: pytest packages/python/tests
 
