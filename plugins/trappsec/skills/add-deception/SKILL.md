@@ -47,18 +47,18 @@ Seven habits produce that:
    - feature flags hide unreleased endpoints;
    - support tooling is over-privileged.
 3. **Give every lure an innocent reason to exist.** Real dead code always has a story: deprecated, behind a flag, role-gated, or kept for an older client. Write the one-sentence cover story first. It decides naming, location and response.
-4. **Let them discover it.** A full URL next to a "do not use" comment reads as bait. A role-gated button, a flag-gated code path or an extra response field is something the attacker feels clever for finding, and people trust what they discover. In blind reviews of agent-built deception, red-team reviewers rated how likely each lure was to be planted:
+4. **Let them discover it.** A full URL next to a "do not use" comment reads as bait. A role-gated button, a flag-gated code path or an extra response field is something the attacker feels clever for finding, and people trust what they discover. In blind reviews of agent-built deception, AI red-team reviewers rated how likely each lure was to be planted:
 
    | Lure | Rated likely planted |
    |---|---|
-   | Tripwires on fields the real client already handles: response fields it echoes back, values its forms never offer | 4–30% |
-   | One flag- or role-gated entry point to a decoy | 5–12% |
-   | An uncalled client method for a powerful capability | 25–55% |
-   | A hidden or disabled field of a kind the app's other forms don't carry | 20–65%, mostly above 40% |
-   | Something nothing uses: a `data-` attribute no script reads, a handler for a form no page renders, a commented-out form | 60–80% |
+   | Nothing new in the client: decoys inferred from the API's conventions, honey fields on values the client already reads or sends back, values the forms never offer (references/backend-traps.md §1–2) | 2–35%; reviewers could only rate the app's own code |
+   | One flag- or role-gated entry point to a decoy | 5–40% |
+   | An uncalled client method for a powerful capability | 25–70% |
+   | A hidden or disabled field of a kind the app's other forms don't carry | 20–80%, mostly above 40% |
+   | Something nothing uses: a `data-` attribute no script reads, a handler for a form no page renders, a commented-out form | 40–80% |
 
-   These come from single reviews of a few apps, so read them as an ordering, not as measurements. Prefer the top of the list, but use each pattern once: lures built from one template corroborate each other, and two flag-gated features of the same shape scored 40–45% each in one review. Decoys inferred from the API's own conventions leave nothing in the client at all (references/backend-traps.md §1).
-5. **Keep every layer consistent.** Frontend calls a decoy with POST → the trap accepts POST. There is a client method → there is a type. The app translates every string → the lure's strings are translated. Real 403s have a certain shape → the decoy's 403 has it too. Give a lure the care a real feature with the same stakes would get: one name across method, flag, handler and strings; its own place in the layout; a gate as strict as the value warrants; a confirmation step before anything irreversible.
+   These come from blind reviews of two small apps, so read them as an ordering, not as measurements. Suspicion is also relative: in an otherwise clean client, reviewers rated the one gated high-value feature 35–40%, simply because it was the obvious place to look. So prefer the top of the list, keep visible lures few, and vary their patterns; reviewers noticed when two shared a template.
+5. **Keep every layer consistent.** Frontend calls a decoy with POST → the trap accepts POST. There is a client method → there is a type. The app translates every string → the lure's strings are translated. Real 403s have a certain shape → the decoy's 403 has it too. Give a lure the care a real feature with the same stakes would get: one name across method, flag, handler and strings; its own place in the layout; a gate as strict as the value warrants; the states, copy and typed responses the real feature would have.
 6. **Chain the breadcrumbs.** Design at least one path where touching one tripwire leads to the next. Example: a decoy's 403 names a permission, a response field shows where permissions live, and sending that permission trips a honey field. Each step is another alert, and the second step removes doubt about intent.
 7. **Leave no fingerprints, including this skill's.** Names in this skill and its references only illustrate patterns. Never reuse them: a decoy path shared by many apps becomes a signature attackers learn. Never ship trappsec's default responses either.
 

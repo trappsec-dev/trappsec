@@ -69,6 +69,8 @@ Callable defaults receive the framework request and must be cheap and synchronou
 
 Only impossible values then alert, such as a role nobody can hold through this endpoint, or a tenant the caller doesn't belong to. Write down any blind spot this creates.
 
+Don't change the client to avoid staleness, for example by re-fetching before each save. Reviewers spot real code that bends around a tripwire.
+
 ### Values the real form never offers
 
 A field the real handler reads can't be a honey field, because trappsec strips it. A value the real UI never sends can still be a tripwire: a shipping option, payout schedule, role or status the form doesn't offer. Where the handler already rejects or falls back on unknown values, call `ts.trigger(request, reason, intent, metadata)` in that branch (trappsec-api.md §6), and keep the existing behavior. The lure is the real form, so nothing new ships to the client.
