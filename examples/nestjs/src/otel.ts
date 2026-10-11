@@ -2,7 +2,7 @@ import { NodeSDK } from '@opentelemetry/sdk-node';
 import { ExportResultCode, hrTimeToMicroseconds } from '@opentelemetry/core';
 import { HttpInstrumentation } from '@opentelemetry/instrumentation-http';
 import { ExpressInstrumentation } from '@opentelemetry/instrumentation-express';
-import { FastifyInstrumentation } from '@opentelemetry/instrumentation-fastify';
+import { FastifyOtelInstrumentation } from '@fastify/otel';
 import { NestInstrumentation } from '@opentelemetry/instrumentation-nestjs-core';
 
 class CompactConsoleSpanExporter {
@@ -10,9 +10,9 @@ class CompactConsoleSpanExporter {
         for (const span of spans) {
             const payload = {
                 resource: { attributes: span.resource.attributes },
-                instrumentationScope: span.instrumentationLibrary,
+                instrumentationScope: span.instrumentationScope,
                 traceId: span.spanContext().traceId,
-                parentId: span.parentSpanId,
+                parentId: span.parentSpanContext?.spanId,
                 traceState: span.spanContext().traceState?.serialize(),
                 name: span.name,
                 id: span.spanContext().spanId,
@@ -44,7 +44,7 @@ export function setupOpentelemetry(useFastify: boolean): void {
         instrumentations: [
             new HttpInstrumentation(),
             new NestInstrumentation(),
-            useFastify ? new FastifyInstrumentation() : new ExpressInstrumentation(),
+            useFastify ? new FastifyOtelInstrumentation({ registerOnInitialization: true }) : new ExpressInstrumentation(),
         ],
     });
 

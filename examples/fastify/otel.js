@@ -2,16 +2,16 @@ function setupOpentelemetry() {
     const { NodeSDK } = require('@opentelemetry/sdk-node');
     const { ExportResultCode, hrTimeToMicroseconds } = require('@opentelemetry/core');
     const { HttpInstrumentation } = require('@opentelemetry/instrumentation-http');
-    const { FastifyInstrumentation } = require('@opentelemetry/instrumentation-fastify');
+    const { FastifyOtelInstrumentation } = require('@fastify/otel');
 
     class CompactConsoleSpanExporter {
         export(spans, resultCallback) {
             for (const span of spans) {
                 const payload = {
                     resource: { attributes: span.resource.attributes },
-                    instrumentationScope: span.instrumentationLibrary,
+                    instrumentationScope: span.instrumentationScope,
                     traceId: span.spanContext().traceId,
-                    parentId: span.parentSpanId,
+                    parentId: span.parentSpanContext?.spanId,
                     traceState: span.spanContext().traceState?.serialize(),
                     name: span.name,
                     id: span.spanContext().spanId,
@@ -41,7 +41,7 @@ function setupOpentelemetry() {
         traceExporter: new CompactConsoleSpanExporter(),
         instrumentations: [
             new HttpInstrumentation(),
-            new FastifyInstrumentation(),
+            new FastifyOtelInstrumentation({ registerOnInitialization: true }),
         ],
     });
 

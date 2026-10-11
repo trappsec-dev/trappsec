@@ -34,6 +34,7 @@ The SDKs now share names, units and option shapes. Every old form below keeps wo
 
 ### Dependencies
 
+- Node examples: OpenTelemetry JS 2.x (`@opentelemetry/sdk-node` 0.223, instrumentations to match), NestJS 12, `@fastify/static` 10; the deprecated `@opentelemetry/instrumentation-fastify` is replaced by `@fastify/otel`. This clears all Dependabot alerts on the example lockfiles (the published packages had none). The examples' span exporters read `instrumentationScope` and `parentSpanContext`, as OpenTelemetry 2.x names them.
 - Go: OpenTelemetry v1.47.0 (all modules now require **Go 1.26+**), golang.org/x/net v0.61.0, x/crypto v0.58.0 and quic-go v0.59.1 (GO-2026-5676); govulncheck reports no reachable vulnerabilities.
 - Node integration tests now run against Koa 3, @koa/router 15, Fastify 5 and NestJS 12.
 - GitHub Actions: checkout v7, setup-python v7, upload-artifact v7, download-artifact v8, configure-pages v6. Dependabot now groups updates per ecosystem.
