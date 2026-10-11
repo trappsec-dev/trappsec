@@ -1,90 +1,519 @@
 {
-  "description": "Shared R17 cases for values_match(actual, expected). Loaded by the Python, Node and Go unit tests; every language must agree on every case. Values must be plain JSON and stay within what all three runtimes decode exactly: integers below 2^53 (larger ones lose precision in JavaScript). Floats canonicalize like ECMAScript Number::toString: plain digits for 1e-6 <= |x| < 1e21, otherwise exponent form such as 1e-7 or 1e+21.",
+  "description": "Shared R17 cases for values_match(actual, expected). Loaded by the Python, Node and Go unit tests; every language must agree on every case. Values must be plain JSON and stay within what all three runtimes decode exactly: integers below 2^53 (larger ones lose precision in JavaScript). Floats canonicalize like ECMAScript Number::toString: plain digits for 1e-6 <= |x| < 1e21, otherwise exponent form such as 1e-7 or 1e+21. {\"$nest\": n, \"leaf\": x} stands for x wrapped in n single-element lists ([[...[x]...]]). Values nested deeper than 32 containers (a top-level list or object is depth 1) never match, even when equal, so a hostile value cannot exhaust the stack.",
   "cases": [
-    {"actual": "abc", "expected": "abc", "match": true, "note": "equal strings"},
-    {"actual": "abc", "expected": "ABC", "match": false, "note": "strings compare exactly"},
-    {"actual": "", "expected": "", "match": true},
-    {"actual": "", "expected": 0, "match": false},
-
-    {"actual": 5, "expected": 5, "match": true},
-    {"actual": 5, "expected": 5.0, "match": true, "note": "integer and float are numerically equal"},
-    {"actual": 1.5, "expected": 1.5, "match": true},
-    {"actual": 3, "expected": 3.1, "match": false},
-    {"actual": -1, "expected": -1, "match": true},
-    {"actual": 0, "expected": -0, "match": true},
-
-    {"actual": "5", "expected": 5, "match": true, "note": "form/query strings match the canonical form of a number"},
-    {"actual": 5, "expected": "5", "match": true},
-    {"actual": "5", "expected": 5.0, "match": true, "note": "integer-valued floats canonicalize without .0"},
-    {"actual": "5.0", "expected": 5, "match": false},
-    {"actual": "100", "expected": 100.0, "match": true},
-    {"actual": "1.5", "expected": 1.5, "match": true},
-    {"actual": "1.50", "expected": 1.5, "match": false},
-    {"actual": "0.1", "expected": 0.1, "match": true},
-    {"actual": "-3", "expected": -3, "match": true},
-    {"actual": "-0", "expected": 0, "match": false},
-    {"actual": "05", "expected": 5, "match": false},
-    {"actual": "+5", "expected": 5, "match": false},
-    {"actual": " 5", "expected": 5, "match": false},
-    {"actual": "5 ", "expected": 5, "match": false},
-    {"actual": "1e2", "expected": 100, "match": false},
-    {"actual": "1e-7", "expected": 1e-7, "match": true, "note": "floats canonicalize like ECMAScript Number::toString"},
-    {"actual": "0.0000001", "expected": 1e-7, "match": false},
-    {"actual": "1.5e-7", "expected": 1.5e-7, "match": true},
-    {"actual": "-1e-7", "expected": -1e-7, "match": true},
-    {"actual": "0.000001", "expected": 1e-6, "match": true},
-    {"actual": "1e-6", "expected": 1e-6, "match": false},
-    {"actual": "100000000000000000000", "expected": 1e20, "match": true},
-    {"actual": "123456789012345680000", "expected": 1.2345678901234568e20, "match": true},
-    {"actual": "1e+21", "expected": 1e21, "match": true},
-    {"actual": "1000000000000000000000", "expected": 1e21, "match": false},
-    {"actual": "1.5e+300", "expected": 1.5e300, "match": true},
-
-    {"actual": true, "expected": true, "match": true},
-    {"actual": false, "expected": false, "match": true},
-    {"actual": true, "expected": false, "match": false},
-    {"actual": "true", "expected": true, "match": true, "note": "booleans canonicalize to lowercase"},
-    {"actual": "false", "expected": false, "match": true},
-    {"actual": true, "expected": "true", "match": true},
-    {"actual": "True", "expected": true, "match": false},
-    {"actual": "TRUE", "expected": true, "match": false},
-    {"actual": "false", "expected": true, "match": false},
-    {"actual": "yes", "expected": true, "match": false},
-    {"actual": "1", "expected": true, "match": false, "note": "booleans are never numbers"},
-    {"actual": "0", "expected": false, "match": false},
-    {"actual": true, "expected": 1, "match": false},
-    {"actual": 1, "expected": true, "match": false},
-    {"actual": false, "expected": 0, "match": false},
-    {"actual": 0, "expected": false, "match": false},
-
-    {"actual": null, "expected": null, "match": true},
-    {"actual": null, "expected": 0, "match": false},
-    {"actual": 0, "expected": null, "match": false},
-    {"actual": null, "expected": "", "match": false},
-    {"actual": "", "expected": null, "match": false},
-    {"actual": null, "expected": false, "match": false},
-    {"actual": "null", "expected": null, "match": false},
-
-    {"actual": [], "expected": [], "match": true, "note": "arrays match element-wise with the same rules"},
-    {"actual": [1, "a"], "expected": [1, "a"], "match": true},
-    {"actual": [1, "a"], "expected": ["a", 1], "match": false, "note": "order matters"},
-    {"actual": [1], "expected": [1, 1], "match": false},
-    {"actual": [1.0], "expected": [1], "match": true},
-    {"actual": ["5"], "expected": [5], "match": true, "note": "elements use loose matching too"},
-    {"actual": [true], "expected": [1], "match": false},
-    {"actual": [1], "expected": 1, "match": false, "note": "values_match itself never unwraps; see detect_honey_fields for multi-valued fields"},
-    {"actual": "x", "expected": ["x"], "match": false},
-    {"actual": "[]", "expected": [], "match": false},
-
-    {"actual": {}, "expected": {}, "match": true, "note": "objects match key-wise with the same rules"},
-    {"actual": {"a": 1.0}, "expected": {"a": 1}, "match": true},
-    {"actual": {"a": "1"}, "expected": {"a": 1}, "match": true},
-    {"actual": {"a": 1}, "expected": {"a": 1, "b": 2}, "match": false},
-    {"actual": {"a": 1, "b": 2}, "expected": {"a": 1}, "match": false},
-    {"actual": {"a": 1}, "expected": {"b": 1}, "match": false},
-    {"actual": {"a": [1, {"b": "true"}]}, "expected": {"a": [1, {"b": true}]}, "match": true},
-    {"actual": {"a": true}, "expected": {"a": 1}, "match": false},
-    {"actual": {}, "expected": [], "match": false},
-    {"actual": [], "expected": {}, "match": false}
+    {
+      "actual": "abc",
+      "expected": "abc",
+      "match": true,
+      "note": "equal strings"
+    },
+    {
+      "actual": "abc",
+      "expected": "ABC",
+      "match": false,
+      "note": "strings compare exactly"
+    },
+    {
+      "actual": "",
+      "expected": "",
+      "match": true
+    },
+    {
+      "actual": "",
+      "expected": 0,
+      "match": false
+    },
+    {
+      "actual": 5,
+      "expected": 5,
+      "match": true
+    },
+    {
+      "actual": 5,
+      "expected": 5.0,
+      "match": true,
+      "note": "integer and float are numerically equal"
+    },
+    {
+      "actual": 1.5,
+      "expected": 1.5,
+      "match": true
+    },
+    {
+      "actual": 3,
+      "expected": 3.1,
+      "match": false
+    },
+    {
+      "actual": -1,
+      "expected": -1,
+      "match": true
+    },
+    {
+      "actual": 0,
+      "expected": 0,
+      "match": true
+    },
+    {
+      "actual": "5",
+      "expected": 5,
+      "match": true,
+      "note": "form/query strings match the canonical form of a number"
+    },
+    {
+      "actual": 5,
+      "expected": "5",
+      "match": true
+    },
+    {
+      "actual": "5",
+      "expected": 5.0,
+      "match": true,
+      "note": "integer-valued floats canonicalize without .0"
+    },
+    {
+      "actual": "5.0",
+      "expected": 5,
+      "match": false
+    },
+    {
+      "actual": "100",
+      "expected": 100.0,
+      "match": true
+    },
+    {
+      "actual": "1.5",
+      "expected": 1.5,
+      "match": true
+    },
+    {
+      "actual": "1.50",
+      "expected": 1.5,
+      "match": false
+    },
+    {
+      "actual": "0.1",
+      "expected": 0.1,
+      "match": true
+    },
+    {
+      "actual": "-3",
+      "expected": -3,
+      "match": true
+    },
+    {
+      "actual": "-0",
+      "expected": 0,
+      "match": false
+    },
+    {
+      "actual": "05",
+      "expected": 5,
+      "match": false
+    },
+    {
+      "actual": "+5",
+      "expected": 5,
+      "match": false
+    },
+    {
+      "actual": " 5",
+      "expected": 5,
+      "match": false
+    },
+    {
+      "actual": "5 ",
+      "expected": 5,
+      "match": false
+    },
+    {
+      "actual": "1e2",
+      "expected": 100,
+      "match": false
+    },
+    {
+      "actual": "1e-7",
+      "expected": 1e-07,
+      "match": true,
+      "note": "floats canonicalize like ECMAScript Number::toString"
+    },
+    {
+      "actual": "0.0000001",
+      "expected": 1e-07,
+      "match": false
+    },
+    {
+      "actual": "1.5e-7",
+      "expected": 1.5e-07,
+      "match": true
+    },
+    {
+      "actual": "-1e-7",
+      "expected": -1e-07,
+      "match": true
+    },
+    {
+      "actual": "0.000001",
+      "expected": 1e-06,
+      "match": true
+    },
+    {
+      "actual": "1e-6",
+      "expected": 1e-06,
+      "match": false
+    },
+    {
+      "actual": "100000000000000000000",
+      "expected": 1e+20,
+      "match": true
+    },
+    {
+      "actual": "123456789012345680000",
+      "expected": 1.2345678901234568e+20,
+      "match": true
+    },
+    {
+      "actual": "1e+21",
+      "expected": 1e+21,
+      "match": true
+    },
+    {
+      "actual": "1000000000000000000000",
+      "expected": 1e+21,
+      "match": false
+    },
+    {
+      "actual": "1.5e+300",
+      "expected": 1.5e+300,
+      "match": true
+    },
+    {
+      "actual": true,
+      "expected": true,
+      "match": true
+    },
+    {
+      "actual": false,
+      "expected": false,
+      "match": true
+    },
+    {
+      "actual": true,
+      "expected": false,
+      "match": false
+    },
+    {
+      "actual": "true",
+      "expected": true,
+      "match": true,
+      "note": "booleans canonicalize to lowercase"
+    },
+    {
+      "actual": "false",
+      "expected": false,
+      "match": true
+    },
+    {
+      "actual": true,
+      "expected": "true",
+      "match": true
+    },
+    {
+      "actual": "True",
+      "expected": true,
+      "match": false
+    },
+    {
+      "actual": "TRUE",
+      "expected": true,
+      "match": false
+    },
+    {
+      "actual": "false",
+      "expected": true,
+      "match": false
+    },
+    {
+      "actual": "yes",
+      "expected": true,
+      "match": false
+    },
+    {
+      "actual": "1",
+      "expected": true,
+      "match": false,
+      "note": "booleans are never numbers"
+    },
+    {
+      "actual": "0",
+      "expected": false,
+      "match": false
+    },
+    {
+      "actual": true,
+      "expected": 1,
+      "match": false
+    },
+    {
+      "actual": 1,
+      "expected": true,
+      "match": false
+    },
+    {
+      "actual": false,
+      "expected": 0,
+      "match": false
+    },
+    {
+      "actual": 0,
+      "expected": false,
+      "match": false
+    },
+    {
+      "actual": null,
+      "expected": null,
+      "match": true
+    },
+    {
+      "actual": null,
+      "expected": 0,
+      "match": false
+    },
+    {
+      "actual": 0,
+      "expected": null,
+      "match": false
+    },
+    {
+      "actual": null,
+      "expected": "",
+      "match": false
+    },
+    {
+      "actual": "",
+      "expected": null,
+      "match": false
+    },
+    {
+      "actual": null,
+      "expected": false,
+      "match": false
+    },
+    {
+      "actual": "null",
+      "expected": null,
+      "match": false
+    },
+    {
+      "actual": [],
+      "expected": [],
+      "match": true,
+      "note": "arrays match element-wise with the same rules"
+    },
+    {
+      "actual": [
+        1,
+        "a"
+      ],
+      "expected": [
+        1,
+        "a"
+      ],
+      "match": true
+    },
+    {
+      "actual": [
+        1,
+        "a"
+      ],
+      "expected": [
+        "a",
+        1
+      ],
+      "match": false,
+      "note": "order matters"
+    },
+    {
+      "actual": [
+        1
+      ],
+      "expected": [
+        1,
+        1
+      ],
+      "match": false
+    },
+    {
+      "actual": [
+        1.0
+      ],
+      "expected": [
+        1
+      ],
+      "match": true
+    },
+    {
+      "actual": [
+        "5"
+      ],
+      "expected": [
+        5
+      ],
+      "match": true,
+      "note": "elements use loose matching too"
+    },
+    {
+      "actual": [
+        true
+      ],
+      "expected": [
+        1
+      ],
+      "match": false
+    },
+    {
+      "actual": [
+        1
+      ],
+      "expected": 1,
+      "match": false,
+      "note": "values_match itself never unwraps; see detect_honey_fields for multi-valued fields"
+    },
+    {
+      "actual": "x",
+      "expected": [
+        "x"
+      ],
+      "match": false
+    },
+    {
+      "actual": "[]",
+      "expected": [],
+      "match": false
+    },
+    {
+      "actual": {},
+      "expected": {},
+      "match": true,
+      "note": "objects match key-wise with the same rules"
+    },
+    {
+      "actual": {
+        "a": 1.0
+      },
+      "expected": {
+        "a": 1
+      },
+      "match": true
+    },
+    {
+      "actual": {
+        "a": "1"
+      },
+      "expected": {
+        "a": 1
+      },
+      "match": true
+    },
+    {
+      "actual": {
+        "a": 1
+      },
+      "expected": {
+        "a": 1,
+        "b": 2
+      },
+      "match": false
+    },
+    {
+      "actual": {
+        "a": 1,
+        "b": 2
+      },
+      "expected": {
+        "a": 1
+      },
+      "match": false
+    },
+    {
+      "actual": {
+        "a": 1
+      },
+      "expected": {
+        "b": 1
+      },
+      "match": false
+    },
+    {
+      "actual": {
+        "a": [
+          1,
+          {
+            "b": "true"
+          }
+        ]
+      },
+      "expected": {
+        "a": [
+          1,
+          {
+            "b": true
+          }
+        ]
+      },
+      "match": true
+    },
+    {
+      "actual": {
+        "a": true
+      },
+      "expected": {
+        "a": 1
+      },
+      "match": false
+    },
+    {
+      "actual": {},
+      "expected": [],
+      "match": false
+    },
+    {
+      "actual": [],
+      "expected": {},
+      "match": false
+    },
+    {
+      "actual": {
+        "$nest": 32,
+        "leaf": 1
+      },
+      "expected": {
+        "$nest": 32,
+        "leaf": 1
+      },
+      "match": true,
+      "note": "32 levels of nesting compare normally"
+    },
+    {
+      "actual": {
+        "$nest": 33,
+        "leaf": 1
+      },
+      "expected": {
+        "$nest": 33,
+        "leaf": 1
+      },
+      "match": false,
+      "note": "deeper than 32 levels never matches"
+    },
+    {
+      "actual": {
+        "$nest": 5000,
+        "leaf": 1
+      },
+      "expected": "x",
+      "match": false,
+      "note": "very deep value against a scalar default: no stack overflow"
+    }
   ]
 }
