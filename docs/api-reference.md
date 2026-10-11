@@ -651,6 +651,20 @@ Returns whether a request targets a trap (method and path). Use it to let traps 
 # e.g. inside a CSRF middleware's dispatch
 if request.method == "POST" and not ts.is_trap(request):
     verify_csrf_token(request)
+
+# starlette-csrf has no skip callback: route traps around it
+from starlette.requests import Request
+from starlette_csrf import CSRFMiddleware
+
+class CSRFExceptTraps:
+    def __init__(self, app, **options):
+        self.app, self.csrf = app, CSRFMiddleware(app, **options)
+
+    async def __call__(self, scope, receive, send):
+        trap = scope["type"] == "http" and ts.is_trap(Request(scope))
+        await (self.app if trap else self.csrf)(scope, receive, send)
+
+app.add_middleware(CSRFExceptTraps, secret="...")
 ```
 
 Flask-WTF's `CSRFProtect`, Django's CSRF middleware, Litestar's `CSRFConfig` and Tornado's `xsrf_cookies` exempt traps automatically.
@@ -659,8 +673,11 @@ Flask-WTF's `CSRFProtect`, Django's CSRF middleware, Litestar's `CSRFConfig` and
 <div class="lang-content" data-lang="node" markdown="1">
 
 ```javascript
-// register at app level, so req.path is the full path
+// Express (csurf, csrf-csrf's doubleCsrfProtection): register at app level, so req.path is the full path
 app.use((req, res, next) => (ts.is_trap(req) ? next() : csrfProtection(req, res, next)));
+
+// Fastify (@fastify/csrf-protection)
+app.addHook('onRequest', (req, reply, done) => (ts.is_trap(req) ? done() : app.csrfProtection(req, reply, done)));
 ```
 
 </div>
@@ -674,6 +691,16 @@ http.ListenAndServe(":8000", http.HandlerFunc(func(w http.ResponseWriter, r *htt
         r = csrf.UnsafeSkipCheck(r)
     }
     next.ServeHTTP(w, r)
+}))
+
+// net/http's CrossOriginProtection
+protected := http.NewCrossOriginProtection().Handler(app)
+http.ListenAndServe(":8000", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+    if app.Sentry.IsTrap(r) {
+        app.ServeHTTP(w, r)
+        return
+    }
+    protected.ServeHTTP(w, r)
 }))
 
 // Echo: the adapter's App.IsTrap fits middleware.CSRFConfig.Skipper

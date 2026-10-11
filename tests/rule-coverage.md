@@ -29,7 +29,7 @@ Columns: Fl Flask · FA FastAPI · St Starlette · Li Litestar · Dj Django · S
 | R19 sanitized values, event shape | e2e | e2e | e2e | e2e | e2e | e2e | e2e | e2e | e2e | e2e | e2e | e2e | e2e | e2e | e2e | ✅ / ✅ / ✅ (shared fixtures) |
 | R20 duplicate trap fails loud | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅³ | ✅ | ✅ | ✅ | N/A |
 | R21 no spoofable IP by default | e2e | e2e | e2e | e2e | e2e | e2e | e2e | e2e | e2e | e2e | e2e | e2e | ✅ | ✅ | ✅ | N/A |
-| R22 traps exempt from CSRF | ✅ | N/A⁴ | ✅⁶ | ✅ | ✅ | N/A⁴ | ✅ | ✅⁶ | N/A⁴ | N/A⁴ | N/A⁴ | N/A⁴ | ✅⁶ | N/A⁴ | ✅⁵ | N/A |
+| R22 traps exempt from CSRF | ✅ | N/A⁴ | ✅⁶ | ✅ | ✅ | N/A⁴ | ✅ | ✅⁶ | ✅⁶ | N/A⁴ | N/A⁴ | N/A⁴ | ✅⁶ | N/A⁴ | ✅⁵ | N/A |
 | R23 trap responses | e2e | e2e | e2e | ✅ | e2e | e2e | e2e | ✅ | ✅ | e2e | e2e | ✅ | ✅ | ✅ | ✅ | ✅ / ✅ / ✅ |
 
 1. A sub-mux mounted with `Handle("/prefix/", sub)` is opaque to the adapter: a watch on a route inside it cannot fire. Bootstrap logs a warning naming the mount pattern to watch instead (`TestUnreachableWatchIsLogged`). Gin and Echo log the same warning for any watch that matches no route.
@@ -37,13 +37,13 @@ Columns: Fl Flask · FA FastAPI · St Starlette · Li Litestar · Dj Django · S
 3. NestJS R20 is tested on the Express adapter only.
 4. No built-in CSRF middleware; third-party ones are listed under gaps.
 5. Echo's CSRF middleware runs before routing, so it cannot be bypassed automatically: `App.IsTrap` is provided as its `Skipper`, and the test shows both outcomes.
-6. Third-party CSRF middleware: the `is_trap` / `IsTrap` skip hook is tested with a stand-in middleware.
+6. Third-party CSRF middleware, made to skip traps with `is_trap` / `IsTrap` and tested with the real library: csrf-csrf (Express 4 and 5), `@fastify/csrf-protection`, starlette-csrf and net/http's `CrossOriginProtection`. Each test also shows the trap blocked without the skip.
 
 ## Open gaps
 
 Ordered by risk to detection.
 
-- **R22 third-party CSRF middleware:** Flask-WTF is exempted automatically and tested; for the rest (csurf, csrf-csrf, `@fastify/csrf-protection`, crumb, koa-csrf, starlette-csrf, gorilla/csrf) the `is_trap` / `IsTrap` skip hook is tested with stand-in middleware (Express, Starlette, net/http), not with each library.
+- **R22 remaining CSRF libraries:** crumb (Hapi), koa-csrf and csurf (deprecated) are untested. The documented gorilla/csrf pattern was checked by hand but is not in CI, to keep the net/http adapter's go.mod free of third-party modules.
 - **R14 response bodies and headers:** the e2e suite compares a trap with a real route for wrong methods (status and `Allow`), trailing slashes and HEAD; error bodies and other headers are compared only in Tornado's unit test.
 - **R10 and R13:** correctness and performance invariants with no test; low risk.
 

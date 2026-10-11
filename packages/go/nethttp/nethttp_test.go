@@ -674,6 +674,40 @@ func TestIsTrapLetsCSRFMiddlewareSkipTraps(t *testing.T) {
 	}
 }
 
+// The standard library's CSRF protection rejects cross-origin browser POSTs
+// before the mux, so traps behind it never answer unless IsTrap skips it.
+func TestIsTrapWithStdlibCrossOriginProtection(t *testing.T) {
+	for _, skip := range []bool{false, true} {
+		app := InstallSentry(http.NewServeMux(), "svc", "test")
+		logs := &syncBuf{}
+		app.Logger().SetOutput(logs)
+		app.Sentry.Trap("/admin/backup").Methods("POST")
+		app.HandleFunc("POST /real", func(w http.ResponseWriter, r *http.Request) {})
+		protected := http.NewCrossOriginProtection().Handler(app)
+		h := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if skip && app.Sentry.IsTrap(r) {
+				app.ServeHTTP(w, r)
+				return
+			}
+			protected.ServeHTTP(w, r)
+		})
+		do := func(path string) int {
+			req := httptest.NewRequest("POST", path, nil)
+			req.Header.Set("Sec-Fetch-Site", "cross-site")
+			rec := httptest.NewRecorder()
+			h.ServeHTTP(rec, req)
+			return rec.Code
+		}
+		real, trap := do("/real"), do("/admin/backup")
+		if want := map[bool]int{false: 403, true: 401}[skip]; real != 403 || trap != want {
+			t.Fatalf("skip=%v: real=%d trap=%d (want trap %d)", skip, real, trap, want)
+		}
+		if skip && logs.count("trappsec.trap_hit") != 1 {
+			t.Fatal("trap event missing")
+		}
+	}
+}
+
 func TestParameterisedWatchAndEventContext(t *testing.T) {
 	app := InstallSentry(http.NewServeMux(), "svc", "test")
 	logs := &syncBuf{}

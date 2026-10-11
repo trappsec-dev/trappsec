@@ -129,3 +129,16 @@ test('fastify: @fastify/multipart registered after Sentry cannot hide honey fiel
         await app.close();
     }
 });
+
+test('fastify: traps and watches declared after `await app.register(...)` are installed', async () => {
+    const app = Fastify();
+    const { sentry, events } = makeSentry(app);
+    await app.register(async () => {}); // flushes the plugin queue, as any awaited register does
+    sentry.trap('/admin/backup').methods('POST');
+    sentry.watch('/items/:id').query('debug');
+    app.get('/items/:id', async (req) => ({ q: req.query }));
+    assert.equal((await app.inject({ method: 'POST', url: '/admin/backup' })).statusCode, 401);
+    assert.deepEqual((await app.inject({ url: '/items/1?debug=1&k=v' })).json().q, { k: 'v' });
+    assert.deepEqual(events.map((e) => e.event), ['trappsec.trap_hit', 'trappsec.watch_hit']);
+    await app.close();
+});
