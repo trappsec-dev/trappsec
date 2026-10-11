@@ -730,3 +730,34 @@ func TestParameterisedWatchAndEventContext(t *testing.T) {
 		t.Fatalf("handler saw %q; event %v", seen, ev)
 	}
 }
+
+// R10: watches declared before traps both work. R13: the indexes are built once
+// at startup, so a watch added while serving is never looked up; a per-request
+// scan of the configuration would pick it up.
+func TestWatchesBeforeTrapsAndIndexBuiltOnce(t *testing.T) {
+	e := echo.New()
+	app := InstallSentry(e, "svc", "test")
+	logs := &syncBuf{}
+	app.Logger().SetOutput(logs)
+	var seen string
+	e.GET("/users/:id", func(c echo.Context) error { seen = c.Request().URL.RawQuery; return nil })
+	app.Sentry.Watch("/users/:id").Query("debug", core.NoDefault, "recon")
+	app.Sentry.Trap("/admin/backup").Methods("POST")
+	do := func(method, path string) int {
+		rec := httptest.NewRecorder()
+		app.ServeHTTP(rec, httptest.NewRequest(method, path, nil))
+		return rec.Code
+	}
+	if code := do("POST", "/admin/backup"); code != 401 {
+		t.Fatalf("trap answered %d", code)
+	}
+	logs.waitEvent(t, "trappsec.trap_hit")
+	if do("GET", "/users/7?debug=1&x=1"); seen != "x=1" {
+		t.Fatalf("watched field reached the handler: %q", seen)
+	}
+	logs.waitEvent(t, "trappsec.watch_hit")
+	app.Sentry.Watch("/users/:id").Query("late", core.NoDefault, "recon")
+	if do("GET", "/users/8?late=1"); seen != "late=1" {
+		t.Fatalf("a watch added while serving was applied: handler saw %q", seen)
+	}
+}

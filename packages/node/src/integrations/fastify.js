@@ -9,9 +9,11 @@ const PENDING = Symbol('trappsec.pendingWatch');
 
 // Two non-encapsulated plugins. The watch hooks are registered when Sentry is
 // constructed, so they keep their place among the app's own hooks; the watch map
-// is resolved on first use. Traps are registered when the app boots (ready(),
+// is built on the first request. Traps are registered when the app boots (ready(),
 // which listen() and inject() call), so routes declared after the plugin queue
 // was flushed by an earlier `await app.register(...)` are still installed.
+// The hooks are app-wide and resolve the route per request, so registering them
+// before the trap routes cannot miss a trap (the concern behind R10).
 //
 // Watches run in `preValidation`: the body is already parsed, but JSON-schema
 // validation has not run yet, so honey fields are seen and stripped even when the
@@ -103,16 +105,12 @@ class FastifyIntegration {
     }
 
     setup_watches(instance = this.app) {
-        let watchMap = null;
-        let built = -1;
+        let watchMap = null; // built once, on the first request: watches are fixed by then (R13)
 
         instance.addHook('preValidation', (req, _reply, done) => {
             try {
-                if (built !== this.ts.watches.length) { // watches are only ever added
-                    watchMap = buildWatchMap(this.ts);
-                    built = this.ts.watches.length;
-                }
-                const routePath = built > 0 && normalizePath(req.routeOptions?.url || req.routerPath || req.context?.config?.url);
+                if (watchMap === null) watchMap = buildWatchMap(this.ts);
+                const routePath = normalizePath(req.routeOptions?.url || req.routerPath || req.context?.config?.url);
                 const watch = routePath ? watchMap[routePath] : null;
                 if (watch) this._inspect(req, watch);
             } catch (e) {

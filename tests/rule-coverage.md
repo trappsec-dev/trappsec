@@ -17,10 +17,10 @@ Columns: Fl Flask · FA FastAPI · St Starlette · Li Litestar · Dj Django · S
 | R7 nested routers | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅¹ | ✅ | ✅ | N/A |
 | R8 double-init guard | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | N/A |
 | R9 unknown framework fails loud | N/A | N/A | N/A | N/A | N/A | N/A | N/A | N/A | N/A | N/A | N/A | N/A | N/A | N/A | N/A | ✅ / ✅ / N/A² |
-| R10 traps before watches | — | — | — | — | — | — | — | — | — | — | — | — | — | — | — | N/A |
+| R10 traps before watches | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | N/A |
 | R11 adapter-specific context | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | N/A |
 | R12 emit is fire-and-forget | N/A | N/A | N/A | N/A | N/A | N/A | N/A | N/A | N/A | N/A | N/A | N/A | N/A | N/A | N/A | ✅ / ✅ / ✅ |
-| R13 O(1) lookups | — | — | — | — | — | — | — | — | — | — | — | — | — | — | — | — / — / — |
+| R13 O(1) lookups | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | N/A |
 | R14 traps are real routes | e2e | e2e | e2e | e2e | e2e | e2e | ✅ | e2e | e2e | e2e | e2e | e2e | e2e | e2e | e2e | N/A |
 | R15 bootstrap public, idempotent, lazy | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ / ✅ / N/A |
 | R16 async delivery; callbacks never throw | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ / ✅ / ✅ |
@@ -45,6 +45,6 @@ Ordered by risk to detection.
 
 - **R22 remaining CSRF libraries:** crumb (Hapi), koa-csrf and csurf (deprecated) are untested. The documented gorilla/csrf pattern was checked by hand but is not in CI, to keep the net/http adapter's go.mod free of third-party modules.
 - **R14 response bodies and headers:** the e2e suite compares a trap with a real route for wrong methods (status and `Allow`), trailing slashes and HEAD; error bodies and other headers are compared only in Tornado's unit test.
-- **R10 and R13:** correctness and performance invariants with no test; low risk.
+- **NestJS, `@Req()` without `@Body()` on a multipart route:** the body is parsed by a route-level interceptor after every hook trappsec can use without patching Nest internals, and Nest runs pipes only for `@Body`/`@Query`/`@Param`/custom parameters. The event is sent but the field is not stripped (documented in `docs/production.md`).
 
-Notes: R1, R6 and R11 are checked together per framework by one request to a watched parameterised route (`test_request_context.py`, `request_context.test.js`, `TestParameterisedWatchAndEventContext`); on Node it also checks that every raw-URL accessor lost the honey field. R5 multipart is now covered end to end on every framework (the Express, Koa and NestJS examples parse it on the route). R8 is tested under concurrent first requests in Go, Flask and Django; the other Python integrations bootstrap from a startup hook or their first request under the same lock.
+Notes: R10 and R13 are checked per framework by declaring watches before traps and then, after the first request, making the configuration unreadable (Python, Node) or adding a watch (Go): a per-request scan of the configuration fails the test (`test_startup_invariants.py`, `startup_invariants.test.js`, `TestWatchesBeforeTrapsAndIndexBuiltOnce`). R1, R6 and R11 are checked together per framework by one request to a watched parameterised route (`test_request_context.py`, `request_context.test.js`, `TestParameterisedWatchAndEventContext`); on Node it also checks that every raw-URL accessor lost the honey field. R5 multipart is now covered end to end on every framework (the Express, Koa and NestJS examples parse it on the route). R8 is tested under concurrent first requests in Go, Flask and Django; the other Python integrations bootstrap from a startup hook or their first request under the same lock.
