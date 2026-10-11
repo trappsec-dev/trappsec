@@ -5,6 +5,7 @@ if (otelEnabled) {
 }
 
 const express = require('express');
+const multer = require('multer');
 const path = require('path');
 const trappsec = require('../../packages/node/src/index'); // Importing local package
 
@@ -61,7 +62,8 @@ app.get("/api/v2/orders/:id", (req, res) => {
 app.get("/api/v2/echo/query", (req, res) => res.json(req.query));
 app.post("/api/v2/echo/body", (req, res) => res.json(req.body || {}));
 app.post("/api/v2/echo/form", (req, res) => res.json(req.body || {}));
-app.post("/api/v2/echo/multipart", (req, res) => res.json({ supported: false }));
+// multer parses multipart on the route itself; trappsec still sees the fields.
+app.post("/api/v2/echo/multipart", multer().none(), (req, res) => res.json({ ...req.body }));
 
 // Traps
 ts.trap("/deployment/config")

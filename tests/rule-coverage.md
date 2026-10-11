@@ -44,7 +44,6 @@ Ordered by risk to detection.
 
 - **R7 NestJS modules and Tornado nested routers:** no test watches a route mounted through a module or a nested `Router`.
 - **R18 duplicate-key evasion at framework level** for Hapi, Koa, NestJS, net/http, Gin and Echo: only the e2e query test sends a watched key twice; form bodies are untested there.
-- **R5 multipart on Express, Koa and NestJS-Express:** the examples do not parse multipart, so honey fields in multipart bodies are untested on these frameworks.
 - **R16 Go adapters:** panics inside callbacks are recovered in the core (tested), but no adapter-level test drives one through a real router.
 - **R2 on FastAPI and Django** (order-based routers): only e2e checks that a catch-all route does not shadow a trap.
 - **R8 concurrent first-request bootstrap in Python** (Flask, Django under threaded WSGI): only Go has a concurrency test.

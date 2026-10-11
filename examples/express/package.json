@@ -14,6 +14,7 @@
     "@opentelemetry/instrumentation-express": "^0.44.0",
     "@opentelemetry/instrumentation-http": "^0.55.0",
     "@opentelemetry/sdk-node": "^0.55.0",
-    "express": "^5.2.1"
+    "express": "^5.2.1",
+    "multer": "^2.4.0"
   }
 }

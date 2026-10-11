@@ -31,8 +31,6 @@ class Case:
     unsupported: FrozenSet[str] = frozenset()  # features the example does not implement
 
 
-NO_MULTIPART = frozenset({"multipart"})
-
 
 def _default_cases() -> List[Case]:
     """Commands may use {webhook}; each case gets its own app port ($PORT) and receiver."""
@@ -41,13 +39,12 @@ def _default_cases() -> List[Case]:
     go = lambda d: ["go", "run", "main.go", "--webhook={webhook}"]  # noqa: E731
     ex = REPO_ROOT / "examples"
     return [
-        Case("node-express", ex / "express", node("express"), NO_MULTIPART),
+        Case("node-express", ex / "express", node("express")),
         Case("node-fastify", ex / "fastify", node("fastify")),
         Case("node-hapi", ex / "hapi", node("hapi")),
-        Case("node-koa", ex / "koa", node("koa"), NO_MULTIPART),
-        Case("node-nestjs-express", ex / "nestjs", ["npm", "run", "start", "--", "--webhook={webhook}"], NO_MULTIPART),
-        Case("node-nestjs-fastify", ex / "nestjs", ["npm", "run", "start_fastify", "--", "--webhook={webhook}"],
-             NO_MULTIPART),
+        Case("node-koa", ex / "koa", node("koa")),
+        Case("node-nestjs-express", ex / "nestjs", ["npm", "run", "start", "--", "--webhook={webhook}"]),
+        Case("node-nestjs-fastify", ex / "nestjs", ["npm", "run", "start_fastify", "--", "--webhook={webhook}"]),
         Case("py-django", ex / "django", py("django")),
         Case("py-fastapi", ex / "fastapi", py("fastapi")),
         Case("py-flask", ex / "flask", py("flask")),

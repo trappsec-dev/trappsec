@@ -20,7 +20,7 @@ The examples register the webhook with `alerts_only=False`, so the suite sees bo
 - each test waits for the expected number of events and then a short settle period, so a duplicate event fails the test;
 - "no alert" checks end with a flush barrier: a trap hit with a fresh user agent whose event must arrive, which proves anything queued earlier was already delivered.
 
-Pass `--unsupported=multipart` for an app whose multipart echo route returns `{"supported": false}`; those tests are then reported as skipped. Without the flag such a response fails the test.
+Every example implements the multipart echo route (Express, Koa and NestJS parse multipart on the route itself, the pattern that used to hide honey fields). A future example that cannot can return `{"supported": false}` and be declared with `--unsupported=multipart`; its multipart tests are then reported as skipped, and without the flag such a response fails the test.
 
 ### Run All Examples Sequentially
 
