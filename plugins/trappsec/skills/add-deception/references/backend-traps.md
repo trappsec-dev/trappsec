@@ -52,7 +52,7 @@ Use the app's casing and authorization model:
 | always send one constant value (a hidden input, an echoed constant) | `default=<that value>` |
 | echo back a per-user value they were given (their own org ID, their current permissions) | a callable default that computes that value from the request, so only tampering alerts |
 
-Callable defaults receive the framework request and must be cheap. Arrays are compared element by element, in order. Value matching is canonical: the form string `"false"` equals `false`, but `"False"` does not.
+Callable defaults receive the framework request and must be cheap and synchronous. They may run before route-level middleware, so derive the value from the request itself (trappsec-api.md §4). Arrays are compared element by element, in order. Value matching is canonical: the form string `"false"` equals `false`, but `"False"` does not.
 
 ### Bait it
 
