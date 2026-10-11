@@ -58,30 +58,38 @@ Each worker process (gunicorn/uvicorn workers, Node cluster, multiple pods) has 
 
 Webhook and Slack events are queued in memory (capacity 1000) and sent by a background worker; the request path is never blocked and failures never reach users. This means:
 
-*   Call `close()` / `Close()` during graceful shutdown to flush pending events (default timeout 5 s). A hard kill loses queued events.
+*   Call `close()` / `Close()` during graceful shutdown to flush pending events (default timeout 5 s; Python and Node take the timeout in seconds, Go a context). A hard kill loses queued events. Every example app in `examples/` shows the shutdown hook for its framework.
 *   If the receiver is down for long, the queue fills and further events are dropped with a warning (at most once per 60 s). Watch your logs for it.
 *   Up to 2 retries with short backoff happen in the worker.
 
 ```python
 import atexit
-atexit.register(ts.close)
+atexit.register(ts.close)  # runs on a normal interpreter exit; uvicorn, gunicorn and Sanic turn SIGTERM into one
 ```
 
 ```javascript
-process.on("SIGTERM", async () => { await ts.close(); process.exit(0); });
+for (const sig of ["SIGINT", "SIGTERM"]) {
+    process.once(sig, async () => { await ts.close(); process.exit(0); });
+}
 ```
 
 ```go
-ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-defer cancel()
-_ = ts.Close(ctx)
+sig := make(chan os.Signal, 1)
+signal.Notify(sig, os.Interrupt, syscall.SIGTERM)
+go func() {
+    <-sig
+    ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+    defer cancel()
+    _ = app.Close(ctx)
+    os.Exit(0)
+}()
 ```
 
 ## Performance
 
 *   Trap and watch lookups are O(1) hash lookups per request.
 *   Requests with no matching watch are untouched: no body read, no parsing.
-*   For watched routes the body is parsed once and restored for your handler. The Go adapters buffer bodies up to 1 MiB by default (`SetMaxBodyBytes`); larger bodies are passed through uninspected. Set the limit to at least your watched routes' own maximum body size, so padding a request past it cannot bypass inspection. Litestar bodies over 10 MiB are also passed through uninspected; Litestar's default `request_max_body_size` (10 MB) already rejects them, so do not raise it above 10 MiB on apps with body watches. With Gin, install trappsec before your own middleware where you can, so `IdentifyUser` sees values that middleware sets; routes registered earlier, including routes in groups created earlier, are still watched.
+*   For watched routes the body is parsed once and restored for your handler. The Go adapters buffer bodies up to 1 MiB by default (`SetMaxBodyBytes`); larger bodies are passed through uninspected. Set the limit to at least your watched routes' own maximum body size, so padding a request past it cannot bypass inspection. Litestar and Starlette/FastAPI bodies over 10 MiB are also passed through uninspected; Litestar's default `request_max_body_size` (10 MB) already rejects them, so do not raise it above 10 MiB on apps with body watches. With Gin, middleware registered before `InstallSentry` runs before inspection, so `IdentifyUser` sees what it sets; routes registered earlier, including routes in groups created earlier, are still watched. Unwatched routes pay nothing extra unless a watched route lacks the watch middleware (registered before `InstallSentry`). In Echo, a watched request that an earlier middleware rejects (auth, rate limit, CSRF) is still reported, after the chain returns; its honey fields cannot be stripped because the response is already decided. net/http requests that the mux answers with a redirect are not inspected; the redirected request is.
 *   Handlers run off the request path; the cost of an alert on the request thread is building and enqueueing one small event.
 *   Callbacks (`identify_user`, `override_source_ip`) run on every trap/watch hit, so keep them cheap and non-blocking. They are wrapped in try/catch and never break the request.
 
@@ -104,7 +112,7 @@ Order does not matter for configuration: default responses are resolved at boots
 ## Framework caveats
 
 *   **Django:** traps are `csrf_exempt` so scanners get the decoy response instead of a CSRF error. Under WSGI with multiple threads, bootstrap is lock-guarded.
-*   **CSRF protection elsewhere:** Litestar traps are excluded from `CSRFConfig` automatically and Tornado traps from `xsrf_cookies`. Echo's `middleware.CSRF` runs before every route, so pass the trap skipper: `e.Use(middleware.CSRFWithConfig(middleware.CSRFConfig{Skipper: app.IsTrap}))`. Flask-WTF's `CSRFProtect` exempts traps automatically too. With other CSRF middleware (csurf, csrf-csrf, `@fastify/csrf-protection`, crumb, koa-csrf, starlette-csrf, gorilla/csrf, net/http's `CrossOriginProtection`), skip it for traps with `is_trap(request)` / `IsTrap(req)` (see the API reference); otherwise a POST to a trap gets a CSRF error instead of the decoy, which disables the trap and gives it away.
+*   **CSRF protection elsewhere:** Litestar traps are excluded from `CSRFConfig` automatically and Tornado traps from `xsrf_cookies`. Echo's `middleware.CSRF` runs before every route, so pass the trap skipper: `e.Use(middleware.CSRFWithConfig(middleware.CSRFConfig{Skipper: app.IsTrap}))`. Every Go `App` has an `IsTrap` that takes its framework's request type (`echo.Context`, `*gin.Context`, `*http.Request`). Flask-WTF's `CSRFProtect` exempts traps automatically too. With other CSRF middleware (csurf, csrf-csrf, `@fastify/csrf-protection`, crumb, koa-csrf, starlette-csrf, gorilla/csrf, net/http's `CrossOriginProtection`), skip it for traps with `is_trap(request)` / `app.IsTrap(req)` (see the API reference and the per-framework table in [Supported Frameworks](/supported-frameworks/#framework-differences)); otherwise a POST to a trap gets a CSRF error instead of the decoy, which disables the trap and gives it away.
 *   **Express / NestJS-Express:** sub-routers are covered. Routes registered before Sentry is installed are covered too; where a framework cannot do that, a startup warning names the uncovered routes.
 *   **Koa / Express trap placement:** traps sit after middleware and before your first route. Middleware that rejects unauthenticated users before routes will also reject unauthenticated scanners, hiding the decoy; keep the decoy reachable if you want `signal` events.
 *   **Gin / Echo:** the default IP is the RemoteAddr host; configure trusted proxies or `OverrideSourceIP`.

@@ -1,0 +1,168 @@
+{
+  "description": "Shared R22 cases for is_trap(request) / Sentry.IsTrap(req): whether a request's method and path target a trap, by path matching (no router involved). Paths are compared without the query string and without a trailing slash; methods case-insensitively. A segment written :id, :id?, {id}, <id> or <int:id> matches exactly one non-empty segment. A LAST segment written *rest, {rest...}, {rest:path} or <path:rest> is a catch-all and matches one or more remaining non-empty segments; anywhere else those forms match one segment. Loaded by the Python, Node and Go unit tests.",
+  "traps": [
+    {
+      "path": "/admin/backup",
+      "methods": [
+        "GET",
+        "POST"
+      ]
+    },
+    {
+      "path": "/users/:id/export",
+      "methods": [
+        "GET"
+      ]
+    },
+    {
+      "path": "/orders/{id}",
+      "methods": [
+        "DELETE"
+      ]
+    },
+    {
+      "path": "/legacy/<id>",
+      "methods": [
+        "POST"
+      ]
+    },
+    {
+      "path": "/typed/<int:id>",
+      "methods": [
+        "GET"
+      ]
+    },
+    {
+      "path": "/files/*path",
+      "methods": [
+        "GET"
+      ]
+    },
+    {
+      "path": "/assets/{rest...}",
+      "methods": [
+        "GET"
+      ]
+    },
+    {
+      "path": "/static/{p:path}",
+      "methods": [
+        "GET"
+      ]
+    },
+    {
+      "path": "/dl/<path:p>",
+      "methods": [
+        "GET"
+      ]
+    },
+    {
+      "path": "/mid/*x/end",
+      "methods": [
+        "GET"
+      ]
+    }
+  ],
+  "cases": [
+    {
+      "method": "GET",
+      "path": "/admin/backup",
+      "is_trap": true
+    },
+    {
+      "method": "post",
+      "path": "/admin/backup/",
+      "is_trap": true
+    },
+    {
+      "method": "DELETE",
+      "path": "/admin/backup",
+      "is_trap": false
+    },
+    {
+      "method": "GET",
+      "path": "/admin/backup/x",
+      "is_trap": false
+    },
+    {
+      "method": "GET",
+      "path": "/admin",
+      "is_trap": false
+    },
+    {
+      "method": "GET",
+      "path": "/users/7/export",
+      "is_trap": true
+    },
+    {
+      "method": "GET",
+      "path": "/users//export",
+      "is_trap": false
+    },
+    {
+      "method": "POST",
+      "path": "/users/7/export",
+      "is_trap": false
+    },
+    {
+      "method": "DELETE",
+      "path": "/orders/9",
+      "is_trap": true
+    },
+    {
+      "method": "POST",
+      "path": "/legacy/abc",
+      "is_trap": true
+    },
+    {
+      "method": "GET",
+      "path": "/typed/5",
+      "is_trap": true
+    },
+    {
+      "method": "GET",
+      "path": "/files/a",
+      "is_trap": true
+    },
+    {
+      "method": "GET",
+      "path": "/files/a/b/c",
+      "is_trap": true
+    },
+    {
+      "method": "GET",
+      "path": "/files",
+      "is_trap": false
+    },
+    {
+      "method": "GET",
+      "path": "/assets/css/site.css",
+      "is_trap": true
+    },
+    {
+      "method": "GET",
+      "path": "/static/a/b",
+      "is_trap": true
+    },
+    {
+      "method": "GET",
+      "path": "/dl/x/y/z",
+      "is_trap": true
+    },
+    {
+      "method": "GET",
+      "path": "/mid/a/end",
+      "is_trap": true
+    },
+    {
+      "method": "GET",
+      "path": "/mid/a/b/end",
+      "is_trap": false
+    },
+    {
+      "method": "GET",
+      "path": "/nothing",
+      "is_trap": false
+    }
+  ]
+}

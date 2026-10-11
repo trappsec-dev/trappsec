@@ -2,13 +2,17 @@ package trappsecgin
 
 import (
 	"bytes"
+	"context"
+	"crypto/tls"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"github.com/gin-gonic/gin"
 	core "github.com/trappsec-dev/trappsec/packages/go"
+	"golang.org/x/net/http2"
 	"io"
 	"mime/multipart"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/textproto"
@@ -80,7 +84,8 @@ func TestPatternParamRouteBeforeInstall(t *testing.T) {
 
 func TestRealIPNotSpoofable(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	if defaultIP(httptest.NewRequest("GET", "/", nil)) != "192.0.2.1" {
+	app := InstallSentry(gin.New(), "svc", "test")
+	if app.Identity.IP(httptest.NewRequest("GET", "/", nil)) != "192.0.2.1" {
 		t.Fatalf("unexpected default ip for httptest request")
 	}
 }
@@ -748,4 +753,244 @@ func TestWatchesBeforeTrapsAndIndexBuiltOnce(t *testing.T) {
 	if do("GET", "/users/8?late=1"); seen != "late=1" {
 		t.Fatalf("a watch added while serving was applied: handler saw %q", seen)
 	}
+}
+
+func TestAppIsTrapTakesGinContext(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	engine := gin.New()
+	app := InstallSentry(engine, "svc", "test")
+	logs := &syncBuf{}
+	app.Logger().SetOutput(logs)
+	// stand-in for a CSRF middleware: reject POSTs without a token unless the request targets a trap
+	engine.Use(func(c *gin.Context) {
+		if c.Request.Method == "POST" && c.GetHeader("X-CSRF-Token") == "" && !app.IsTrap(c) {
+			c.AbortWithStatus(403)
+			return
+		}
+		c.Next()
+	})
+	app.POST("/real", func(c *gin.Context) { c.Status(200) })
+	app.Trap("/users/:id/export").Methods("POST")
+	app.Watch("/real").Body("role", Default("user"), Intent("PrivEsc"))
+	do := func(path string) int {
+		rec := httptest.NewRecorder()
+		app.ServeHTTP(rec, httptest.NewRequest("POST", path, nil))
+		return rec.Code
+	}
+	if real, trap := do("/real"), do("/users/7/export"); real != 403 || trap != 401 {
+		t.Fatalf("real=%d trap=%d", real, trap)
+	}
+	if logs.count("trappsec.trap_hit") != 1 {
+		t.Fatal("trap event missing")
+	}
+}
+
+// A real route that only looks like a trap must not be reported as one, or
+// CSRF protection would be skipped for it.
+func TestAppIsTrapUsesTheMatchedRoute(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	engine := gin.New()
+	app := InstallSentry(engine, "svc", "test")
+	app.Logger().SetOutput(io.Discard)
+	seen := map[string]bool{}
+	engine.Use(func(c *gin.Context) { seen[c.Request.URL.Path] = app.IsTrap(c); c.Next() })
+	app.POST("/users/me", func(c *gin.Context) { c.Status(200) })
+	app.Trap("/users/:id").Methods("POST")
+	for _, p := range []string{"/users/me", "/users/7"} {
+		app.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest("POST", p, nil))
+	}
+	if seen["/users/me"] || !seen["/users/7"] {
+		t.Fatalf("IsTrap by route: %v", seen)
+	}
+}
+
+// A watched route registered after InstallSentry carries the watch middleware,
+// so it is inspected inside the chain, after the app's auth middleware: every
+// event, including the first, carries the user.
+func TestEveryEventIncludingFirstHasMiddlewareIdentity(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	engine := gin.New()
+	engine.Use(func(c *gin.Context) { c.Set("u", "carol"); c.Next() })
+	app := InstallSentry(engine, "svc", "test")
+	logs := &syncBuf{}
+	app.Logger().SetOutput(logs)
+	app.IdentifyUser(func(req any) *core.AuthContext {
+		if c, ok := req.(*gin.Context); ok {
+			if u, _ := c.Get("u"); u != nil {
+				return &core.AuthContext{User: u.(string)}
+			}
+		}
+		return nil
+	})
+	app.POST("/users/:id", func(c *gin.Context) { c.Status(200) })
+	app.Watch("/users/:id").Body("is_admin", core.NoDefault, "priv")
+	for i := 0; i < 3; i++ {
+		req := httptest.NewRequest("POST", "/users/7", strings.NewReader(`{"is_admin":true}`))
+		req.Header.Set("Content-Type", "application/json")
+		app.ServeHTTP(httptest.NewRecorder(), req)
+	}
+	evs := logs.events()
+	if len(evs) != 3 {
+		t.Fatalf("want 3 events, got %d: %v", len(evs), evs)
+	}
+	for i, ev := range evs {
+		if ev["user"] != "carol" || ev["type"] != "alert" {
+			t.Fatalf("event %d: user=%v type=%v, want carol/alert", i+1, ev["user"], ev["type"])
+		}
+	}
+	if app.integration.shadow != nil || len(app.integration.uncovered) != 0 {
+		t.Fatalf("no route lacks the middleware, yet the shadow router is active: %v", app.integration.uncovered)
+	}
+}
+
+// Coverage is decided at bootstrap from each route's handler chain.
+func TestCoverageDecidedAtBootstrap(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	engine := gin.New()
+	h := func(c *gin.Context) { c.Status(200) }
+	engine.GET("/pre", h)
+	g := engine.Group("/g")
+	app := InstallSentry(engine, "svc", "test")
+	app.GET("/post", h)
+	g.GET("/late", h)
+	app.Group("/g2").GET("/ok", h)
+	for _, p := range []string{"/pre", "/post", "/g/late", "/g2/ok"} {
+		app.Watch(p)
+	}
+	app.Bootstrap()
+	in := app.integration
+	if _, known := in.scanChains(len(engine.Routes())); !known {
+		t.Fatal("route trees not readable: gin internals changed, inspection falls back to ServeHTTP for every watch")
+	}
+	want := map[string]bool{"GET /pre": true, "GET /g/late": true}
+	if len(in.uncovered) != len(want) {
+		t.Fatalf("uncovered = %v, want %v", in.uncovered, want)
+	}
+	for k := range want {
+		if !in.uncovered[k] {
+			t.Fatalf("uncovered = %v, want %v", in.uncovered, want)
+		}
+	}
+}
+
+// Building the shadow router used to swap gin.DebugPrintRouteFunc, racing with
+// anything registering routes in debug mode (run with -race).
+func TestShadowBuildDoesNotMutateGinGlobals(t *testing.T) {
+	prevW := gin.DefaultWriter
+	gin.DefaultWriter = io.Discard
+	gin.SetMode(gin.DebugMode)
+	defer func() { gin.SetMode(gin.TestMode); gin.DefaultWriter = prevW }()
+
+	stop := make(chan struct{})
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for {
+			select {
+			case <-stop:
+				return
+			default:
+				gin.New().GET("/x", func(c *gin.Context) {})
+			}
+		}
+	}()
+	for i := 0; i < 20; i++ {
+		engine := gin.New()
+		engine.GET("/w", func(c *gin.Context) {})
+		app := InstallSentry(engine, "svc", "test")
+		app.Watch("/w")
+		app.Bootstrap()
+		if app.integration.shadow == nil {
+			t.Fatal("pre-install watch needs the shadow router")
+		}
+	}
+	close(stop)
+	wg.Wait()
+}
+
+func TestHandlerServesThroughAppAndHonoursUseH2C(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	engine := gin.New()
+	app := InstallSentry(engine, "svc", "test")
+	logs := &syncBuf{}
+	app.Logger().SetOutput(logs)
+	app.Trap("/t").Methods("GET")
+	if app.Handler() != http.Handler(app) {
+		t.Fatalf("Handler() must be the App, got %T", app.Handler())
+	}
+	engine.UseH2C = true
+	srv := httptest.NewServer(app.Handler())
+	defer srv.Close()
+	client := &http.Client{Transport: &http2.Transport{
+		AllowHTTP: true,
+		DialTLSContext: func(ctx context.Context, network, addr string, _ *tls.Config) (net.Conn, error) {
+			return (&net.Dialer{}).DialContext(ctx, network, addr)
+		},
+	}}
+	resp, err := client.Get(srv.URL + "/t")
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.ProtoMajor != 2 || resp.StatusCode != 401 {
+		t.Fatalf("proto %d status %d, want h2c trap response", resp.ProtoMajor, resp.StatusCode)
+	}
+	logs.waitEvent(t, "trappsec.trap_hit")
+}
+
+func benchEngine(b *testing.B, preInstall bool) *App {
+	gin.SetMode(gin.ReleaseMode)
+	engine := gin.New()
+	h := func(c *gin.Context) { c.Status(200) }
+	if preInstall {
+		engine.GET("/watched/:id", h)
+	}
+	app := InstallSentry(engine, "svc", "test")
+	app.Logger().SetOutput(io.Discard)
+	if !preInstall {
+		app.GET("/watched/:id", h)
+	}
+	app.GET("/plain", h)
+	app.Watch("/watched/:id").Query("debug", core.NoDefault, "recon")
+	app.Bootstrap()
+	return app
+}
+
+func benchServe(b *testing.B, h http.Handler, target string) {
+	req := httptest.NewRequest("GET", target, nil)
+	w := &discardWriter{h: http.Header{}}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		h.ServeHTTP(w, req)
+	}
+}
+
+type discardWriter struct{ h http.Header }
+
+func (d *discardWriter) Header() http.Header         { return d.h }
+func (d *discardWriter) Write(b []byte) (int, error) { return len(b), nil }
+func (d *discardWriter) WriteHeader(int)             {}
+
+// Unwatched route, every watched route covered by the middleware: the shadow
+// router is skipped, so this should match a bare engine.
+func BenchmarkUnwatchedRouteMiddlewareCovered(b *testing.B) {
+	benchServe(b, benchEngine(b, false), "/plain")
+}
+
+// Unwatched route while a pre-install watched route forces the shadow match.
+func BenchmarkUnwatchedRouteShadowActive(b *testing.B) {
+	benchServe(b, benchEngine(b, true), "/plain")
+}
+
+func BenchmarkWatchedRouteMiddleware(b *testing.B) {
+	benchServe(b, benchEngine(b, false), "/watched/1")
+}
+
+func BenchmarkBareEngineBaseline(b *testing.B) {
+	gin.SetMode(gin.ReleaseMode)
+	engine := gin.New()
+	engine.GET("/plain", func(c *gin.Context) { c.Status(200) })
+	benchServe(b, engine, "/plain")
 }

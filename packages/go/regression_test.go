@@ -69,7 +69,7 @@ func TestWebhookEmitDoesNotBlockOnSlowServer(t *testing.T) {
 
 	start := time.Now()
 	for i := 0; i < 20; i++ {
-		s.TriggerWatchEvent(nil, []FoundField{{Type: "body", Field: "f"}})
+		s.triggerWatchEvent(nil, []FoundField{{Type: "body", Field: "f"}})
 		s.Trigger(nil, "r", "i", nil)
 	}
 	if d := time.Since(start); d > 500*time.Millisecond {
@@ -322,7 +322,7 @@ func TestPanicInIdentifyUserFallsBackToSignal(t *testing.T) {
 	s.handlers = []EventHandler{capture}
 	s.IdentifyUser(func(any) *AuthContext { panic("auth exploded") })
 
-	s.TriggerWatchEvent(nil, nil)
+	s.triggerWatchEvent(nil, nil)
 	if len(capture.events) != 1 || capture.events[0].Type != "signal" || capture.events[0].User != "" {
 		t.Fatalf("unexpected events: %+v", capture.events)
 	}
@@ -334,12 +334,12 @@ func TestPanicInOverrideSourceIPFallsBackToDefault(t *testing.T) {
 	s.handlers = []EventHandler{capture}
 	s.Identity.IP = func(any) string { return "9.9.9.9" }
 	s.OverrideSourceIP(func(any) string { panic("ip exploded") })
-	s.TriggerWatchEvent(nil, nil)
+	s.triggerWatchEvent(nil, nil)
 	if capture.events[0].IP != "9.9.9.9" {
 		t.Fatalf("expected default IP fallback, got %q", capture.events[0].IP)
 	}
 	s.OverrideSourceIP(func(any) string { return "7.7.7.7" })
-	s.TriggerWatchEvent(nil, nil)
+	s.triggerWatchEvent(nil, nil)
 	if capture.events[1].IP != "7.7.7.7" {
 		t.Fatalf("override must win, got %q", capture.events[1].IP)
 	}
@@ -353,7 +353,7 @@ func TestPanicInHandlerDoesNotPropagateOrStarveOthers(t *testing.T) {
 	s := NewSentry("svc", "test")
 	capture := &captureHandler{}
 	s.handlers = []EventHandler{panicHandler{}, capture}
-	s.TriggerWatchEvent(nil, nil)
+	s.triggerWatchEvent(nil, nil)
 	if len(capture.events) != 1 {
 		t.Fatal("later handlers must still run")
 	}
@@ -370,7 +370,7 @@ func TestPanicInRequestExtractorsAndDynamicBody(t *testing.T) {
 		ResponseUnauthenticated: ResponseTemplate{StatusCode: 401, MIMEType: "application/json",
 			Body: func(any) any { panic("body exploded") }},
 	}
-	body, cfg := s.TriggerTrapEvent(nil, trap)
+	body, cfg := s.triggerTrapEvent(nil, trap)
 	if string(body) != "{}" || cfg.StatusCode != 401 {
 		t.Fatalf("expected {} fallback, got %q %d", body, cfg.StatusCode)
 	}
@@ -383,7 +383,7 @@ func TestPanicInDefaultCallbackTreatedAsNoDefaultAndStillStrips(t *testing.T) {
 	s := NewSentry("svc", "test")
 	data := map[string]any{"role": "user", "keep": 1}
 	rules := map[string]WatchFieldRule{"role": {Default: func(any) any { panic("x") }, Intent: "i"}}
-	out, found, touched := s.DetectHoneyFields(data, rules, nil)
+	out, found, touched := s.detectHoneyFields(data, rules, nil)
 	if !touched || len(found) != 1 {
 		t.Fatalf("expected violation, got %+v touched=%v", found, touched)
 	}
@@ -396,13 +396,13 @@ func TestPanicInDefaultCallbackTreatedAsNoDefaultAndStillStrips(t *testing.T) {
 }
 
 func TestTrapBodyStringSentRawRegardlessOfMime(t *testing.T) {
-	if got := string(normalizePayload("application/json", "plain")); got != "plain" {
+	if got := string(normalizePayload("plain")); got != "plain" {
 		t.Fatalf("got %q", got)
 	}
-	if got := string(normalizePayload("text/html", map[string]any{"a": 1})); got != `{"a":1}` {
+	if got := string(normalizePayload(map[string]any{"a": 1})); got != `{"a":1}` {
 		t.Fatalf("got %q", got)
 	}
-	if got := string(normalizePayload("application/json", make(chan int))); got != "{}" {
+	if got := string(normalizePayload(make(chan int))); got != "{}" {
 		t.Fatalf("unmarshalable body should degrade to {}, got %q", got)
 	}
 }
@@ -448,7 +448,7 @@ func TestValuesMatchTable(t *testing.T) {
 }
 
 func detectH(rules map[string]WatchFieldRule, data map[string]any, src ...string) (map[string]any, []FoundField, bool) {
-	return NewSentry("svc", "t").DetectHoneyFields(data, rules, nil, src...)
+	return NewSentry("svc", "t").detectHoneyFields(data, rules, nil, src...)
 }
 
 func TestDetectBenignJSONZeroNoLongerAlerts(t *testing.T) {
@@ -584,7 +584,7 @@ func TestDetectHoneyFieldsAnyShapes(t *testing.T) {
 	s := NewSentry("svc", "t")
 	rules := map[string]WatchFieldRule{"role": {Default: "user"}}
 	arr := []any{map[string]any{"role": "admin", "n": 1}, "str", 3.0, nil, map[string]any{"role": "user"}}
-	out, found, touched := s.DetectHoneyFieldsAny(arr, rules, nil)
+	out, found, touched := s.detectHoneyFieldsAny(arr, rules, nil)
 	if !touched || len(found) != 1 {
 		t.Fatalf("expected one violation in array: %+v", found)
 	}
@@ -596,7 +596,7 @@ func TestDetectHoneyFieldsAnyShapes(t *testing.T) {
 		}
 	}
 	for _, v := range []any{"s", 1.0, nil, true, []any{}, map[string]any{}} {
-		if _, _, touched := s.DetectHoneyFieldsAny(v, rules, nil); touched {
+		if _, _, touched := s.detectHoneyFieldsAny(v, rules, nil); touched {
 			t.Fatalf("shape %#v should be skipped", v)
 		}
 	}
@@ -840,7 +840,7 @@ func TestConcurrentConfigAndEmitRace(t *testing.T) {
 					s.OverrideSourceIP(func(any) string { return "1.1.1.1" })
 				case 4:
 					s.Trigger(nil, "r", "i", nil)
-					s.TriggerWatchEvent(nil, nil)
+					s.triggerWatchEvent(nil, nil)
 				case 5:
 					_ = s.DefaultResponses()
 					s.Template("x", 200, nil, "")
@@ -910,5 +910,76 @@ func TestIsTrapMatchesMethodAndPathAndNeverPanics(t *testing.T) {
 	s.Request.Path = func(any) string { panic("boom") }
 	if s.IsTrap(r{"GET", "/admin/backup"}) {
 		t.Fatal("a panicking extractor must yield false")
+	}
+}
+
+func TestWatchesMergeSamePath(t *testing.T) {
+	s := NewSentry("svc", "t")
+	s.Watch("/p").Body("a", Default(1), Intent("first")).Query("q")
+	s.Watch("/other").Body("z")
+	s.Watch("/p").Body("a", Default(2), Intent("second")).Body("b")
+	ws := s.Watches()
+	if len(ws) != 2 || ws[0].Path != "/p" || ws[1].Path != "/other" {
+		t.Fatalf("watches = %+v", ws)
+	}
+	p := ws[0]
+	if len(p.BodyFields) != 2 || len(p.QueryFields) != 1 {
+		t.Fatalf("fields not unioned: %+v", p)
+	}
+	if r := p.BodyFields["a"]; r.Default != 2 || r.Intent != "second" {
+		t.Fatalf("later rule must win: %+v", r)
+	}
+}
+
+func TestNoDefaultIsASentinel(t *testing.T) {
+	if !isNoDefault(NoDefault) {
+		t.Fatal("NoDefault must be the sentinel")
+	}
+	if isNoDefault(struct{}{}) {
+		t.Fatal("an arbitrary struct{} is a real default, not NoDefault")
+	}
+}
+
+func TestWebhookNegativeHeartbeatIgnored(t *testing.T) {
+	lg, buf := quietLogger()
+	h, err := NewWebhookHandler("http://127.0.0.1:1", &WebhookOptions{HeartbeatInterval: -5, Logger: lg})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if h.hbDone != nil {
+		t.Fatal("no heartbeat goroutine for a negative interval")
+	}
+	if !strings.Contains(buf.String(), "HeartbeatInterval") {
+		t.Fatalf("expected a log line, got %q", buf.String())
+	}
+	ctx, cancel := ctxT(5 * time.Second)
+	defer cancel()
+	_ = h.Close(ctx)
+}
+
+func TestSafeValueDepthTypedMap(t *testing.T) {
+	var v any = 1
+	for i := 0; i < 40; i++ {
+		v = map[string][]any{"k": {v}}
+	}
+	got, _ := SafeValue(v).(string)
+	// 16 maps and 16 lists fill the 32 allowed levels; the 33rd is clipped.
+	want := strings.Repeat(`{"k":[`, 16) + `"<nested>"` + strings.Repeat(`]}`, 16)
+	if got != want {
+		t.Fatalf("got %q, want %q", got, want)
+	}
+}
+
+func TestIsTrapCatchAllNested(t *testing.T) {
+	s := NewSentry("svc", "t")
+	s.Trap("/files/*path").Methods("GET")
+	var method, path string
+	s.Request.Method = func(any) string { return method }
+	s.Request.Path = func(any) string { return path }
+	for p, want := range map[string]bool{"/files/a": true, "/files/a/b/c": true, "/files": false, "/files/a//b": false, "/other/a": false} {
+		method, path = "get", p
+		if got := s.IsTrap(nil); got != want {
+			t.Errorf("IsTrap(%q) = %v, want %v", p, got, want)
+		}
 	}
 }

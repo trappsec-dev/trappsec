@@ -8,6 +8,7 @@
 # ]
 # ///
 
+import atexit
 import sys
 import os
 import json
@@ -140,12 +141,9 @@ def make_app():
     ])
 
     ts = trappsec.Sentry(app, service="TornadoApp", environment="Development")
+    atexit.register(ts.close)  # flush queued webhook/Slack deliveries on exit
 
-    ts.default_responses["unauthenticated"] = {
-        "status_code": 401,
-        "response_body": {"error": "authentication required"},
-        "mime_type": "application/json"
-    }
+    ts.default_unauthenticated_response(status=401, body={"error": "authentication required"})
 
     ts.identify_user(lambda r: {
         "user": r.headers.get("x-user-id"),

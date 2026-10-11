@@ -1,8 +1,8 @@
 'use strict';
 
 const {
-    normalizePath, isObject, buildWatchMap, hasFields, replaceInPlace, detect,
-    resolveTrap, emitWatch, stripRawQuery
+    normalizePath, hasFields, replaceInPlace, createWatchLookup, trapMethods,
+    inspectQuery, inspectBody, resolveTrap, emitWatch, stripRawQuery
 } = require('./_common');
 
 // Watches run in `onPostAuth`: the payload is parsed and credentials are set (so
@@ -15,15 +15,15 @@ class HapiIntegration {
         this.ts = ts;
         this.app = app;
         this._bootstrapped = false;
-        this._watchMap = null;
+        this._lookup = null;
 
         if (!this.ts.identity.ip) {
             this.ts.identity.ip = (request) => request.info?.remoteAddress || request.raw?.req?.socket?.remoteAddress || "0.0.0.0";
         }
 
-        this.ts.requestContext.path = (request) => normalizePath(request.path || request.url?.pathname || request.raw?.req?.url);
-        this.ts.requestContext.userAgent = (request) => request.headers?.["user-agent"] || null;
-        this.ts.requestContext.method = (request) => (request.method || "").toUpperCase();
+        this.ts.request.path = (request) => normalizePath(request.path || request.url?.pathname || request.raw?.req?.url);
+        this.ts.request.user_agent = (request) => request.headers?.["user-agent"] || null;
+        this.ts.request.method = (request) => (request.method || "").toUpperCase();
 
         const integration = this;
 
@@ -44,12 +44,9 @@ class HapiIntegration {
         // the route was added. The watch map is filled in by bootstrap().
         this.app.ext('onPostAuth', (request, h) => {
             try {
-                const watchMap = integration._watchMap;
-                if (watchMap) {
-                    const routePath = normalizePath(request.route?.path);
-                    const watch = routePath ? watchMap[routePath] : null;
-                    if (watch) integration._inspect(request, watch);
-                }
+                const lookup = integration._lookup;
+                const watch = lookup && lookup(request.route?.path);
+                if (watch) integration._inspect(request, watch);
             } catch (e) {
                 integration.ts.logger.error("Trappsec error in Hapi watch handler: ", e);
             }
@@ -77,7 +74,7 @@ class HapiIntegration {
     inject_traps() {
         for (const decoy of this.ts.traps) {
             // hapi serves HEAD for GET routes automatically and refuses explicit HEAD routes.
-            const methods = [...new Set(decoy.methods.map((m) => String(m).toUpperCase()))].filter((m) => m !== 'HEAD');
+            const methods = trapMethods(decoy).filter((m) => m !== 'HEAD');
             if (methods.length === 0) continue;
             this.app.route({
                 method: methods,
@@ -94,31 +91,22 @@ class HapiIntegration {
 
     setup_watches() {
         if (this.ts.watches.length === 0) return;
-        this._watchMap = buildWatchMap(this.ts);
+        this._lookup = createWatchLookup(this.ts);
     }
 
     _inspect(request, watch) {
         const found = [];
 
-        if (hasFields(watch.query_fields) && isObject(request.query)) {
-            const { found: f, data, touched } = detect(this.ts, request.query, watch.query_fields, request, 'query');
-            found.push(...f);
-            if (touched) {
-                replaceInPlace(request.query, data);
-                const keys = Object.keys(watch.query_fields);
-                const raw = request.raw && request.raw.req;
-                if (raw) raw.url = stripRawQuery(raw.url, keys);
-                if (request.url && typeof request.url.search === 'string') {
-                    request.url.search = stripRawQuery('?' + request.url.search.slice(1), keys).slice(1);
-                }
+        found.push(...inspectQuery(this.ts, request, request.query, watch, (data, keys) => {
+            replaceInPlace(request.query, data);
+            const raw = request.raw && request.raw.req;
+            if (raw) raw.url = stripRawQuery(raw.url, keys);
+            if (request.url && typeof request.url.search === 'string') {
+                request.url.search = stripRawQuery('?' + request.url.search.slice(1), keys).slice(1);
             }
-        }
+        }));
 
-        if (hasFields(watch.body_fields) && isObject(request.payload)) {
-            const { found: f, data, touched } = detect(this.ts, request.payload, watch.body_fields, request, 'body');
-            found.push(...f);
-            if (touched) replaceInPlace(request.payload, data);
-        }
+        if (hasFields(watch.body_fields)) found.push(...inspectBody(this.ts, request, request.payload, watch));
 
         emitWatch(this.ts, request, found, 'Hapi');
     }

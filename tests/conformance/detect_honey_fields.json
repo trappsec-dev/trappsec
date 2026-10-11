@@ -1,100 +1,237 @@
 {
-  "description": "Shared R4/R17/R18 cases for honey-field detection. Loaded by the Python, Node and Go unit tests. A rule without a \"default\" key means NO_DEFAULT (any presence is a violation). Every rule names an intent. Comparisons ignore the order of found_fields. A one-element list is reported as its element. Callable defaults and case-insensitive JSON keys (Go only) are covered by each language's own tests.",
+  "description": "Shared R4/R17/R18 cases for honey-field detection. Loaded by the Python, Node and Go unit tests. A rule without a \"default\" key means NO_DEFAULT (any presence is a violation). Every rule names an intent. Comparisons ignore the order of found_fields. A one-element list is reported as its element. Callable defaults and case-insensitive JSON keys (Go only) are covered by each language's own tests. {\"$nest\": n, \"leaf\": x} stands for x wrapped in n single-element lists.",
   "cases": [
     {
       "name": "default value is stripped without a violation",
-      "rules": {"role": {"default": "user", "intent": "Privilege Escalation"}},
-      "data": {"role": "user", "safe": "x"},
+      "rules": {
+        "role": {
+          "default": "user",
+          "intent": "Privilege Escalation"
+        }
+      },
+      "data": {
+        "role": "user",
+        "safe": "x"
+      },
       "found": [],
-      "result": {"safe": "x"},
+      "result": {
+        "safe": "x"
+      },
       "touched": true
     },
     {
       "name": "deviation from the default is stripped and reported",
-      "rules": {"role": {"default": "user", "intent": "Privilege Escalation"}},
-      "data": {"role": "admin", "safe": "x"},
-      "found": [{"field": "role", "value": "admin", "intent": "Privilege Escalation"}],
-      "result": {"safe": "x"},
+      "rules": {
+        "role": {
+          "default": "user",
+          "intent": "Privilege Escalation"
+        }
+      },
+      "data": {
+        "role": "admin",
+        "safe": "x"
+      },
+      "found": [
+        {
+          "field": "role",
+          "value": "admin",
+          "intent": "Privilege Escalation"
+        }
+      ],
+      "result": {
+        "safe": "x"
+      },
       "touched": true
     },
     {
       "name": "no default: any presence is a violation",
-      "rules": {"is_admin": {"intent": "Privilege Escalation"}},
-      "data": {"is_admin": false},
-      "found": [{"field": "is_admin", "value": false, "intent": "Privilege Escalation"}],
+      "rules": {
+        "is_admin": {
+          "intent": "Privilege Escalation"
+        }
+      },
+      "data": {
+        "is_admin": false
+      },
+      "found": [
+        {
+          "field": "is_admin",
+          "value": false,
+          "intent": "Privilege Escalation"
+        }
+      ],
       "result": {},
       "touched": true
     },
     {
       "name": "no default: null value is still a violation",
-      "rules": {"is_admin": {"intent": "Privilege Escalation"}},
-      "data": {"is_admin": null},
-      "found": [{"field": "is_admin", "value": null, "intent": "Privilege Escalation"}],
+      "rules": {
+        "is_admin": {
+          "intent": "Privilege Escalation"
+        }
+      },
+      "data": {
+        "is_admin": null
+      },
+      "found": [
+        {
+          "field": "is_admin",
+          "value": null,
+          "intent": "Privilege Escalation"
+        }
+      ],
       "result": {},
       "touched": true
     },
     {
       "name": "unwatched keys are left alone",
-      "rules": {"role": {"default": "user", "intent": "Privilege Escalation"}},
-      "data": {"name": "alice", "age": 30},
+      "rules": {
+        "role": {
+          "default": "user",
+          "intent": "Privilege Escalation"
+        }
+      },
+      "data": {
+        "name": "alice",
+        "age": 30
+      },
       "found": [],
-      "result": {"name": "alice", "age": 30},
+      "result": {
+        "name": "alice",
+        "age": 30
+      },
       "touched": false
     },
     {
       "name": "query source sets the field type",
       "source": "query",
-      "rules": {"discount_code": {"default": "NONE", "intent": "Coupon Tampering"}},
-      "data": {"discount_code": "BLACKHAT", "page": "2"},
-      "found": [{"field": "discount_code", "value": "BLACKHAT", "intent": "Coupon Tampering"}],
-      "result": {"page": "2"},
+      "rules": {
+        "discount_code": {
+          "default": "NONE",
+          "intent": "Coupon Tampering"
+        }
+      },
+      "data": {
+        "discount_code": "BLACKHAT",
+        "page": "2"
+      },
+      "found": [
+        {
+          "field": "discount_code",
+          "value": "BLACKHAT",
+          "intent": "Coupon Tampering"
+        }
+      ],
+      "result": {
+        "page": "2"
+      },
       "touched": true
     },
     {
       "name": "form string matches a numeric default",
-      "rules": {"credits": {"default": 0, "intent": "Credit Manipulation"}},
-      "data": {"credits": "0"},
+      "rules": {
+        "credits": {
+          "default": 0,
+          "intent": "Credit Manipulation"
+        }
+      },
+      "data": {
+        "credits": "0"
+      },
       "found": [],
       "result": {},
       "touched": true
     },
     {
       "name": "form string matches a boolean default",
-      "rules": {"agree": {"default": true, "intent": "Tampering"}},
-      "data": {"agree": "true"},
+      "rules": {
+        "agree": {
+          "default": true,
+          "intent": "Tampering"
+        }
+      },
+      "data": {
+        "agree": "true"
+      },
       "found": [],
       "result": {},
       "touched": true
     },
     {
       "name": "boolean is not a number",
-      "rules": {"credits": {"default": 0, "intent": "Credit Manipulation"}},
-      "data": {"credits": false},
-      "found": [{"field": "credits", "value": false, "intent": "Credit Manipulation"}],
+      "rules": {
+        "credits": {
+          "default": 0,
+          "intent": "Credit Manipulation"
+        }
+      },
+      "data": {
+        "credits": false
+      },
+      "found": [
+        {
+          "field": "credits",
+          "value": false,
+          "intent": "Credit Manipulation"
+        }
+      ],
       "result": {},
       "touched": true
     },
     {
       "name": "several watched fields in one request",
       "rules": {
-        "role": {"default": "user", "intent": "Privilege Escalation"},
-        "credits": {"default": 0, "intent": "Credit Manipulation"},
-        "plan": {"default": "free", "intent": "Plan Tampering"}
+        "role": {
+          "default": "user",
+          "intent": "Privilege Escalation"
+        },
+        "credits": {
+          "default": 0,
+          "intent": "Credit Manipulation"
+        },
+        "plan": {
+          "default": "free",
+          "intent": "Plan Tampering"
+        }
       },
-      "data": {"role": "admin", "credits": "9999", "plan": "free", "email": "a@example.com"},
+      "data": {
+        "role": "admin",
+        "credits": "9999",
+        "plan": "free",
+        "email": "a@example.com"
+      },
       "found": [
-        {"field": "role", "value": "admin", "intent": "Privilege Escalation"},
-        {"field": "credits", "value": "9999", "intent": "Credit Manipulation"}
+        {
+          "field": "role",
+          "value": "admin",
+          "intent": "Privilege Escalation"
+        },
+        {
+          "field": "credits",
+          "value": "9999",
+          "intent": "Credit Manipulation"
+        }
       ],
-      "result": {"email": "a@example.com"},
+      "result": {
+        "email": "a@example.com"
+      },
       "touched": true
     },
-
     {
       "name": "multi-valued: every element matching is clean",
       "source": "query",
-      "rules": {"role": {"default": "user", "intent": "Privilege Escalation"}},
-      "data": {"role": ["user", "user"]},
+      "rules": {
+        "role": {
+          "default": "user",
+          "intent": "Privilege Escalation"
+        }
+      },
+      "data": {
+        "role": [
+          "user",
+          "user"
+        ]
+      },
       "found": [],
       "result": {},
       "touched": true
@@ -102,26 +239,72 @@
     {
       "name": "multi-valued: one deviating element is a violation",
       "source": "query",
-      "rules": {"role": {"default": "user", "intent": "Privilege Escalation"}},
-      "data": {"role": ["user", "admin"]},
-      "found": [{"field": "role", "value": ["user", "admin"], "intent": "Privilege Escalation"}],
+      "rules": {
+        "role": {
+          "default": "user",
+          "intent": "Privilege Escalation"
+        }
+      },
+      "data": {
+        "role": [
+          "user",
+          "admin"
+        ]
+      },
+      "found": [
+        {
+          "field": "role",
+          "value": [
+            "user",
+            "admin"
+          ],
+          "intent": "Privilege Escalation"
+        }
+      ],
       "result": {},
       "touched": true
     },
     {
       "name": "multi-valued: no default is a violation",
       "source": "query",
-      "rules": {"debug": {"intent": "Debug Probe"}},
-      "data": {"debug": ["1", "1"]},
-      "found": [{"field": "debug", "value": ["1", "1"], "intent": "Debug Probe"}],
+      "rules": {
+        "debug": {
+          "intent": "Debug Probe"
+        }
+      },
+      "data": {
+        "debug": [
+          "1",
+          "1"
+        ]
+      },
+      "found": [
+        {
+          "field": "debug",
+          "value": [
+            "1",
+            "1"
+          ],
+          "intent": "Debug Probe"
+        }
+      ],
       "result": {},
       "touched": true
     },
     {
       "name": "one-element list is compared as its scalar",
       "source": "query",
-      "rules": {"credits": {"default": 5, "intent": "Credit Manipulation"}},
-      "data": {"credits": ["5"]},
+      "rules": {
+        "credits": {
+          "default": 5,
+          "intent": "Credit Manipulation"
+        }
+      },
+      "data": {
+        "credits": [
+          "5"
+        ]
+      },
       "found": [],
       "result": {},
       "touched": true
@@ -129,81 +312,227 @@
     {
       "name": "one-element list is reported as its scalar",
       "source": "query",
-      "rules": {"role": {"default": "user", "intent": "Privilege Escalation"}},
-      "data": {"role": ["admin"], "page": ["2"]},
-      "found": [{"field": "role", "value": "admin", "intent": "Privilege Escalation"}],
-      "result": {"page": ["2"]},
+      "rules": {
+        "role": {
+          "default": "user",
+          "intent": "Privilege Escalation"
+        }
+      },
+      "data": {
+        "role": [
+          "admin"
+        ],
+        "page": [
+          "2"
+        ]
+      },
+      "found": [
+        {
+          "field": "role",
+          "value": "admin",
+          "intent": "Privilege Escalation"
+        }
+      ],
+      "result": {
+        "page": [
+          "2"
+        ]
+      },
       "touched": true
     },
     {
       "name": "empty list against a scalar default is a violation",
-      "rules": {"role": {"default": "user", "intent": "Privilege Escalation"}},
-      "data": {"role": []},
-      "found": [{"field": "role", "value": [], "intent": "Privilege Escalation"}],
+      "rules": {
+        "role": {
+          "default": "user",
+          "intent": "Privilege Escalation"
+        }
+      },
+      "data": {
+        "role": []
+      },
+      "found": [
+        {
+          "field": "role",
+          "value": [],
+          "intent": "Privilege Escalation"
+        }
+      ],
       "result": {},
       "touched": true
     },
-
     {
       "name": "list default: equal list is clean",
-      "rules": {"tags": {"default": ["a", "b"], "intent": "Tag Tampering"}},
-      "data": {"tags": ["a", "b"]},
+      "rules": {
+        "tags": {
+          "default": [
+            "a",
+            "b"
+          ],
+          "intent": "Tag Tampering"
+        }
+      },
+      "data": {
+        "tags": [
+          "a",
+          "b"
+        ]
+      },
       "found": [],
       "result": {},
       "touched": true
     },
     {
       "name": "list default: equal one-element list is clean",
-      "rules": {"tags": {"default": ["a"], "intent": "Tag Tampering"}},
-      "data": {"tags": ["a"]},
+      "rules": {
+        "tags": {
+          "default": [
+            "a"
+          ],
+          "intent": "Tag Tampering"
+        }
+      },
+      "data": {
+        "tags": [
+          "a"
+        ]
+      },
       "found": [],
       "result": {},
       "touched": true
     },
     {
       "name": "list default: empty list matches an empty default",
-      "rules": {"tags": {"default": [], "intent": "Tag Tampering"}},
-      "data": {"tags": []},
+      "rules": {
+        "tags": {
+          "default": [],
+          "intent": "Tag Tampering"
+        }
+      },
+      "data": {
+        "tags": []
+      },
       "found": [],
       "result": {},
       "touched": true
     },
     {
       "name": "list default: different list is a violation",
-      "rules": {"tags": {"default": ["a", "b"], "intent": "Tag Tampering"}},
-      "data": {"tags": ["a", "admin"]},
-      "found": [{"field": "tags", "value": ["a", "admin"], "intent": "Tag Tampering"}],
+      "rules": {
+        "tags": {
+          "default": [
+            "a",
+            "b"
+          ],
+          "intent": "Tag Tampering"
+        }
+      },
+      "data": {
+        "tags": [
+          "a",
+          "admin"
+        ]
+      },
+      "found": [
+        {
+          "field": "tags",
+          "value": [
+            "a",
+            "admin"
+          ],
+          "intent": "Tag Tampering"
+        }
+      ],
       "result": {},
       "touched": true
     },
     {
       "name": "object default: equal object is clean",
-      "rules": {"perms": {"default": {}, "intent": "Permission Tampering"}},
-      "data": {"perms": {}},
+      "rules": {
+        "perms": {
+          "default": {},
+          "intent": "Permission Tampering"
+        }
+      },
+      "data": {
+        "perms": {}
+      },
       "found": [],
       "result": {},
       "touched": true
     },
     {
       "name": "object default: numerically equal object is clean",
-      "rules": {"limits": {"default": {"max": 10}, "intent": "Limit Tampering"}},
-      "data": {"limits": {"max": 10.0}},
+      "rules": {
+        "limits": {
+          "default": {
+            "max": 10
+          },
+          "intent": "Limit Tampering"
+        }
+      },
+      "data": {
+        "limits": {
+          "max": 10.0
+        }
+      },
       "found": [],
       "result": {},
       "touched": true
     },
-
     {
       "name": "top-level array: object elements are inspected and stripped",
-      "rules": {"role": {"default": "user", "intent": "Privilege Escalation"}},
-      "data": [{"role": "admin", "id": 1}, "skip", 3, {"role": "user", "id": 2}, {"id": 3}],
-      "found": [{"field": "role", "value": "admin", "intent": "Privilege Escalation"}],
-      "result": [{"id": 1}, "skip", 3, {"id": 2}, {"id": 3}],
+      "rules": {
+        "role": {
+          "default": "user",
+          "intent": "Privilege Escalation"
+        }
+      },
+      "data": [
+        {
+          "role": "admin",
+          "id": 1
+        },
+        "skip",
+        3,
+        {
+          "role": "user",
+          "id": 2
+        },
+        {
+          "id": 3
+        }
+      ],
+      "found": [
+        {
+          "field": "role",
+          "value": "admin",
+          "intent": "Privilege Escalation"
+        }
+      ],
+      "result": [
+        {
+          "id": 1
+        },
+        "skip",
+        3,
+        {
+          "id": 2
+        },
+        {
+          "id": 3
+        }
+      ],
       "touched": true
     },
     {
       "name": "top-level scalar is skipped",
-      "rules": {"role": {"default": "user", "intent": "Privilege Escalation"}},
+      "rules": {
+        "role": {
+          "default": "user",
+          "intent": "Privilege Escalation"
+        }
+      },
       "data": "role",
       "found": [],
       "result": "role",
@@ -211,7 +540,12 @@
     },
     {
       "name": "top-level null is skipped",
-      "rules": {"role": {"default": "user", "intent": "Privilege Escalation"}},
+      "rules": {
+        "role": {
+          "default": "user",
+          "intent": "Privilege Escalation"
+        }
+      },
       "data": null,
       "found": [],
       "result": null,
@@ -219,26 +553,99 @@
     },
     {
       "name": "nested objects are not inspected",
-      "rules": {"role": {"default": "user", "intent": "Privilege Escalation"}},
-      "data": {"user": {"role": "admin"}},
+      "rules": {
+        "role": {
+          "default": "user",
+          "intent": "Privilege Escalation"
+        }
+      },
+      "data": {
+        "user": {
+          "role": "admin"
+        }
+      },
       "found": [],
-      "result": {"user": {"role": "admin"}},
+      "result": {
+        "user": {
+          "role": "admin"
+        }
+      },
       "touched": false
     },
     {
       "name": "object-prototype key names never match unconfigured rules",
-      "rules": {"role": {"default": "user", "intent": "Privilege Escalation"}},
-      "data": {"constructor": "x", "toString": "y", "hasOwnProperty": "z", "__proto__": "w"},
+      "rules": {
+        "role": {
+          "default": "user",
+          "intent": "Privilege Escalation"
+        }
+      },
+      "data": {
+        "constructor": "x",
+        "toString": "y",
+        "hasOwnProperty": "z",
+        "__proto__": "w"
+      },
       "found": [],
-      "result": {"constructor": "x", "toString": "y", "hasOwnProperty": "z", "__proto__": "w"},
+      "result": {
+        "constructor": "x",
+        "toString": "y",
+        "hasOwnProperty": "z",
+        "__proto__": "w"
+      },
       "touched": false
     },
     {
       "name": "a rule named constructor works when configured",
-      "rules": {"constructor": {"intent": "Prototype Probe"}},
-      "data": {"constructor": "x", "safe": 1},
-      "found": [{"field": "constructor", "value": "x", "intent": "Prototype Probe"}],
-      "result": {"safe": 1},
+      "rules": {
+        "constructor": {
+          "intent": "Prototype Probe"
+        }
+      },
+      "data": {
+        "constructor": "x",
+        "safe": 1
+      },
+      "found": [
+        {
+          "field": "constructor",
+          "value": "x",
+          "intent": "Prototype Probe"
+        }
+      ],
+      "result": {
+        "safe": 1
+      },
+      "touched": true
+    },
+    {
+      "name": "a very deeply nested value is still reported and stripped",
+      "rules": {
+        "honey": {
+          "default": "x",
+          "intent": "Recon"
+        }
+      },
+      "data": {
+        "honey": {
+          "$nest": 5000,
+          "leaf": 1
+        },
+        "safe": "x"
+      },
+      "found": [
+        {
+          "field": "honey",
+          "value": {
+            "$nest": 32,
+            "leaf": "<nested>"
+          },
+          "intent": "Recon"
+        }
+      ],
+      "result": {
+        "safe": "x"
+      },
       "touched": true
     }
   ]

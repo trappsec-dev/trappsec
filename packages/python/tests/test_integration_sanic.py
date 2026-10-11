@@ -266,3 +266,70 @@ def test_watch_on_blueprint_route():
     events = hits(cap, "trappsec.watch_hit")
     assert len(events) == 1
     assert {f["field"] for f in events[0]["found_fields"]} == {"debug", "is_admin"}
+
+
+def _multipart(boundary, *parts):
+    out = b""
+    for head, value in parts:
+        out += b"--" + boundary + b"\r\n" + head + b"\r\n\r\n" + value + b"\r\n"
+    return out + b"--" + boundary + b"--\r\n"
+
+
+def test_multipart_boundary_text_inside_value_does_not_end_parsing():
+    app, s, cap = make_app(watch_x)
+    body = _multipart(
+        b"XB",
+        (b'Content-Disposition: form-data; name="a"', b"1 --XB-- 2"),
+        (b'Content-Disposition: form-data; name="x"', b"evil"),
+        (b'Content-Disposition: form-data; name="b"', b"3"),
+    )
+    _, r = app.test_client.post("/echo", content=body, headers={"content-type": "multipart/form-data; boundary=XB"})
+    d = r.json
+    # (Sanic's own multipart parser chokes on boundary text in a value; the body
+    # it is handed must still be intact apart from the stripped part.)
+    assert "evil" not in d["body"] and "1 --XB-- 2" in d["body"] and 'name="b"' in d["body"]
+    (hit,) = hits(cap, "trappsec.watch_hit")
+    assert [f["field"] for f in hit["found_fields"]] == ["x"]
+
+
+def test_multipart_file_part_under_watched_name_detected_and_stripped():
+    app, s, cap = make_app(watch_x)
+    _, r = app.test_client.post("/echo", files={"x": ("a.txt", b"secret-bytes"), "f": ("f.txt", b"hello")})
+    d = r.json
+    assert "secret-bytes" not in d["body"] and "hello" in d["body"]
+    (hit,) = hits(cap, "trappsec.watch_hit")
+    assert hit["found_fields"][0]["field"] == "x"
+    assert hit["found_fields"][0]["value"] == "<bytes>"
+
+
+def test_single_occurrence_scalar_multiple_occurrences_list():
+    app, s, cap = make_app(watch_x)
+    app.test_client.get("/echo?x=one")
+    app.test_client.get("/echo?x=one&x=two")
+    one, two = [h["found_fields"][0]["value"] for h in hits(cap, "trappsec.watch_hit")]
+    assert one == "one" and two == ["one", "two"]
+
+
+def test_unrelated_non_utf8_query_value_preserved():
+    app, s, cap = make_app(lambda s: s.watch("/echo").query("a"))
+    _, r = app.test_client.get("/echo?p=%ff&a=1&q=%C3%A9")
+    assert r.json["query_string"] == "p=%ff&q=%C3%A9"
+
+
+def test_route_pattern_normalisation_is_memoised():
+    from trappsec.integrations.sanic import SanicIntegration
+    SanicIntegration._normalize_route_pattern.cache_clear()
+    for _ in range(3):
+        assert SanicIntegration._normalize_route_pattern("/u/<id:int>/") == "/u/<id>"
+    assert SanicIntegration._normalize_route_pattern.cache_info().hits == 2
+
+
+def test_failing_trap_event_answers_with_the_traps_own_unauthenticated_response():
+    app, s, cap = make_app(lambda s: s.trap("/t403").if_unauthenticated(status=403, body={"no": 1}))
+
+    def boom(*a, **k):
+        raise RuntimeError("emit failed")
+
+    s._trigger_trap_event = boom
+    _, r = app.test_client.get("/t403")
+    assert r.status == 403 and r.json == {"no": 1}

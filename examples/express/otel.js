@@ -9,9 +9,9 @@ function setupOpentelemetry() {
             for (const span of spans) {
                 const payload = {
                     resource: { attributes: span.resource.attributes },
-                    instrumentationScope: span.instrumentationLibrary,
+                    instrumentationScope: span.instrumentationScope,
                     traceId: span.spanContext().traceId,
-                    parentId: span.parentSpanId,
+                    parentId: span.parentSpanContext?.spanId,
                     traceState: span.spanContext().traceState?.serialize(),
                     name: span.name,
                     id: span.spanContext().spanId,

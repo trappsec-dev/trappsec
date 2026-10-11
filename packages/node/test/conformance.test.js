@@ -17,16 +17,34 @@ function load(name) {
   return JSON.parse(fs.readFileSync(file, "utf8")).cases;
 }
 
+// Placeholders: {"$repeat": s, "count": n, "prefix", "suffix"} and
+// {"$nest": n, "leaf": x} (x in n one-element lists, built iteratively so a
+// 5000-deep fixture cannot overflow the loader's own stack).
+function expand(v) {
+  if (Array.isArray(v)) return v.map(expand);
+  if (v !== null && typeof v === "object") {
+    if ("$repeat" in v) return (v.prefix || "") + v.$repeat.repeat(v.count) + (v.suffix || "");
+    if ("$nest" in v) {
+      let out = expand(v.leaf);
+      for (let i = 0; i < v.$nest; i++) out = [out];
+      return out;
+    }
+    return Object.fromEntries(Object.entries(v).map(([k, x]) => [k, expand(x)]));
+  }
+  return v;
+}
+
 const quiet = { error() {}, warn() {}, info() {}, log() {} };
 const byField = (a, b) => (a.field < b.field ? -1 : a.field > b.field ? 1 : 0);
 
 for (const c of load("values_match.json")) {
-  test(`values_match(${JSON.stringify(c.actual)}, ${JSON.stringify(c.expected)}) is ${c.match}`, () => {
-    assert.equal(values_match(c.actual, c.expected), c.match);
+  test(`values_match(${JSON.stringify(c.actual).slice(0, 80)}, ${JSON.stringify(c.expected).slice(0, 80)}) is ${c.match}`, () => {
+    assert.equal(values_match(expand(c.actual), expand(c.expected)), c.match);
   });
 }
 
-for (const c of load("detect_honey_fields.json")) {
+for (const raw of load("detect_honey_fields.json")) {
+  const c = expand(raw);
   test(`detect_honey_fields: ${c.name}`, () => {
     const source = c.source || "body";
     const wb = new WatchBuilder("/x");
@@ -75,15 +93,6 @@ test("event keys match tests/conformance/event_keys.json", (t) => {
   assert.deepEqual(sorted(Object.keys(events[1].found_fields[0])), sorted(fx.found_field));
 });
 
-function expand(v) {
-  if (Array.isArray(v)) return v.map(expand);
-  if (v !== null && typeof v === "object") {
-    if ("$repeat" in v) return (v.prefix || "") + v.$repeat.repeat(v.count) + (v.suffix || "");
-    return Object.fromEntries(Object.entries(v).map(([k, x]) => [k, expand(x)]));
-  }
-  return v;
-}
-
 const { safe_value } = require("../src/core");
 for (const c of load("safe_value.json")) {
   test(`safe_value: ${c.name}`, () => {
@@ -105,3 +114,25 @@ test("event path and user_agent truncation", (t) => {
   assert.equal(events[0].path, fx.path_out);
   assert.equal(events[0].user_agent, fx.user_agent_out);
 });
+
+const isTrapFx = (() => {
+  const file = path.join(CONFORMANCE, "is_trap.json");
+  if (!fs.existsSync(file) && !process.env.CI) return null;
+  return JSON.parse(fs.readFileSync(file, "utf8"));
+})();
+
+if (isTrapFx) {
+  const ts = Object.create(Sentry.prototype);
+  ts.logger = quiet;
+  ts._traps = [];
+  ts._trap_index = null;
+  for (const t of isTrapFx.traps) ts.trap(t.path).methods(...t.methods);
+  let cur = {};
+  ts.request = { path: () => cur.path, method: () => cur.method, user_agent: () => null };
+  for (const c of isTrapFx.cases) {
+    test(`is_trap: ${c.method} ${c.path} is ${c.is_trap}`, () => {
+      cur = c;
+      assert.equal(ts.is_trap(c), c.is_trap);
+    });
+  }
+}

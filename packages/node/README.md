@@ -13,7 +13,7 @@ const ts = new Sentry(app, 'my-service', 'production');
 ts.identify_user(req => req.user ? { user: req.user.id, role: req.user.role } : null);
 
 ts.trap('/admin/backup').intent('Recon').respond({ status: 200, body: { ok: true } });
-ts.watch('/profile').body('is_admin', { defaultValue: false, intent: 'Privilege escalation' });
+ts.watch('/profile').body('is_admin', { default: false, intent: 'Privilege escalation' });
 
 ts.add_webhook('https://example.com/hook', { secret: process.env.HOOK_SECRET });
 
@@ -25,10 +25,13 @@ app.listen(3000);
 - `new Sentry(app, service, environment)`
 - `trap(path)` / `watch(path)` / `template(name, status, body, mime?)`
 - `identify_user(cb)` / `override_source_ip(cb)`
+- `default_response(opts)` / `default_unauthenticated_response(opts)` set the responses of traps that do not call `respond` / `if_unauthenticated`
 - `add_webhook(url, opts)` / `add_slack(url, opts)` / `add_otel()`
-- `trigger(req, reason, intent?, metadata?)` emits a `trappsec.rule_hit` event
+- `trigger(req, reason, { intent, metadata })` emits a `trappsec.rule_hit` event
 - `bootstrap()` installs traps and watches (idempotent; called by `listen`)
-- `close(timeout?)` stops heartbeats and flushes pending deliveries
+- `close(timeout?)` stops heartbeats and flushes pending deliveries (`timeout` in seconds, default 5)
+
+The API matches the Python SDK name for name (`default`, `mime_type`, `alerts_only`, `ts.request`, timeouts in seconds), so examples translate directly between the two.
 
 ## Webhook signing
 

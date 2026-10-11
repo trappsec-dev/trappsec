@@ -1,4 +1,5 @@
 import json
+import re
 import threading
 import uuid
 from contextlib import asynccontextmanager
@@ -13,13 +14,36 @@ class TrapConflictError(RuntimeError):
 
 _ERRORS = "surrogateescape"
 _TAG = "__trappsec_watch__"
-MAX_SNIFF_BYTES = 10 * 1024 * 1024
+MAX_INSPECT_BYTES = 10 * 1024 * 1024
+MAX_SNIFF_BYTES = MAX_INSPECT_BYTES  # backwards-compatible alias
+
+_CONVERTER_RE = re.compile(r"\{([^}:]+):[^}]*\}")
 
 
-def _mime(headers):
+def _norm_path(path):
+    """Canonical route key: ``{name:conv}`` -> ``{name}``, no trailing slash (except "/")."""
+    path = _CONVERTER_RE.sub(r"{\1}", path or "")
+    return path.rstrip("/") or "/"
+
+
+def _group_pairs(pairs):
+    """[(k, v), ...] -> {k: scalar | [v, v, ...]} (lists only for repeated keys)."""
+    out = {}
+    for k, v in pairs:
+        if k in out:
+            if isinstance(out[k], list):
+                out[k].append(v)
+            else:
+                out[k] = [out[k], v]
+        else:
+            out[k] = v
+    return out
+
+
+def _header(headers, name):
     for k, v in headers:
-        if k == b"content-type":
-            return v.decode("latin-1").split(";")[0].strip().lower()
+        if k == name:
+            return v.decode("latin-1")
     return ""
 
 
@@ -41,6 +65,16 @@ class _Bootstrapper:
         if integ is not None and not integ._bootstrapped:
             integ._ensure_bootstrapped()
         await self.app(scope, receive, send)
+
+
+def _replay(messages, original):
+    pending = list(messages)
+
+    async def _receive():
+        if pending:
+            return pending.pop(0)
+        return await original()
+    return _receive
 
 
 class StarletteIntegration:
@@ -93,7 +127,7 @@ class StarletteIntegration:
                 for item in self._iter_routes(list(sub), mount_prefix):
                     yield item
             elif hasattr(route, "path") and hasattr(route, "app") and hasattr(route, "methods"):
-                yield prefix + route.path, route
+                yield _norm_path(prefix + route.path), route
 
     def _check_conflicts(self, traps):
         existing = {}
@@ -102,22 +136,13 @@ class StarletteIntegration:
 
         for trap in traps:
             wanted = set(m.upper() for m in trap["methods"])
-            for route in existing.get(trap["path"], []):
+            for route in existing.get(_norm_path(trap["path"]), []):
                 methods = route.methods
                 if methods is None or set(methods) & wanted:
                     raise TrapConflictError(
                         "trappsec error: trap %s %s duplicates an existing route."
                         % (sorted(wanted), trap["path"])
                     )
-
-    def _fallback(self, trap):
-        cfg = trap["response.unauthenticated"]
-        body = cfg.get("response_body")
-        if callable(body):
-            body = {}
-        if not isinstance(body, (str, bytes)):
-            body = json.dumps(body, default=str)
-        return body, cfg
 
     def _make_trap_endpoint(self, trap):
         from starlette.responses import Response
@@ -127,7 +152,7 @@ class StarletteIntegration:
                 response_body, response_config = self.ts._trigger_trap_event(req, trap)
             except Exception as e:
                 self.ts.logger.error("trappsec trap handling failed: %s", e)
-                response_body, response_config = self._fallback(trap)
+                response_body, response_config = self.ts._trap_fallback(trap)
             return Response(
                 response_body,
                 status_code=response_config["status_code"],
@@ -158,7 +183,7 @@ class StarletteIntegration:
     # ----------------------------------------------------------------- watches
 
     def setup_watches(self):
-        self.watch_map = {w["path"]: w for w in self.ts.watches}
+        self.watch_map = {_norm_path(w["path"]): w for w in self.ts.watches}
         if not self.watch_map:
             return
         self._wrap_routes(self.app.router.routes)
@@ -198,135 +223,124 @@ class StarletteIntegration:
         if scope.get("type") != "http":
             return scope, receive
 
-        ts = self.ts
         found_fields = []
-        query_fields = watch["query_fields"]
-        body_fields = watch["body_fields"]
-        new_scope = scope
-        new_receive = receive
+        new_scope, new_receive = scope, receive
 
-        if query_fields:
-            qs = scope.get("query_string", b"")
-            if qs:
-                pairs = parse_qsl(qs.decode("latin-1"), keep_blank_values=True, errors=_ERRORS)
-                q = {}
-                for k, v in pairs:
-                    q.setdefault(k, []).append(v)
-                q, mod, touched = ts._detect_honey_fields(
-                    q, query_fields, Request(scope), source="query")
-                found_fields.extend(mod)
-                if touched:
-                    new_scope = dict(new_scope)
-                    new_scope["query_string"] = urlencode(
-                        q, doseq=True, errors=_ERRORS).encode("latin-1")
-
-        if body_fields:
-            headers = scope.get("headers", [])
-            mime = _mime(headers)
-            kind = None
-            if mime == "application/json" or mime.endswith("+json"):
-                kind = "json"
-            elif mime == "application/x-www-form-urlencoded":
-                kind = "urlencoded"
-            elif mime == "multipart/form-data":
-                kind = "multipart"
-            else:
-                # request.json() ignores Content-Type: sniff any other body.
-                kind = "sniff"
-
-            if kind:
-                messages = []
-                chunks = []
-                total = 0
-                oversized = False
-                while True:
-                    message = await receive()
-                    messages.append(message)
-                    if message["type"] != "http.request":
-                        break
-                    chunk = message.get("body", b"")
-                    chunks.append(chunk)
-                    total += len(chunk)
-                    if not message.get("more_body", False):
-                        break
-                    if kind == "sniff" and total > MAX_SNIFF_BYTES:
-                        oversized = True  # too big to be worth sniffing: replay and stream
-                        break
-                raw = b"".join(chunks)
-
-                def replay(msgs, original):
-                    pending = list(msgs)
-
-                    async def _receive():
-                        if pending:
-                            return pending.pop(0)
-                        return await original()
-                    return _receive
-
-                new_receive = replay(messages, receive)
-                req = Request(new_scope)
-                new_body = None
-                try:
-                    if oversized:
-                        pass
-                    elif kind in ("json", "sniff"):
-                        if kind == "json":
-                            data = _jsonbody.parse_json_bytes(raw)
-                        else:
-                            data = _jsonbody.sniff_json(raw)
-                        if data is not None:
-                            data, mod, touched = ts._detect_honey_fields(
-                                data, body_fields, req, source="body")
-                            found_fields.extend(mod)
-                            if touched:
-                                new_body = _jsonbody.serialize(data)
-                                ct = _jsonbody.fix_charset(
-                                    next((v.decode("latin-1") for k, v in headers
-                                          if k == b"content-type"), ""))
-                                if ct is not None:
-                                    headers = _set_header(headers, b"content-type", ct.encode("latin-1"))
-                    elif kind == "urlencoded":
-                        form = {}
-                        for k, v in parse_qsl(raw.decode("utf-8", _ERRORS),
-                                              keep_blank_values=True, errors=_ERRORS):
-                            form.setdefault(k, []).append(v)
-                        form, mod, touched = ts._detect_honey_fields(
-                            form, body_fields, req, source="body")
-                        found_fields.extend(mod)
-                        if touched:
-                            new_body = urlencode(form, doseq=True, errors=_ERRORS).encode("utf-8", _ERRORS)
-                    else:
-                        new_body, new_headers, mod = await self._inspect_multipart(
-                            new_scope, new_receive, raw, headers, body_fields, req)
-                        found_fields.extend(mod)
-                        if new_body is not None:
-                            headers = new_headers
-                except Exception as e:
-                    ts.logger.error("error inspecting %s body: %s", kind, e)
-                    new_body = None
-
-                if new_body is not None:
-                    headers = _set_header(headers, b"content-length", str(len(new_body)).encode("ascii"))
-                    new_scope = dict(new_scope)
-                    new_scope["headers"] = headers
-                    sent = []
-
-                    async def stripped_receive(_orig=receive):
-                        if not sent:
-                            sent.append(True)
-                            return {"type": "http.request", "body": new_body, "more_body": False}
-                        return await _orig()
-                    new_receive = stripped_receive
+        if watch["query_fields"]:
+            new_scope = self._inspect_query(scope, watch["query_fields"], found_fields)
+        if watch["body_fields"]:
+            new_scope, new_receive = await self._inspect_body(
+                new_scope, receive, watch["body_fields"], found_fields)
 
         if found_fields:
             try:
-                ts._trigger_watch_event(Request(new_scope), found_fields)
+                self.ts._trigger_watch_event(Request(new_scope), found_fields)
             except Exception as e:
-                ts.logger.error("error triggering watch event: %s", e)
+                self.ts.logger.error("error triggering watch event: %s", e)
 
         return new_scope, new_receive
 
-    async def _inspect_multipart(self, scope, receive, raw, headers, body_fields, req):
+    def _inspect_query(self, scope, query_fields, found_fields):
+        from starlette.requests import Request
+
+        qs = scope.get("query_string", b"")
+        if not qs:
+            return scope
+        pairs = parse_qsl(qs.decode("latin-1"), keep_blank_values=True, errors=_ERRORS)
+        q, mod, touched = self.ts._detect_honey_fields(
+            _group_pairs(pairs), query_fields, Request(scope), source="query")
+        found_fields.extend(mod)
+        if not touched:
+            return scope
+        scope = dict(scope)
+        scope["query_string"] = urlencode(q, doseq=True, errors=_ERRORS).encode("latin-1")
+        return scope
+
+    @staticmethod
+    async def _buffer_body(receive, headers):
+        """Read the request body. Returns (messages, raw); raw is None when the
+        body is too large to inspect (messages read so far are replayed, the rest streams)."""
+        try:
+            length = int(_header(headers, b"content-length") or 0)
+        except ValueError:
+            length = 0
+        if length > MAX_INSPECT_BYTES:
+            return [], None
+        messages, chunks, total = [], [], 0
+        while True:
+            message = await receive()
+            messages.append(message)
+            if message["type"] != "http.request":
+                break
+            chunk = message.get("body", b"")
+            chunks.append(chunk)
+            total += len(chunk)
+            if not message.get("more_body", False):
+                break
+            if total > MAX_INSPECT_BYTES:
+                return messages, None
+        return messages, b"".join(chunks)
+
+    async def _inspect_body(self, scope, receive, body_fields, found_fields):
+        from starlette.requests import Request
+
+        ts = self.ts
+        headers = scope.get("headers", [])
+        messages, raw = await self._buffer_body(receive, headers)
+        if raw is None:
+            return scope, _replay(messages, receive)  # oversized: pass through uninspected
+
+        new_receive = _replay(messages, receive)
+        media = _jsonbody.media_type(_header(headers, b"content-type"))
+        req = Request(scope)
+        new_body = None
+        try:
+            if media == "application/x-www-form-urlencoded":
+                form = _group_pairs(parse_qsl(raw.decode("utf-8", _ERRORS),
+                                              keep_blank_values=True, errors=_ERRORS))
+                form, mod, touched = ts._detect_honey_fields(form, body_fields, req, source="body")
+                found_fields.extend(mod)
+                if touched:
+                    new_body = urlencode(form, doseq=True, errors=_ERRORS).encode("utf-8", _ERRORS)
+            elif media == "multipart/form-data":
+                new_body, new_headers, mod = await self._inspect_multipart(
+                    scope, raw, headers, body_fields, req)
+                found_fields.extend(mod)
+                if new_body is not None:
+                    headers = new_headers
+            else:
+                # request.json() ignores Content-Type: sniff any non-JSON body.
+                if _jsonbody.is_json_media(media):
+                    data = _jsonbody.parse_json_bytes(raw)
+                else:
+                    data = _jsonbody.sniff_json(raw)
+                if data is not None:
+                    data, mod, touched = ts._detect_honey_fields(data, body_fields, req, source="body")
+                    found_fields.extend(mod)
+                    if touched:
+                        new_body = _jsonbody.serialize(data)
+                        ct = _jsonbody.fix_charset(_header(headers, b"content-type"))
+                        if ct is not None:
+                            headers = _set_header(headers, b"content-type", ct.encode("latin-1"))
+        except Exception as e:
+            ts.logger.error("error inspecting request body: %s", e)
+            new_body = None
+
+        if new_body is None:
+            return scope, new_receive
+
+        scope = dict(scope)
+        scope["headers"] = _set_header(headers, b"content-length", str(len(new_body)).encode("ascii"))
+        sent = []
+
+        async def stripped_receive():
+            if not sent:
+                sent.append(True)
+                return {"type": "http.request", "body": new_body, "more_body": False}
+            return await receive()
+        return scope, stripped_receive
+
+    async def _inspect_multipart(self, scope, raw, headers, body_fields, req):
         """Parse multipart, detect/strip watched fields, re-serialise only if touched.
 
         Returns (new_body_or_None, new_headers, found_fields).
@@ -344,9 +358,7 @@ class StarletteIntegration:
         form = await Request(scope, parse_receive).form()
         try:
             items = list(form.multi_items())
-            data = {}
-            for k, v in items:
-                data.setdefault(k, []).append(v)
+            data = _group_pairs(items)
             data, mod, touched = self.ts._detect_honey_fields(
                 data, body_fields, req, source="body")
             if not touched:

@@ -2,8 +2,6 @@
 
 // Helpers shared by every trappsec Node integration.
 
-const hasOwn = (obj, key) => Object.prototype.hasOwnProperty.call(obj, key);
-
 // Canonical form used for every watch/trap lookup key, in every integration:
 // query string and fragment removed, leading slash ensured, trailing slash
 // removed (except for the root path). Non-string input (RegExp, array) -> null.
@@ -50,6 +48,28 @@ function buildWatchMap(ts) {
     return map;
 }
 
+// Memoised raw route pattern -> watch lookup (null when unwatched). Route patterns
+// are a small fixed set, so the normalisation runs once per route, not per request.
+function createWatchLookup(ts) {
+    const map = buildWatchMap(ts);
+    const memo = new Map();
+    return (raw) => {
+        if (typeof raw !== 'string') return null;
+        let watch = memo.get(raw);
+        if (watch === undefined) {
+            const key = normalizePath(raw);
+            watch = (key && map[key]) || null;
+            memo.set(raw, watch);
+        }
+        return watch;
+    };
+}
+
+// Upper-cased, de-duplicated HTTP methods of a trap.
+function trapMethods(decoy) {
+    return [...new Set(decoy.methods.map((m) => String(m).toUpperCase()))];
+}
+
 function hasFields(rules) {
     return !!rules && Object.keys(rules).length > 0;
 }
@@ -79,6 +99,40 @@ function detect(ts, target, rules, req, source) {
     const result = ts._detect_honey_fields(target, rules, req, source);
     const found = (result.found_fields || []).map((f) => Object.assign({}, f, { type: source }));
     return { found, data: result.data, touched: !!result.touched };
+}
+
+// Query half of a watch inspection. `apply(data, keys)` writes the stripped query
+// back in the framework's own way when a honey field was found. Returns the findings.
+function inspectQuery(ts, req, query, watch, apply) {
+    if (!hasFields(watch.query_fields) || !isObject(query)) return [];
+    const { found, data, touched } = detect(ts, query, watch.query_fields, req, 'query');
+    if (touched) apply(data, Object.keys(watch.query_fields));
+    return found;
+}
+
+// Body half: detects in `body` and strips honey fields in place.
+function inspectBody(ts, req, body, watch) {
+    if (!isObject(body)) return [];
+    const { found, data, touched } = detect(ts, body, watch.body_fields, req, 'body');
+    if (touched) replaceInPlace(body, data);
+    return found;
+}
+
+// Completes a deferred body inspection (see bodyLooksUnparsed). `body` is the
+// framework's current body; `warning` (optional) is logged once when a body
+// method has none.
+function finishPending(ts, warned, req, pending, { label, body, method, responseEnded, warning }) {
+    try {
+        const found = pending.found;
+        if (body !== undefined) {
+            found.push(...inspectBody(ts, req, body, pending.watch));
+        } else if (warning && !responseEnded && BODY_METHODS.has(String(method).toUpperCase())) {
+            warnOnce(ts, warned, 'body:' + pending.watch.path, warning);
+        }
+        emitWatch(ts, req, found, label);
+    } catch (e) {
+        ts.logger.error(`Trappsec error in ${label} watch handler: `, e);
+    }
 }
 
 function serializeBody(body, mimeType) {
@@ -189,10 +243,14 @@ const BODY_METHODS = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
 module.exports = {
     bodyLooksUnparsed,
     stripRawQuery,
-    hasOwn,
     normalizePath,
     isObject,
     buildWatchMap,
+    createWatchLookup,
+    trapMethods,
+    inspectQuery,
+    inspectBody,
+    finishPending,
     hasFields,
     replaceInPlace,
     detect,

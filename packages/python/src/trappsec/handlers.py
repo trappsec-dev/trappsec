@@ -2,6 +2,8 @@ import logging
 import json
 import hmac
 import hashlib
+import inspect
+import math
 import os
 import queue
 import threading
@@ -20,10 +22,40 @@ _MAX_RETRIES = 2
 _STOP = object()
 
 
+_async_warned = set()
+
+
+def _reject_awaitable(value, kind: str, logger) -> bool:
+    """True when a user callback returned an awaitable (it must be synchronous).
+
+    The awaitable is closed so Python does not warn "never awaited", and the
+    mistake is logged once per callback kind.
+    """
+    if not inspect.isawaitable(value):
+        return False
+    close = getattr(value, "close", None)
+    if callable(close):
+        try:
+            close()
+        except Exception:
+            pass
+    if kind not in _async_warned:
+        _async_warned.add(kind)
+        logger.error("%s callback returned an awaitable; it must be a synchronous function, so its result is ignored", kind)
+    return True
+
+
 def _truncate_text(value: str, limit: int = 1024) -> str:
     if len(value) <= limit:
         return value
     return value[:limit] + "..."
+
+
+def _is_positive_finite(v) -> bool:
+    try:
+        return not isinstance(v, bool) and math.isfinite(v) and v > 0
+    except TypeError:
+        return False
 
 
 def _dumps(event) -> str:
@@ -76,8 +108,11 @@ class WebhookHandler(BaseHandler):
         self.alerts_only = alerts_only
         self.timeout = timeout
         self.retry_backoff = 0.5
-        self.heartbeat_interval = heartbeat_interval
         self.logger = logging.getLogger("trappsec")
+        if heartbeat_interval is not None and not (_is_positive_finite(heartbeat_interval)):
+            self.logger.warning("trappsec webhook heartbeat_interval must be a positive number of seconds; heartbeat disabled")
+            heartbeat_interval = None
+        self.heartbeat_interval = heartbeat_interval
         
         self.headers = {"Content-Type": "application/json"}
         self.headers.update(headers or {})
@@ -129,6 +164,8 @@ class WebhookHandler(BaseHandler):
         if self.template:
             try:
                 event = self.template(event)
+                if _reject_awaitable(event, "webhook template", self.logger):
+                    return
             except Exception as e:
                 # Never fall back to sending the raw event.
                 self.logger.error("Failed to apply webhook template, dropping event: %s", e)

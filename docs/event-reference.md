@@ -172,7 +172,8 @@ With multiple workers, every worker sends its own heartbeat; see [Production](/p
 | string | truncated to 1024 characters, with `...` appended |
 | list | first 20 elements, each sanitized |
 | object / map | compact JSON string with sorted keys and no HTML escaping (`{"a":1,"b":"<x>"}`), truncated to 1024 characters with `...` appended |
-| anything else (file uploads, bytes) | the type name, e.g. `"<UploadFile>"` |
+| a list or object nested more than 32 levels deep | the string `"<nested>"` in place of the too-deep part |
+| anything else (file uploads, bytes) | the type name, e.g. `"<UploadFile>"` or `"<bytes>"` |
 
 ## Value matching
 

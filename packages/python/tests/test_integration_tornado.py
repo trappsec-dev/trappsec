@@ -6,6 +6,7 @@ pytest.importorskip("tornado")
 
 import tornado.web  # noqa: E402
 from tornado.httpserver import HTTPServer  # noqa: E402
+import tornado.simple_httpclient  # noqa: E402
 import tornado.testing  # noqa: E402  (module import: pytest must not collect the base TestCase)
 
 from trappsec.core import Sentry  # noqa: E402
@@ -39,6 +40,20 @@ class EchoHandler(tornado.web.RequestHandler):
     get = post = put = _dump
 
 
+class RawHandler(tornado.web.RequestHandler):
+    """Reports the raw bytes the application sees (hex), whatever their encoding."""
+
+    def _dump(self):
+        self.write({
+            "args": {k: [v.hex() for v in vs] for k, vs in self.request.arguments.items()},
+            "query": self.request.query,
+            "uri": self.request.uri,
+            "body": self.request.body.hex(),
+        })
+
+    get = post = _dump
+
+
 class UserHandler(tornado.web.RequestHandler):
     def get(self, uid):
         self.write({"who": uid, "args": {k: [v.decode() for v in vs] for k, vs in self.request.arguments.items()}})
@@ -53,12 +68,14 @@ class SentryCase(tornado.testing.AsyncHTTPTestCase):
     watches = staticmethod(lambda s: s.watch("/echo").query("x", intent="q").body("x", intent="b"))
     identify = None
     traps = staticmethod(lambda s: s.trap("/admin/secret"))
+    extra_routes = ()
 
     def get_app(self):
         app = tornado.web.Application([
             (r"/echo", EchoHandler),
             (r"/users/me", MeHandler),
             (r"/users/(\d+)", UserHandler),
+            *self.extra_routes,
         ])
         self.sentry = Sentry(app, "svc", "test")
         self.cap = Capture()
@@ -319,3 +336,88 @@ class NestedHandler(tornado.web.RequestHandler):
     def post(self, uid):
         self.write({"args": {k: [v.decode() for v in vs] for k, vs in self.request.arguments.items()},
                     "body": json.loads(self.request.body)})
+
+
+class TestParamTrapPaths(SentryCase):
+    traps = staticmethod(lambda s: [
+        s.trap("/users/<id>/secret"), s.trap("/orders/{oid}/x"), s.trap("/items/:iid"),
+        s.trap("/typed/<int:n>"), s.trap("/files/*rest"), s.trap("/brace/{rest...}"),
+        s.trap("/brace2/{rest:path}"), s.trap("/angle/<path:rest>"),
+    ])
+
+    def test_param_and_catch_all_segments_match(self):
+        for path in ("/users/5/secret", "/orders/9/x", "/items/abc", "/typed/3", "/files/a/b/c",
+                     "/brace/a/b", "/brace2/a/b", "/angle/a/b/c"):
+            assert self.fetch(path).code == 401, path
+        assert len(self.hits("trappsec.trap_hit")) == 8
+
+    def test_single_segment_param_does_not_span_slashes(self):
+        assert self.fetch("/users/5/6/secret").code == 404
+        assert self.fetch("/items/a/b").code == 404
+
+
+class TestNonUtf8Preserved(SentryCase):
+    watches = staticmethod(lambda s: s.watch("/raw").query("a").body("a"))
+    extra_routes = ((r"/raw", RawHandler),)
+
+    def test_query_unrelated_bytes_untouched(self):
+        d = json.loads(self.fetch("/raw?x=%ff&a=1").body)
+        assert d["args"] == {"x": ["ff"]}
+        assert d["query"] == "x=%ff" and d["uri"] == "/raw?x=%ff"
+
+    def test_urlencoded_body_unrelated_bytes_untouched(self):
+        r = self.fetch("/raw", method="POST", body=b"x=%ff&a=1",
+                       headers={"Content-Type": "application/x-www-form-urlencoded"})
+        d = json.loads(r.body)
+        assert bytes.fromhex(d["body"]) == b"x=%ff" and d["args"] == {"x": ["ff"]}
+
+
+class TestMultipartBoundaryInValue(SentryCase):
+    def test_boundary_text_in_value_and_file_part(self):
+        body = (
+            b'--XB\r\nContent-Disposition: form-data; name="a"\r\n\r\n1 --XB-- 2\r\n'
+            b'--XB\r\nContent-Disposition: form-data; name="x"; filename="a.txt"\r\n'
+            b'Content-Type: text/plain\r\n\r\nsecret\r\n'
+            b'--XB\r\nContent-Disposition: form-data; name="x"\r\n\r\nevil\r\n'
+            b'--XB--\r\n')
+        r = self.fetch("/echo", method="POST", body=body,
+                       headers={"Content-Type": "multipart/form-data; boundary=XB"})
+        d = json.loads(r.body)
+        assert d["x_arg"] is None and d["body_args"] == {"a": ["1 --XB-- 2"]}
+        assert "evil" not in d["body"] and "secret" not in d["body"]
+        (hit,) = self.hits("trappsec.watch_hit")
+        assert [f["field"] for f in hit["found_fields"]] == ["x"]
+        assert hit["found_fields"][0]["value"] == ["<bytes>", "evil"]
+
+
+class TestLazyTrapConflictPropagates(SentryCase):
+    traps = staticmethod(lambda s: s.trap("/echo").methods("GET"))
+
+    def test_conflict_fails_every_request_and_never_half_installs(self):
+        integ = self.sentry.integration
+        for _ in range(2):
+            # the error escapes find_handler: the connection is dropped (or a 500 is sent)
+            try:
+                assert self.fetch("/echo").code == 500
+            except tornado.simple_httpclient.HTTPStreamClosedError:
+                pass
+            assert not integ._bootstrapped
+        assert integ.app.default_router.rules[0].target is not None
+        assert not any(getattr(c, "_trappsec_trap", False) for c, _ in integ._leaf_rules())
+
+    def test_conflict_is_a_trap_conflict_error(self):
+        from trappsec.integrations.tornado import TrapConflictError
+        with pytest.raises(TrapConflictError):
+            self.sentry.bootstrap()
+
+
+class TestTrapFailureDoesNotDisableWatches(SentryCase):
+    def test_watches_still_set_up(self):
+        integ = self.sentry.integration
+
+        def boom():
+            raise ValueError("kaput")
+
+        integ.inject_traps = boom
+        assert json.loads(self.fetch("/echo?x=evil&a=1").body)["x_arg"] is None
+        assert integ._bootstrapped and len(self.hits("trappsec.watch_hit")) == 1

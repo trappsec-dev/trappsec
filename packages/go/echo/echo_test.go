@@ -8,6 +8,7 @@ import (
 	"github.com/labstack/echo/v4"
 	"github.com/labstack/echo/v4/middleware"
 	core "github.com/trappsec-dev/trappsec/packages/go"
+	"golang.org/x/net/http2"
 	"io"
 	"mime/multipart"
 	"net/http"
@@ -759,5 +760,102 @@ func TestWatchesBeforeTrapsAndIndexBuiltOnce(t *testing.T) {
 	app.Sentry.Watch("/users/:id").Query("late", core.NoDefault, "recon")
 	if do("GET", "/users/8?late=1"); seen != "late=1" {
 		t.Fatalf("a watch added while serving was applied: handler saw %q", seen)
+	}
+}
+
+// Once routed, IsTrap answers from the matched route: a real route that only
+// looks like a trap is not one. Before routing (e.Pre) it matches the path.
+func TestAppIsTrapUsesTheMatchedRoute(t *testing.T) {
+	e := echo.New()
+	app := InstallSentry(e, "svc", "test")
+	app.Logger().SetOutput(io.Discard)
+	app.Trap("/users/:id").Methods("POST")
+	ctx := func(path, route string) echo.Context {
+		c := e.NewContext(httptest.NewRequest("POST", path, nil), httptest.NewRecorder())
+		c.SetPath(route)
+		return c
+	}
+	if app.IsTrap(ctx("/users/me", "/users/me")) {
+		t.Fatal("real route /users/me reported as a trap")
+	}
+	if !app.IsTrap(ctx("/users/7", "/users/:id")) {
+		t.Fatal("routed trap not reported")
+	}
+	if !app.IsTrap(ctx("/users/7", "")) {
+		t.Fatal("unrouted (e.Pre) trap path not reported")
+	}
+}
+
+// A request rejected by an earlier Use middleware never reaches the watch
+// middleware; it is still inspected (after the chain, with the identity the
+// rejecting middleware stored), and a request that does reach it is inspected
+// exactly once.
+func TestRejectedRequestsAreStillInspected(t *testing.T) {
+	e := echo.New()
+	app := InstallSentry(e, "svc", "test")
+	logs := &syncBuf{}
+	app.Logger().SetOutput(logs)
+	app.IdentifyUser(func(req any) *core.AuthContext {
+		if c, ok := req.(echo.Context); ok {
+			if u, _ := c.Get("u").(string); u != "" {
+				return &core.AuthContext{User: u}
+			}
+		}
+		return nil
+	})
+	e.Use(func(next echo.HandlerFunc) echo.HandlerFunc {
+		return func(c echo.Context) error {
+			c.Set("u", "mallory")
+			if c.Request().Header.Get("X-Key") == "" {
+				return echo.ErrUnauthorized
+			}
+			return next(c)
+		}
+	})
+	e.GET("/search", func(c echo.Context) error { return c.String(200, "ok") })
+	app.Watch("/search").Query("debug", core.NoDefault, "recon")
+
+	if rec := do(t, app, "GET", "/search?debug=1", "", nil); rec.Code != 401 {
+		t.Fatalf("expected 401, got %d", rec.Code)
+	}
+	ev := logs.waitEvent(t, "trappsec.watch_hit")
+	if ev["user"] != "mallory" {
+		t.Fatalf("rejected request lost identity: %v", ev)
+	}
+
+	req := httptest.NewRequest("GET", "/search?debug=1", nil)
+	req.Header.Set("X-Key", "k")
+	rec := httptest.NewRecorder()
+	app.ServeHTTP(rec, req)
+	if rec.Code != 200 || logs.count("trappsec.watch_hit") != 2 {
+		t.Fatalf("code %d, watch_hit events %d (want one per request)", rec.Code, logs.count("trappsec.watch_hit"))
+	}
+}
+
+// Echo's promoted StartH2CServer would serve the bare Echo instance; the
+// App's wrapper bootstraps first so traps are live.
+func TestStartH2CServerBootstraps(t *testing.T) {
+	e := echo.New()
+	e.HideBanner, e.HidePort = true, true
+	app := InstallSentry(e, "svc", "test")
+	app.Trap("/t").Methods("GET")
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		_ = app.StartH2CServer("127.0.0.1:0", &http2.Server{})
+	}()
+	deadline := time.Now().Add(2 * time.Second)
+	for !app.integration.once.Done() && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	if !app.integration.once.Done() {
+		t.Fatal("StartH2CServer did not bootstrap")
+	}
+	_ = e.Close()
+	<-done
+	rec := httptest.NewRecorder()
+	e.ServeHTTP(rec, httptest.NewRequest("GET", "/t", nil))
+	if rec.Code == http.StatusNotFound {
+		t.Fatal("trap route not registered")
 	}
 }
