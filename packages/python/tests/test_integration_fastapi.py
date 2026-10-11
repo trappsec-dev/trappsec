@@ -114,6 +114,27 @@ def test_trap_works_without_lifespan_and_with_lifespan():
     assert len(cap.events) == 3
 
 
+def test_trap_query_param_named_trap_is_not_injected():
+    app, sentry, cap = make()
+    sentry.trap("/admin").intent("recon").if_unauthenticated(status=403, body={"error": "forbidden"})
+    r = TestClient(app).get("/admin?trap=1")
+    assert r.status_code == 403
+    assert r.json() == {"error": "forbidden"}
+    assert [e["event"] for e in cap.events] == ["trappsec.trap_hit"]
+
+
+def test_trap_json_is_compact_like_fastapi():
+    app, sentry, cap = make()
+    sentry.trap("/admin").if_unauthenticated(status=401, body={"error": "unauthorized", "code": 1})
+
+    @app.get("/real")
+    def real():
+        return {"error": "unauthorized", "code": 1}
+
+    c = TestClient(app)
+    assert c.get("/admin").content == c.get("/real").content == b'{"error":"unauthorized","code":1}'
+
+
 def test_bootstrap_idempotent():
     app, sentry, cap = make()
     sentry.trap("/t")

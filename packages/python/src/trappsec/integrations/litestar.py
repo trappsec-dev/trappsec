@@ -130,7 +130,7 @@ class LitestarIntegration:
                     ts.logger.error("trappsec trap error: %s", e)
                     body, cfg = ts._trap_fallback(_trap)
                 if not isinstance(body, (str, bytes)):
-                    body = json.dumps(body, default=str)
+                    body = json.dumps(body, default=str, separators=(",", ":"))
                 if isinstance(body, str):
                     body = body.encode("utf-8")  # bytes are sent verbatim for any media type
                 return Response(content=body, status_code=cfg["status_code"], media_type=cfg["mime_type"])

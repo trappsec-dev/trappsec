@@ -71,7 +71,7 @@ class CoreEventsAndBuildersTests(unittest.TestCase):
         body, response_cfg = Sentry._trigger_trap_event(ctx, object(), trap)
 
         self.assertEqual(response_cfg["status_code"], 201)
-        self.assertIn('"ok": true', body)
+        self.assertEqual(body, '{"ok":true}')
         self.assertEqual(ctx.events[0]["type"], "alert")
         self.assertEqual(ctx.events[0]["event"], "trappsec.trap_hit")
 

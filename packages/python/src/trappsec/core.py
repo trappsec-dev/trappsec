@@ -422,7 +422,7 @@ class Sentry:
             if callable(body):
                 body = {}
             if not isinstance(body, (str, bytes)):
-                body = json.dumps(body, default=str)
+                body = json.dumps(body, default=str, separators=(",", ":"))
             return body, cfg
         except Exception:
             return "{}", {"status_code": 401, "mime_type": "application/json"}
@@ -519,7 +519,7 @@ class Sentry:
             pass  # strings are sent raw regardless of mime type
         elif mime == "application/json":
             try:
-                response_body = json.dumps(response_body, default=str)
+                response_body = json.dumps(response_body, default=str, separators=(",", ":"))
             except Exception as e:
                 self.logger.error("failed to encode trap response body: %s", e)
                 response_body = "{}"
