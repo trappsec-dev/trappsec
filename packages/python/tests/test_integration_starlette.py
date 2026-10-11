@@ -290,3 +290,69 @@ def test_is_trap_with_starlette_csrf(skip):
         assert c.post("/real").status_code == 403
         assert c.post("/admin/backup").status_code == (401 if skip else 403)
     assert len([e for e in cap.events if e["event"] == "trappsec.trap_hit"]) == (1 if skip else 0)
+
+
+def test_watch_matches_converter_and_trailing_slash_routes():
+    async def one(request):
+        return JSONResponse({"args": dict(request.query_params)})
+
+    app, sentry, cap = make(routes=[
+        Route("/u/{id:int}", one), Route("/t/", one), Route("/f/{p:path}", one)])
+    sentry.watch("/u/{id}").query("debug")
+    sentry.watch("/t").query("debug")
+    sentry.watch("/f/{p}").query("debug")
+    c = TestClient(app)
+    assert c.get("/u/5?debug=1&k=a").json()["args"] == {"k": "a"}
+    assert c.get("/t/?debug=1&k=a").json()["args"] == {"k": "a"}
+    assert c.get("/f/a/b?debug=1&k=a").json()["args"] == {"k": "a"}
+    assert len(watch_events(cap)) == 3
+
+
+def test_trap_conflicts_with_converter_route():
+    app, sentry, cap = make(routes=[Route("/u/{id:int}", _dump)])
+    sentry.trap("/u/{id}").methods("GET")
+    with pytest.raises(RuntimeError, match="duplicates"):
+        sentry.bootstrap()
+
+
+def test_oversized_body_passes_through_uninspected(monkeypatch):
+    from trappsec.integrations import starlette as mod
+    monkeypatch.setattr(mod, "MAX_INSPECT_BYTES", 64)
+    app, sentry, cap = make()
+    sentry.watch("/items").body("is_admin")
+    payload = json.dumps({"is_admin": True, "pad": "x" * 200})
+    r = TestClient(app).post("/items", content=payload, headers={"content-type": "application/json"})
+    assert r.json()["json"]["is_admin"] is True and len(r.json()["json"]["pad"]) == 200
+    assert watch_events(cap) == []
+
+    # streamed in several messages, no Content-Length: replay what was read, stream the rest
+    import asyncio
+    raw = payload.encode()
+    parts = [raw[i:i + 70] for i in range(0, len(raw), 70)]
+    queue = [{"type": "http.request", "body": c, "more_body": i < len(parts) - 1}
+             for i, c in enumerate(parts)]
+    sent = []
+
+    async def receive():
+        return queue.pop(0)
+
+    async def send(message):
+        sent.append(message)
+
+    scope = {"type": "http", "method": "POST", "path": "/items", "raw_path": b"/items",
+             "query_string": b"", "headers": [(b"content-type", b"application/json")],
+             "scheme": "http", "server": ("t", 80), "client": ("c", 1), "root_path": "",
+             "http_version": "1.1", "state": {}}
+    asyncio.run(app(scope, receive, send))
+    body = b"".join(m.get("body", b"") for m in sent if m["type"] == "http.response.body")
+    assert json.loads(body)["json"]["is_admin"] is True
+    assert watch_events(cap) == []
+
+
+def test_single_occurrence_fields_are_scalars():
+    app, sentry, cap = make()
+    sentry.watch("/items").query("role", default=["1"]).query("mode", default="1")
+    TestClient(app).get("/items?role=1&mode=1")
+    # a list default does not match a field that occurred once (as in Go/Node/Litestar)
+    fields = [f["field"] for f in watch_events(cap)[0]["found_fields"]]
+    assert fields == ["role"]

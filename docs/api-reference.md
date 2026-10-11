@@ -36,6 +36,8 @@ Import path varies by framework:
 - `github.com/trappsec-dev/trappsec/packages/go/nethttp`
 - `github.com/trappsec-dev/trappsec/packages/go/echo`
 
+Every adapter also has `Use(s *trappsec.Sentry, router) *App` to wire a Sentry you created with `NewSentry` from the core package. Each adapter package re-exports the core types and the `NoDefault`, `Default`, `Intent` and `Metadata` helpers, so one import is enough.
+
 </div>
 
 Initializes the trappsec Sentry.
@@ -268,14 +270,14 @@ watch.body(name: str, default: Any = NO_DEFAULT, intent: str = None)
 <div class="lang-content" data-lang="node" markdown="1">
 
 ```javascript
-watch.body(name, { defaultValue: any, intent: string })
+watch.body(name, { default: any, intent: string })
 ```
 
 </div>
 <div class="lang-content" data-lang="go" markdown="1">
 
 ```go
-watch.Body(name string, defaultValue any, intent string)
+watch.Body(name string, opts ...any) // trappsec.Default(v), trappsec.Intent(s)
 ```
 
 </div>
@@ -292,7 +294,7 @@ watch.body("is_admin", default=False, intent="PrivEsc")
 <div class="lang-content" data-lang="node" markdown="1">
 
 ```javascript
-watch.body("is_admin", { defaultValue: false, intent: "PrivEsc" });
+watch.body("is_admin", { default: false, intent: "PrivEsc" });
 ```
 
 </div>
@@ -300,17 +302,19 @@ watch.body("is_admin", { defaultValue: false, intent: "PrivEsc" });
 
 ```go
 // Alert on any presence of 'is_admin'
-watch.Body("is_admin", trappsec.NoDefault, "PrivEsc")
+watch.Body("is_admin", trappsec.Intent("PrivEsc"))
 
 // Alert only if value differs from default
-watch.Body("is_admin", false, "PrivEsc")
+watch.Body("is_admin", trappsec.Default(false), trappsec.Intent("PrivEsc"))
 ```
 
 </div>
 
 *   **name**: The field name to watch.
-*   **default / defaultValue**: (Optional) If provided, alerts only if the value differs from this default. If omitted (or `trappsec.NoDefault` in Go), alerts on any presence of the key.
-*   **intent**: The intent label for the alert.
+*   **default** (Go: `trappsec.Default(v)`): (Optional) If provided, alerts only if the value differs from this default. If omitted, alerts on any presence of the key.
+*   **intent** (Go: `trappsec.Intent(s)`): (Optional) The intent label for the alert.
+
+The pre-0.3 spellings still work: Node's `{ defaultValue }`, and Go's positional `Body(name, defaultValue, intent)` with `trappsec.NoDefault` for "no default".
 
 ## `query`
 
@@ -327,14 +331,16 @@ watch.query("debug", default="false", intent="Recon")
 <div class="lang-content" data-lang="node" markdown="1">
 
 ```javascript
-watch.query("debug", { defaultValue: "false", intent: "Recon" });
+watch.query(name, { default: any, intent: string })
+watch.query("debug", { default: "false", intent: "Recon" });
 ```
 
 </div>
 <div class="lang-content" data-lang="go" markdown="1">
 
 ```go
-watch.Query("debug", "false", "Recon")
+watch.Query(name string, opts ...any)
+watch.Query("debug", trappsec.Default("false"), trappsec.Intent("Recon"))
 ```
 
 </div>
@@ -342,12 +348,14 @@ watch.Query("debug", "false", "Recon")
 **Matching semantics** (identical for `query` and `body`):
 
 *   Values are compared with canonical matching: `1` equals `1.0`, `true` equals `"true"`, `5` equals `"5"`. Strings compare exactly. See [Event Reference](/events/#value-matching).
-*   Multi-valued fields (`?debug=a&debug=b`): a single value is compared as a scalar; with several values it is a violation unless **every** value equals the default. All occurrences are stripped before your handler runs.
+*   Multi-valued fields (`?debug=a&debug=b`): a field sent once is compared as a scalar in every framework; with several values it is a violation unless **every** value equals the default. All occurrences are stripped before your handler runs.
+*   Values nested more than 32 levels deep never match a default (so they always alert) and are recorded with the too-deep part replaced by `"<nested>"`.
+*   Calling `watch(path)` twice for the same path merges the fields; a later rule for the same field wins.
 *   List and object defaults (`default=[]`, `default={}`) are compared element by element and key by key with the same rules, so a request that sends exactly the default is not an alert.
 *   Every occurrence of a watched key is removed from the request your handler sees, so a honey field can never influence real logic.
 *   Go matches JSON keys case-insensitively (as `encoding/json` does); Python and Node are case-sensitive.
 *   A JSON body that is an array is inspected element by element (object elements only). Other body shapes are skipped.
-*   `body` watches need a parsed body. On Express and Koa, register your body parser **before** installing Sentry (see [Production](/production/#body-parsers)).
+*   `body` watches need a parsed body. On Express and Koa, register a body parser (app- or route-level); see [Production](/production/#body-parsers) and [Framework differences](/supported-frameworks/#framework-differences).
 
 ## Configuration
 
@@ -574,7 +582,7 @@ ts.AddOTEL()
 
 ## `template`
 
-Registers a named, reusable response that traps can reference via `respond(template=...)` / `if_unauthenticated(template=...)`. A template cannot be combined with `status`, `body` or `mime_type` in the same call.
+Registers a named, reusable response that traps can reference via `respond(template=...)` / `if_unauthenticated(template=...)` and that `default_response(template=...)` can use. A template cannot be combined with `status`, `body` or `mime_type` in the same call. The MIME type argument is optional everywhere (default `application/json`).
 
 <div class="lang-content" data-lang="python" markdown="1">
 
@@ -595,7 +603,7 @@ ts.trap("/v1/users").respond({ template: "deprecated_api" });
 <div class="lang-content" data-lang="go" markdown="1">
 
 ```go
-ts.Template("deprecated_api", 410, map[string]any{"error": "This API version is retired"}, "application/json")
+ts.Template("deprecated_api", 410, map[string]any{"error": "This API version is retired"})
 ts.Trap("/v1/users").Respond(trappsec.ResponseConfig{Template: "deprecated_api"})
 ```
 
@@ -606,7 +614,34 @@ ts.Trap("/v1/users").Respond(trappsec.ResponseConfig{Template: "deprecated_api"}
 
 ## Default responses
 
-`default_responses` (Python/Node dict) or `SetDefaultAuthenticated` / `SetDefaultUnauthenticated` (Go) set the global response profiles used when a trap does not configure `respond` / `if_unauthenticated`. Defaults are resolved when traps are built (at bootstrap), **not** when `.trap()` is called, so you may set them before or after declaring traps. See [Getting Started](/getting-started/#default-responses) for examples.
+`default_response` and `default_unauthenticated_response` (Go: `DefaultResponse` / `DefaultUnauthenticatedResponse`) set the responses used when a trap does not configure `respond` / `if_unauthenticated`. They take exactly the same arguments as those methods: only what you pass changes the default, and `template` replaces it. Defaults are resolved when traps are built (at bootstrap), **not** when `.trap()` is called, so you may set them before or after declaring traps.
+
+<div class="lang-content" data-lang="python" markdown="1">
+
+```python
+ts.default_unauthenticated_response(status=403, body={"error": "Access Denied"})
+ts.default_response(template="deprecated_api")
+```
+
+</div>
+<div class="lang-content" data-lang="node" markdown="1">
+
+```javascript
+ts.default_unauthenticated_response({ status: 403, body: { error: "Access Denied" } });
+ts.default_response({ template: "deprecated_api" });
+```
+
+</div>
+<div class="lang-content" data-lang="go" markdown="1">
+
+```go
+ts.DefaultUnauthenticatedResponse(trappsec.ResponseConfig{Status: 403, Body: map[string]any{"error": "Access Denied"}})
+ts.DefaultResponse(trappsec.ResponseConfig{Template: "deprecated_api"})
+```
+
+</div>
+
+The older forms still work: assigning `ts.default_responses["unauthenticated"] = {"status_code": ..., "response_body": ..., "mime_type": ...}` in Python and Node, and `SetDefaultAuthenticated` / `SetDefaultUnauthenticated` (deprecated) in Go.
 
 ## `trigger`
 
@@ -623,27 +658,28 @@ ts.trigger(request, "Velocity limit exceeded", intent="fraud_attempt",
 <div class="lang-content" data-lang="node" markdown="1">
 
 ```javascript
-ts.trigger(req, "Velocity limit exceeded", "fraud_attempt", { amount: 50000 });
+ts.trigger(req, "Velocity limit exceeded", { intent: "fraud_attempt", metadata: { amount: 50000 } });
 ```
 
 </div>
 <div class="lang-content" data-lang="go" markdown="1">
 
 ```go
-ts.Trigger(c, "Velocity limit exceeded", "fraud_attempt", map[string]any{"amount": 50000})
+ts.Trigger(c, "Velocity limit exceeded",
+    trappsec.Intent("fraud_attempt"), trappsec.Metadata(map[string]any{"amount": 50000}))
 ```
 
 </div>
 
 *   **req**: The framework request object (the same type you receive in `identify_user`).
 *   **reason**: Free-text explanation.
-*   **intent**, **metadata**: Optional; `null` in the event when omitted.
+*   **intent**, **metadata**: Optional (Python keywords, Node options object, Go `trappsec.Intent` / `trappsec.Metadata`); `null` in the event when omitted. The positional form `trigger(req, reason, intent, metadata)` still works in Node and Go.
 
 `trigger` never raises into your handler; failures are logged.
 
 ## `is_trap` / `IsTrap`
 
-Returns whether a request targets a trap (method and path). Use it to let traps through middleware that would otherwise reject them before they can answer, typically CSRF protection: a POST trap that answers 403 is disabled and easy to fingerprint. Trap path segments written as `:id`, `{id}`, `<id>` (and `*rest` in Go) match any single segment. It never raises.
+Returns whether a request targets a trap (method and path). Use it to let traps through middleware that would otherwise reject them before they can answer, typically CSRF protection: a POST trap that answers 403 is disabled and easy to fingerprint. Trap path segments written as `:id`, `{id}`, `<id>` or `<int:id>` match any single segment; a last segment written `*rest`, `{rest...}`, `{rest:path}` or `<path:rest>` matches one or more remaining segments. The rules are shared by all three SDKs (`tests/conformance/is_trap.json`). It never raises, and it is a cached lookup, cheap enough to run on every request.
 
 <div class="lang-content" data-lang="python" markdown="1">
 
@@ -683,11 +719,13 @@ app.addHook('onRequest', (req, reply, done) => (ts.is_trap(req) ? done() : app.c
 </div>
 <div class="lang-content" data-lang="go" markdown="1">
 
+Every adapter's `App.IsTrap` takes its framework's request type: `*http.Request` (net/http), `*gin.Context` (Gin), `echo.Context` (Echo). It answers from the route the framework matched (net/http asks the mux), so a real route that only looks like a trap, such as `POST /users/me` next to a trap `POST /users/{id}`, is never reported as one; prefer it over `app.Sentry.IsTrap(req any)`, which matches the path against trap patterns like Python's and Node's `is_trap`.
+
 ```go
-// gorilla/csrf
+// gorilla/csrf (net/http)
 next := protect(app)
 http.ListenAndServe(":8000", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-    if app.Sentry.IsTrap(r) {
+    if app.IsTrap(r) {
         r = csrf.UnsafeSkipCheck(r)
     }
     next.ServeHTTP(w, r)
@@ -696,14 +734,23 @@ http.ListenAndServe(":8000", http.HandlerFunc(func(w http.ResponseWriter, r *htt
 // net/http's CrossOriginProtection
 protected := http.NewCrossOriginProtection().Handler(app)
 http.ListenAndServe(":8000", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-    if app.Sentry.IsTrap(r) {
+    if app.IsTrap(r) {
         app.ServeHTTP(w, r)
         return
     }
     protected.ServeHTTP(w, r)
 }))
 
-// Echo: the adapter's App.IsTrap fits middleware.CSRFConfig.Skipper
+// Gin: in your CSRF middleware
+engine.Use(func(c *gin.Context) {
+    if app.IsTrap(c) {
+        c.Next()
+        return
+    }
+    csrfMiddleware(c)
+})
+
+// Echo: App.IsTrap fits middleware.CSRFConfig.Skipper
 e.Use(middleware.CSRFWithConfig(middleware.CSRFConfig{Skipper: app.IsTrap}))
 ```
 
@@ -746,7 +793,7 @@ A trap whose path and method exactly duplicate an existing application route rai
 
 ## `close` / `Close`
 
-Stops webhook heartbeats and flushes the asynchronous delivery queue (default timeout 5 s: Python `close(timeout=5.0)` seconds, Node `await close(5000)` milliseconds, Go `Close(ctx)` bounded by the context). Call it on shutdown, otherwise queued events can be lost.
+Stops webhook heartbeats and flushes the asynchronous delivery queue (default timeout 5 s: Python `close(timeout=5.0)` and Node `await close(5)` in seconds, Go `Close(ctx)` bounded by the context). Call it on shutdown, otherwise queued events can be lost. Before 0.3, Node took milliseconds; values of 1000 or more are still read as milliseconds, with a warning.
 
 <div class="lang-content" data-lang="python" markdown="1">
 
@@ -759,7 +806,9 @@ atexit.register(ts.close)   # or call ts.close(timeout=5) in your shutdown hook
 <div class="lang-content" data-lang="node" markdown="1">
 
 ```javascript
-process.on("SIGTERM", async () => { await ts.close(); process.exit(0); });
+for (const sig of ["SIGINT", "SIGTERM"]) {
+    process.once(sig, async () => { await ts.close(); process.exit(0); });
+}
 ```
 
 </div>
@@ -779,7 +828,7 @@ Webhook and Slack delivery is asynchronous. Events go to a bounded in-memory que
 
 ## Callback safety
 
-Every callback you provide (`identify_user`, `override_source_ip`, callable defaults, dynamic response bodies, webhook `template`) runs in a try/catch. On failure trappsec logs the error and falls back: identity becomes "no user", the IP falls back to the default extractor, a failing callable default is treated as "no default" (presence is a violation), a failing dynamic body becomes `{}`, and a failing webhook template drops that event for that handler (the raw event is never sent instead).
+Every callback you provide (`identify_user`, `override_source_ip`, callable defaults, dynamic response bodies, webhook `template`) must be synchronous and runs in a try/catch. A callback that returns a promise or coroutine is treated as failed: trappsec logs once that it must be synchronous (and, in Node, catches the promise so a rejection can never crash the process). On failure trappsec logs the error and falls back: identity becomes "no user", the IP falls back to the default extractor, a failing callable default is treated as "no default" (presence is a violation), a failing dynamic body becomes `{}`, and a failing webhook template drops that event for that handler (the raw event is never sent instead).
 
 ## Go request body limit
 
@@ -787,4 +836,4 @@ The Go adapters read request bodies in order to inspect `watch.Body` fields. Bod
 
 > **Avoid a padding bypass:** a body larger than the limit is not inspected, so an attacker could pad a request past it to slip a honey field through. Make sure `SetMaxBodyBytes` is at least as large as the maximum body your watched routes accept (for example, the `http.MaxBytesReader` limit you already apply). Then no oversize body can reach your handler.
 
-> **Gin route groups:** routes registered before `InstallSentry` are still inspected. A route *group* created before `InstallSentry` does not inherit the watch middleware, though, so routes added to it later are not watched. Call `InstallSentry` before creating route groups.
+> **Gin route groups:** routes registered before `InstallSentry`, including routes in groups created before it, are still watched, as long as requests are served through `app` (`app.Run*`, or `app` as the `http.Handler`).

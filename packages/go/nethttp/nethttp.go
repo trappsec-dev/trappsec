@@ -10,16 +10,15 @@
 package trappsecnethttp
 
 import (
-	"context"
 	"fmt"
 	core "github.com/trappsec-dev/trappsec/packages/go"
+	"github.com/trappsec-dev/trappsec/packages/go/internal/adapter"
 	"net"
 	"net/http"
 	"net/url"
+	"reflect"
 	"regexp"
 	"strings"
-	"sync"
-	"sync/atomic"
 )
 
 // Re-export core types as aliases so callers need only one import.
@@ -36,10 +35,17 @@ type (
 	WebhookOptions = core.WebhookOptions
 	SlackOptions   = core.SlackOptions
 	EventHandler   = core.EventHandler
+	Option         = core.Option
 )
 
-// NoDefault is re-exported from core so callers need only one import.
-var NoDefault = core.NoDefault
+// NoDefault, Default, Intent and Metadata are re-exported from core so callers
+// need only one import.
+var (
+	NoDefault = core.NoDefault
+	Default   = core.Default
+	Intent    = core.Intent
+	Metadata  = core.Metadata
+)
 
 // App wraps a ServeMux and a trappsec Sentry. All ServeMux methods (HandleFunc,
 // Handle, etc.) and all Sentry methods (Trap, Watch, IdentifyUser, etc.) are promoted
@@ -60,10 +66,24 @@ type App struct {
 // half-installed and silently unprotected).
 func (a *App) Bootstrap() { a.integration.bootstrap(a) }
 
+// IsTrap reports whether the mux would route r to a trap. Use it to let traps
+// through middleware that would otherwise reject them before they can answer,
+// such as CSRF protection. It bootstraps lazily, and asks the mux which
+// pattern matches, so a real route that only looks like a trap (POST /users/me
+// next to a trap POST /users/{id}) is never reported as one.
+func (a *App) IsTrap(r *http.Request) bool {
+	a.Bootstrap()
+	if r == nil {
+		return false
+	}
+	_, pattern := a.ServeMux.Handler(r)
+	return a.integration.trapIdx[pattern]
+}
+
 // SetMaxBodyBytes sets the largest request body that watch inspection buffers
 // (default core.DefaultMaxBodyBytes, 1 MiB). Larger bodies pass through intact
 // but uninspected. n <= 0 restores the default.
-func (a *App) SetMaxBodyBytes(n int64) { atomic.StoreInt64(&a.integration.maxBody, n) }
+func (a *App) SetMaxBodyBytes(n int64) { a.integration.maxBody.Set(n) }
 
 // InstallSentry creates a Sentry, wires trappsec onto the given ServeMux, and returns
 // an *App that embeds both. Use app.ListenAndServe() (not http.ListenAndServe) to start
@@ -73,106 +93,53 @@ func (a *App) SetMaxBodyBytes(n int64) { atomic.StoreInt64(&a.integration.maxBod
 // giving them the same 405 Method Not Allowed behaviour as real routes registered with
 // method patterns.
 func InstallSentry(mux *http.ServeMux, service, environment string) *App {
-	s := core.NewSentry(service, environment)
+	return Use(core.NewSentry(service, environment), mux)
+}
+
+// Use wires an existing Sentry onto the ServeMux and returns the *App to serve
+// through (app.ListenAndServe*, or app as an http.Handler). Traps and watches
+// only become active through the returned App.
+func Use(s *core.Sentry, mux *http.ServeMux) *App {
 	in := &netHTTPIntegration{ts: s, mux: mux}
 
-	if s.Identity.IP == nil {
-		s.Identity.IP = func(req any) string {
-			r, ok := req.(*http.Request)
-			if !ok || r == nil {
-				return "0.0.0.0"
-			}
-			host, _, err := net.SplitHostPort(r.RemoteAddr)
-			if err == nil {
-				return host
-			}
-			return r.RemoteAddr
-		}
-	}
-
-	s.Request.Path = func(req any) string {
-		r, _ := req.(*http.Request)
-		if r == nil {
-			return ""
-		}
-		return r.URL.Path
-	}
-	s.Request.UserAgent = func(req any) string {
-		r, _ := req.(*http.Request)
-		if r == nil {
-			return ""
-		}
-		return r.UserAgent()
-	}
-	s.Request.Method = func(req any) string {
-		r, _ := req.(*http.Request)
-		if r == nil {
-			return ""
-		}
-		return r.Method
-	}
-	s.Request.Context = func(req any) context.Context {
-		r, _ := req.(*http.Request)
-		if r == nil {
-			return context.Background()
-		}
-		return r.Context()
-	}
+	adapter.InstallRequestAccessors(s, requestOf)
 
 	return &App{Sentry: s, ServeMux: mux, integration: in}
+}
+
+func requestOf(req any) *http.Request {
+	r, _ := req.(*http.Request)
+	return r
 }
 
 type netHTTPIntegration struct {
 	ts       *core.Sentry
 	mux      *http.ServeMux
 	watchIdx map[string]core.WatchConfig
-	maxBody  int64
-
-	done atomic.Bool
-	mu   sync.Mutex
-	err  any
+	trapIdx  map[string]bool // registered trap patterns, "METHOD /path"
+	maxBody  adapter.MaxBody
+	once     adapter.Once
 }
 
-func (in *netHTTPIntegration) bootstrap(a *App) {
-	if in.done.Load() {
-		if in.err != nil {
-			panic(in.err)
-		}
-		return
-	}
-	in.mu.Lock()
-	defer in.mu.Unlock()
-	if in.done.Load() {
-		if in.err != nil {
-			panic(in.err)
-		}
-		return
-	}
-	defer func() {
-		// Mark done (even on failure) so concurrent callers observe the same
-		// failure instead of re-running a partially applied install.
-		if p := recover(); p != nil {
-			in.err = p
-			in.done.Store(true)
-			panic(p)
-		}
-		in.done.Store(true)
-	}()
+func (in *netHTTPIntegration) bootstrap(a *App) { in.once.Do(in.install) }
 
+func (in *netHTTPIntegration) install() {
 	idx := make(map[string]core.WatchConfig)
 	for _, w := range in.ts.Watches() {
 		idx[patternPath(w.Path)] = w
 	}
 
 	// Register each trap as a real route using Go 1.22+ method-qualified patterns.
+	trapIdx := map[string]bool{}
 	for _, trap := range in.ts.Traps() {
 		t := trap
 		for _, method := range trap.Methods {
 			method = strings.ToUpper(method)
 			pattern := method + " " + trap.Path
 			in.checkConflict(method, trap.Path)
+			trapIdx[pattern] = true
 			in.register(pattern, func(w http.ResponseWriter, r *http.Request) {
-				body, cfg := in.ts.TriggerTrapEvent(r, t)
+				body, cfg := adapter.TriggerTrapEvent(in.ts, r, t)
 				if cfg.MIMEType != "" {
 					w.Header().Set("Content-Type", cfg.MIMEType)
 				}
@@ -182,6 +149,7 @@ func (in *netHTTPIntegration) bootstrap(a *App) {
 		}
 	}
 	in.watchIdx = idx
+	in.trapIdx = trapIdx
 	in.warnUnreachableWatches()
 }
 
@@ -266,12 +234,27 @@ func (in *netHTTPIntegration) checkConflict(method, path string) {
 // httptest server so traps and watches are active.
 func (a *App) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	a.Bootstrap()
+	in := a.integration
+	if len(in.watchIdx) == 0 {
+		a.ServeMux.ServeHTTP(w, r)
+		return
+	}
 	// Resolve the matched route pattern before dispatch so watches can use it.
-	_, pattern := a.ServeMux.Handler(r)
-	if watch, ok := a.integration.watchIdx[patternPath(pattern)]; ok {
-		core.InspectWatch(a.integration.ts, r, r, watch, atomic.LoadInt64(&a.integration.maxBody))
+	h, pattern := a.ServeMux.Handler(r)
+	if watch, ok := in.watchIdx[patternPath(pattern)]; ok && !isRedirect(h) {
+		adapter.InspectWatch(in.ts, r, r, watch, in.maxBody.Get())
 	}
 	a.ServeMux.ServeHTTP(w, r)
+}
+
+// isRedirect reports whether h is the redirect the mux answers with for an
+// unclean path ("/a/../w", "//w") or a missing trailing slash. The mux still
+// reports the target's pattern for those, but the request never reaches the
+// route, so it must not be inspected (and its query must reach the Location
+// header untouched). The type is unexported by net/http; if it is ever renamed
+// the check degrades to inspecting, never to missing a real request.
+func isRedirect(h http.Handler) bool {
+	return reflect.TypeOf(h).String() == "*http.redirectHandler"
 }
 
 // ListenAndServe calls Bootstrap then starts the HTTP server.

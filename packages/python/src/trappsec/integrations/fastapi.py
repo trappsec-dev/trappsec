@@ -1,4 +1,4 @@
-from .starlette import StarletteIntegration, TrapConflictError  # noqa: F401
+from .starlette import StarletteIntegration, TrapConflictError, _norm_path  # noqa: F401
 
 
 class FastAPIIntegration(StarletteIntegration):
@@ -22,7 +22,7 @@ class FastAPIIntegration(StarletteIntegration):
                 response_body, response_config = self.ts._trigger_trap_event(req, trap)
             except Exception as e:
                 self.ts.logger.error("trappsec trap handling failed: %s", e)
-                response_body, response_config = self._fallback(trap)
+                response_body, response_config = self.ts._trap_fallback(trap)
 
             return Response(response_body,
                 status_code=response_config["status_code"],
@@ -55,7 +55,7 @@ class FastAPIIntegration(StarletteIntegration):
                     path = getattr(ctx, "path", "")
                     methods = getattr(ctx, "methods", None)
                     if path and methods:
-                        yield path, methods
+                        yield _norm_path(path), methods
             except Exception as e:
                 self.ts.logger.warning("trappsec: could not inspect included router: %s", e)
 
@@ -65,7 +65,7 @@ class FastAPIIntegration(StarletteIntegration):
         for trap in traps:
             wanted = set(m.upper() for m in trap["methods"])
             for path, methods in existing:
-                if path == trap["path"] and set(methods) & wanted:
+                if path == _norm_path(trap["path"]) and set(methods) & wanted:
                     raise TrapConflictError(
                         "trappsec error: trap %s %s duplicates an existing route."
                         % (sorted(wanted), trap["path"])
@@ -113,7 +113,7 @@ class FastAPIIntegration(StarletteIntegration):
                     scope = request.scope
                     ctx = (scope.get("fastapi") or {}).get("effective_route_context")
                     pattern = getattr(ctx, "path", None) or route.path
-                    watch = integration.watch_map.get(pattern)
+                    watch = integration.watch_map.get(_norm_path(pattern))
                     if watch is not None:
                         new_scope, new_receive = await integration._inspect(scope, request.receive, watch)
                         if new_scope is not scope or new_receive is not request.receive:

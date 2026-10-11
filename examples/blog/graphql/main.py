@@ -7,6 +7,7 @@
 # ]
 # ///
 
+import atexit
 import jwt
 import secrets
 from datetime import datetime, timedelta, UTC
@@ -20,6 +21,7 @@ app = Flask(__name__)
 # ----------------------
 
 ts = trappsec.Sentry(app, service="SomeService", environment="Development")
+atexit.register(ts.close)  # flush queued webhook/Slack deliveries on exit
 
 ts.identify_user(lambda r: {
     "user": g.user_id,

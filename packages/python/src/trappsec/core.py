@@ -8,13 +8,15 @@ import socket
 import logging
 from collections.abc import Mapping, MutableMapping
 
-from .handlers import LogHandler, _truncate_text
+from .handlers import LogHandler, _truncate_text, _reject_awaitable
 from .builders import TrapBuilder, WatchBuilder, NO_DEFAULT
 
 _logger = logging.getLogger("trappsec")
 
 _MAX_STR = 1024
 _MAX_LIST = 20
+_MAX_DEPTH = 32  # containers deeper than this never match and are clipped
+_NESTED = "<nested>"
 
 
 def _is_number(v) -> bool:
@@ -56,19 +58,25 @@ def _canonical(v) -> typing.Optional[str]:
     return None
 
 
-def values_match(actual, expected) -> bool:
-    """Loose equality between a request value and a configured default (C3)."""
+def values_match(actual, expected, _depth=1) -> bool:
+    """Loose equality between a request value and a configured default (C3).
+
+    Values nested deeper than 32 containers never match, so a hostile value cannot
+    exhaust the stack.
+    """
     try:
         # Containers compare element-wise with these same rules, never with ==
         # (which would let True match 1 inside a list).
         a_seq, e_seq = isinstance(actual, (list, tuple)), isinstance(expected, (list, tuple))
+        if (a_seq or e_seq or isinstance(actual, Mapping) or isinstance(expected, Mapping)) and _depth > _MAX_DEPTH:
+            return False
         if a_seq or e_seq:
             return (a_seq and e_seq and len(actual) == len(expected)
-                    and all(values_match(a, e) for a, e in zip(actual, expected)))
+                    and all(values_match(a, e, _depth + 1) for a, e in zip(actual, expected)))
         a_map, e_map = isinstance(actual, Mapping), isinstance(expected, Mapping)
         if a_map or e_map:
             return (a_map and e_map and actual.keys() == expected.keys()
-                    and all(values_match(actual[k], expected[k]) for k in actual))
+                    and all(values_match(actual[k], expected[k], _depth + 1) for k in actual))
         a_bool, e_bool = isinstance(actual, bool), isinstance(expected, bool)
         if a_bool or e_bool:
             if a_bool and e_bool:
@@ -88,7 +96,9 @@ def values_match(actual, expected) -> bool:
     return False
 
 
-_PARAM_SEGMENT = re.compile(r"^(:\w+\??|\{[^}]*\}|<[^>]*>)$")
+_PARAM_SEGMENT = re.compile(r"^(:\w+\??|\*\w*|\{[^}]*\}|<[^>]*>)$")
+# A last segment of these forms matches one or more remaining segments.
+_CATCH_ALL_SEGMENT = re.compile(r"^(\*\w*|\{[^}]*(\.\.\.|:path)\}|<path:[^>]*>)$")
 
 
 def _trap_path(p):
@@ -100,15 +110,40 @@ def _trap_path(p):
     return p.rstrip("/") or "/"
 
 
-def _trap_path_matches(pattern, path) -> bool:
+def _trap_path_regex(pattern):
+    """Compiled regex for a trap path with parameters, or None for a plain path."""
     want = _trap_path(pattern)
     if not want:
-        return False
-    a, b = want.split("/"), path.split("/")
-    return len(a) == len(b) and all(x == y or (y and _PARAM_SEGMENT.match(x)) for x, y in zip(a, b))
+        return None
+    segs = want.split("/")
+    if not any(_PARAM_SEGMENT.match(x) for x in segs):
+        return None
+    parts = []
+    for n, x in enumerate(segs):
+        if n == len(segs) - 1 and n > 0 and _CATCH_ALL_SEGMENT.match(x):
+            parts.append("[^/]+(?:/[^/]+)*")
+        elif _PARAM_SEGMENT.match(x):
+            parts.append("[^/]+")
+        else:
+            parts.append(re.escape(x))
+    return re.compile("/".join(parts) + r"\Z")
 
 
-def safe_value(v):
+def _clip(v, depth=1):
+    """Copy of a container with everything deeper than _MAX_DEPTH replaced by a marker.
+
+    Recursion is bounded by _MAX_DEPTH: deeper containers are never entered.
+    """
+    if isinstance(v, (list, tuple, dict)):
+        if depth > _MAX_DEPTH:
+            return _NESTED
+        if isinstance(v, dict):
+            return {k: _clip(x, depth + 1) for k, x in v.items()}
+        return [_clip(x, depth + 1) for x in v]
+    return v
+
+
+def safe_value(v, _depth=1):
     """Sanitize a request-derived value for inclusion in an event (C3)."""
     if v is None or isinstance(v, bool):
         return v
@@ -118,9 +153,12 @@ def safe_value(v):
         return v if math.isfinite(v) else str(v)
     if isinstance(v, str):
         return _truncate_text(v, _MAX_STR)
+    if isinstance(v, (list, tuple, dict)) and _depth > _MAX_DEPTH:
+        return _NESTED
     if isinstance(v, (list, tuple)):
-        return [safe_value(x) for x in list(v)[:_MAX_LIST]]
+        return [safe_value(x, _depth + 1) for x in list(v)[:_MAX_LIST]]
     if isinstance(v, dict):
+        v = _clip(v, _depth)
         # Compact, sorted, unescaped: the same text Node and Go produce (R19).
         opts = {"default": str, "separators": (",", ":"), "ensure_ascii": False}
         try:
@@ -138,6 +176,8 @@ class IdentityContext:
     def __init__(self):
         self.ip = None
         self.auth = None
+        # The integration's own extractor, used when override_source_ip fails (R16).
+        self.default_ip = None
 
     def get_context(self, request_obj):
         u, r, ip = None, None, None
@@ -145,6 +185,8 @@ class IdentityContext:
         if self.auth:
             try:
                 auth_context = self.auth(request_obj)
+                if _reject_awaitable(auth_context, "identify_user", _logger):
+                    auth_context = None
                 if isinstance(auth_context, dict):
                     u, r = auth_context.get("user"), auth_context.get("role")
             except Exception as e:
@@ -154,11 +196,22 @@ class IdentityContext:
         if self.ip:
             try:
                 ip = self.ip(request_obj)
+                if _reject_awaitable(ip, "override_source_ip", _logger):
+                    ip = self._default_ip(request_obj)
             except Exception as e:
                 _logger.error("override_source_ip callback failed: %s", e)
-                ip = None
+                ip = self._default_ip(request_obj)
 
         return {"user": u, "role": r, "ip": ip}
+
+    def _default_ip(self, request_obj):
+        if self.default_ip is None or self.default_ip is self.ip:
+            return None
+        try:
+            return self.default_ip(request_obj)
+        except Exception as e:
+            _logger.error("default client IP extractor failed: %s", e)
+            return None
 
 class RequestContext:
     def __init__(self):
@@ -178,7 +231,7 @@ class RequestContext:
 
 class Sentry:
     def __init__(self, app, service: str, environment: str):
-        self.logger = logging.getLogger("trappsec")
+        self.logger = _logger
 
         self.hostname = socket.gethostname()
         self.service = service
@@ -190,6 +243,7 @@ class Sentry:
         self.request = RequestContext()
         
         self._traps = []
+        self._trap_index = None
         self._watches = []
         self._templates = {}
         self._handlers = [LogHandler(self.logger)]
@@ -225,6 +279,38 @@ class Sentry:
                 except Exception as e:
                     self.logger.error("error closing handler: %s", e)
     
+    def default_response(self, status: int = None, body: typing.Union[dict, str, typing.Callable] = None, mime_type: str = None, template: str = None):
+        """Default response for authenticated requests to traps that do not call ``respond``.
+
+        Same arguments as ``TrapBuilder.respond``: only the arguments you pass
+        change the default, and ``template`` replaces it. Resolved at bootstrap,
+        so it may be called before or after declaring traps.
+        """
+        return self._set_default("authenticated", status, body, mime_type, template)
+
+    def default_unauthenticated_response(self, status: int = None, body: typing.Union[dict, str, typing.Callable] = None, mime_type: str = None, template: str = None):
+        """Default response for unauthenticated requests to traps that do not call ``if_unauthenticated``."""
+        return self._set_default("unauthenticated", status, body, mime_type, template)
+
+    def _set_default(self, key, status, body, mime_type, template):
+        if template is not None:
+            if any(arg is not None for arg in (status, body, mime_type)):
+                raise TypeError("default_response: `template` cannot be used together with `status`, `body`, or `mime_type`.")
+            tmpl = self._templates.get(template)
+            if tmpl is None:
+                raise ValueError(f"default_response: template '{template}' not found.")
+            self.default_responses[key] = dict(tmpl)
+            return self
+        current = dict(self.default_responses[key])
+        if status is not None:
+            current["status_code"] = status
+        if body is not None:
+            current["response_body"] = body
+        if mime_type is not None:
+            current["mime_type"] = mime_type
+        self.default_responses[key] = current
+        return self
+
     def template(self, name: str, status_code: int, response_body: dict, mime_type: str = "application/json"):
         self._templates[name] = {"status_code": status_code, "response_body": response_body, "mime_type": mime_type}
         return self
@@ -232,6 +318,7 @@ class Sentry:
     def trap(self, path: str):
         builder = TrapBuilder(self, path)
         self._traps.append(builder)
+        self._trap_index = None
         return builder
 
     def watch(self, path: str):
@@ -284,16 +371,24 @@ class Sentry:
         return self
 
     def override_source_ip(self, callback: typing.Callable):
+        if self.identity.default_ip is None:
+            self.identity.default_ip = self.identity.ip
         self.identity.ip = callback
         return self
 
     @property
     def traps(self):
-        return [d.build() if hasattr(d, "build") else d for d in self._traps]
+        return [d.build() for d in self._traps]
 
     @property
     def watches(self):
-        return [r.build() if hasattr(r, "build") else r for r in self._watches]
+        """Built watches, one per path: same-path watches merge, later fields win."""
+        merged = {}
+        for built in (w.build() for w in self._watches):
+            into = merged.setdefault(built["path"], {"path": built["path"], "query_fields": {}, "body_fields": {}})
+            into["query_fields"].update(built["query_fields"])
+            into["body_fields"].update(built["body_fields"])
+        return list(merged.values())
 
     def _base_event(self, name, req):
         identity_ctx = self.identity.get_context(req)
@@ -318,6 +413,20 @@ class Sentry:
             event["role"] = identity_ctx["role"]
         return event
 
+    def _trap_fallback(self, trap):
+        """(body, config) of a trap's unauthenticated response, for integrations that
+        cannot run the trap pipeline (R20). The body is text; never raises."""
+        try:
+            cfg = trap["response.unauthenticated"]
+            body = cfg["response_body"]
+            if callable(body):
+                body = {}
+            if not isinstance(body, (str, bytes)):
+                body = json.dumps(body, default=str)
+            return body, cfg
+        except Exception:
+            return "{}", {"status_code": 401, "mime_type": "application/json"}
+
     def is_trap(self, request) -> bool:
         """True when the request targets a trap (method and path).
 
@@ -331,12 +440,30 @@ class Sentry:
             path = _trap_path(self.request.path(request))
             if not method or not path:
                 return False
-            return any(
-                method in {str(m).upper() for m in (t.get("methods") or [])} and _trap_path_matches(t.get("path"), path)
-                for t in self.traps
-            )
+            index = self._trap_index
+            if index is None:
+                index = self._trap_index = self._build_trap_index()
+            exact, patterns = index
+            if f"{method} {path}" in exact:
+                return True
+            return any(method in methods and rx.match(path) for methods, rx in patterns)
         except Exception:
             return False
+
+    def _build_trap_index(self):
+        """Exact "METHOD /path" set and compiled patterns, from path and methods only."""
+        exact, patterns = set(), []
+        for b in self._traps:
+            path = _trap_path(b._path)
+            if not path:
+                continue
+            methods = {str(m).upper() for m in (b._methods or [])}
+            rx = _trap_path_regex(path)
+            if rx is None:
+                exact.update(f"{m} {path}" for m in methods)
+            elif methods:
+                patterns.append((methods, rx))
+        return exact, patterns
 
     def trigger(self, req, reason: str, intent: str = None, metadata: dict = None):
         trigger_ctx = self._base_event("trappsec.rule_hit", req)
@@ -381,6 +508,8 @@ class Sentry:
         if callable(response_body):
             try:
                 response_body = response_body(req)
+                if _reject_awaitable(response_body, "trap response body", self.logger):
+                    response_body = {}
             except Exception as e:
                 self.logger.error("trap response body callback failed: %s", e)
                 response_body = {}
@@ -438,6 +567,8 @@ class Sentry:
                 if callable(expected):
                     try:
                         expected = expected(request_obj)
+                        if _reject_awaitable(expected, "watch default", self.logger):
+                            expected = NO_DEFAULT
                     except Exception as e:
                         self.logger.error("failed to evaluate callable default for %s field `%s`: %s", source, key, e)
                         expected = NO_DEFAULT

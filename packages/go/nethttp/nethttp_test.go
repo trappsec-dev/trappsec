@@ -655,7 +655,7 @@ func TestIsTrapLetsCSRFMiddlewareSkipTraps(t *testing.T) {
 	app.HandleFunc("POST /real", func(w http.ResponseWriter, r *http.Request) {})
 	// stand-in for gorilla/csrf: reject POSTs without a token unless IsTrap says skip
 	h := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method == "POST" && r.Header.Get("X-CSRF-Token") == "" && !app.Sentry.IsTrap(r) {
+		if r.Method == "POST" && r.Header.Get("X-CSRF-Token") == "" && !app.IsTrap(r) {
 			http.Error(w, "csrf", http.StatusForbidden)
 			return
 		}
@@ -685,7 +685,7 @@ func TestIsTrapWithStdlibCrossOriginProtection(t *testing.T) {
 		app.HandleFunc("POST /real", func(w http.ResponseWriter, r *http.Request) {})
 		protected := http.NewCrossOriginProtection().Handler(app)
 		h := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if skip && app.Sentry.IsTrap(r) {
+			if skip && app.IsTrap(r) {
 				app.ServeHTTP(w, r)
 				return
 			}
@@ -753,4 +753,77 @@ func TestWatchesBeforeTrapsAndIndexBuiltOnce(t *testing.T) {
 	if do("GET", "/users/8?late=1"); seen != "late=1" {
 		t.Fatalf("a watch added while serving was applied: handler saw %q", seen)
 	}
+}
+
+func TestUseWiresAnExistingSentryAndOptionsReexported(t *testing.T) {
+	s := core.NewSentry("svc", "test")
+	logs := &syncBuf{}
+	s.Logger().SetOutput(logs)
+	mux := http.NewServeMux()
+	var got map[string]any
+	mux.HandleFunc("POST /submit", func(w http.ResponseWriter, r *http.Request) {
+		got = nil
+		_ = json.NewDecoder(r.Body).Decode(&got)
+	})
+	app := Use(s, mux)
+	app.Watch("/submit").Body("role", Default("user"), Intent("PrivEsc"))
+	app.Trap("/admin/backup").Methods("POST")
+
+	req := httptest.NewRequest("POST", "/submit", strings.NewReader(`{"role":"admin","n":1}`))
+	req.Header.Set("Content-Type", "application/json")
+	app.ServeHTTP(httptest.NewRecorder(), req)
+	if _, leaked := got["role"]; leaked || logs.count("trappsec.watch_hit") != 1 || !strings.Contains(logs.String(), `"intent":"PrivEsc"`) {
+		t.Fatalf("watch via Use: bound=%v logs=%s", got, logs.String())
+	}
+	if !app.IsTrap(httptest.NewRequest("POST", "/admin/backup", nil)) || app.IsTrap(httptest.NewRequest("POST", "/submit", nil)) {
+		t.Fatal("App.IsTrap")
+	}
+}
+
+// A real route that only looks like a trap must not be reported as one, or
+// CSRF protection would be skipped for it.
+func TestAppIsTrapUsesTheMatchedRoute(t *testing.T) {
+	app := InstallSentry(http.NewServeMux(), "svc", "test")
+	app.Logger().SetOutput(io.Discard)
+	app.HandleFunc("POST /users/me", func(w http.ResponseWriter, r *http.Request) {})
+	app.Trap("/users/{id}").Methods("POST")
+	for path, want := range map[string]bool{"/users/me": false, "/users/7": true, "/elsewhere": false} {
+		if got := app.IsTrap(httptest.NewRequest("POST", path, nil)); got != want {
+			t.Fatalf("IsTrap(POST %s) = %v, want %v", path, got, want)
+		}
+	}
+	if app.IsTrap(httptest.NewRequest("GET", "/users/7", nil)) {
+		t.Fatal("IsTrap(GET) on a POST-only trap")
+	}
+}
+
+// A request the mux answers with a redirect never reaches the route, so it is
+// not inspected and its query reaches the Location header untouched.
+func TestRedirectedRequestsAreNotInspected(t *testing.T) {
+	sn := &seen{}
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /w", sn.handler)
+	mux.HandleFunc("GET /dir/", sn.handler)
+	app := InstallSentry(mux, "svc", "test")
+	logs := &syncBuf{}
+	app.Logger().SetOutput(logs)
+	app.Watch("/w").Query("secret", core.NoDefault, "recon")
+	app.Watch("/dir/").Query("secret", core.NoDefault, "recon")
+
+	for _, target := range []string{"/a/../w?secret=1", "//w?secret=1", "/dir?secret=1"} {
+		rec := do(t, app, "GET", target, "", nil)
+		if rec.Code < 300 || rec.Code > 399 {
+			t.Fatalf("%s: expected redirect, got %d", target, rec.Code)
+		}
+		if loc := rec.Header().Get("Location"); !strings.Contains(loc, "secret=1") {
+			t.Fatalf("%s: query stripped before redirect: %q", target, loc)
+		}
+	}
+	if n := logs.count("trappsec.watch_hit"); n != 0 {
+		t.Fatalf("redirected requests inspected: %d watch_hit events", n)
+	}
+	if rec := do(t, app, "GET", "/w?secret=1", "", nil); rec.Code != 200 {
+		t.Fatalf("direct request: %d", rec.Code)
+	}
+	logs.waitEvent(t, "trappsec.watch_hit")
 }

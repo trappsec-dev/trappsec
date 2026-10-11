@@ -23,7 +23,7 @@ func TestTriggerWatchEventEmitsSignal(t *testing.T) {
 	s.Request.Method = func(_ any) string { return "GET" }
 	s.Request.UserAgent = func(_ any) string { return "ua" }
 
-	s.TriggerWatchEvent(struct{}{}, []FoundField{{Type: "query", Field: "x"}})
+	s.triggerWatchEvent(struct{}{}, []FoundField{{Type: "query", Field: "x"}})
 
 	if len(capture.events) != 1 {
 		t.Fatalf("expected one event, got %d", len(capture.events))
@@ -63,7 +63,7 @@ func TestTriggerTrapEventUsesAuthenticatedResponse(t *testing.T) {
 		},
 	}
 
-	body, cfg := s.TriggerTrapEvent(struct{}{}, trap)
+	body, cfg := s.triggerTrapEvent(struct{}{}, trap)
 	if cfg.StatusCode != 201 {
 		t.Fatalf("expected 201, got %d", cfg.StatusCode)
 	}

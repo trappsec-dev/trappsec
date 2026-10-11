@@ -8,6 +8,7 @@
 # ]
 # ///
 
+import atexit
 import sys
 import os
 import logging
@@ -31,13 +32,10 @@ app = Flask(__name__)
 app.secret_key = "super-secret-key"
 
 ts = trappsec.Sentry(app, service="FlaskApp", environment="Development")
+atexit.register(ts.close)  # flush queued webhook/Slack deliveries on exit
 
 # customize default responses for decoy routes to blend into your application
-ts.default_responses["unauthenticated"] = {
-    "status_code": 401,
-    "response_body": {"error": "authentication required"},
-    "mime_type": "application/json"
-}
+ts.default_unauthenticated_response(status=401, body={"error": "authentication required"})
 
 # dummy logic to resolve user info for the sake of demo
 ts.identify_user(lambda r: {

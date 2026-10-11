@@ -33,9 +33,9 @@ def _bare_sentry():
     return ts
 
 
-@pytest.mark.parametrize("case", _load("values_match.json"), ids=lambda c: f"{c['actual']!r}~{c['expected']!r}" if c else "missing")
+@pytest.mark.parametrize("case", _load("values_match.json"), ids=lambda c: c.get("note") or f"{c['actual']!r}~{c['expected']!r}" if c else "missing")
 def test_values_match(case):
-    assert values_match(case["actual"], case["expected"]) is case["match"]
+    assert values_match(_expand(case["actual"]), _expand(case["expected"])) is case["match"]
 
 
 @pytest.mark.parametrize("case", _load("detect_honey_fields.json"), ids=lambda c: c["name"] if c else "missing")
@@ -45,18 +45,18 @@ def test_detect_honey_fields(case):
     add = wb.query if source == "query" else wb.body
     for field, rule in case["rules"].items():
         if "default" in rule:
-            add(field, default=rule["default"], intent=rule["intent"])
+            add(field, default=_expand(rule["default"]), intent=rule["intent"])
         else:
             add(field, intent=rule["intent"])
     built = wb.build()
     rules = built["query_fields"] if source == "query" else built["body_fields"]
 
-    data, found, touched = _bare_sentry()._detect_honey_fields(case["data"], rules, None, source)
+    data, found, touched = _bare_sentry()._detect_honey_fields(_expand(case["data"]), rules, None, source)
 
-    expected = [dict(f, type=source) for f in case["found"]]
+    expected = [dict(f, type=source) for f in _expand(case["found"])]
     key = lambda f: f["field"]  # noqa: E731
     assert sorted(found, key=key) == sorted(expected, key=key)
-    assert data == case["result"]
+    assert data == _expand(case["result"])
     assert touched is case["touched"]
 
 
@@ -85,10 +85,16 @@ def test_event_keys():
 
 
 def _expand(v):
-    """Expand {"$repeat": s, "count": n, "prefix": p, "suffix": x} placeholders."""
+    """Expand {"$repeat": s, "count": n, "prefix": p, "suffix": x} and
+    {"$nest": n, "leaf": x} (x in n single-element lists, built iteratively) placeholders."""
     if isinstance(v, dict):
         if "$repeat" in v:
             return v.get("prefix", "") + v["$repeat"] * v["count"] + v.get("suffix", "")
+        if "$nest" in v:
+            out = _expand(v["leaf"])
+            for _ in range(v["$nest"]):
+                out = [out]
+            return out
         return {k: _expand(x) for k, x in v.items()}
     if isinstance(v, list):
         return [_expand(x) for x in v]
@@ -117,3 +123,22 @@ def test_event_path_and_user_agent_truncation():
     ts.trigger(None, "reason")
     assert events[0]["path"] == fx["path_out"]
     assert events[0]["user_agent"] == fx["user_agent_out"]
+
+
+def _is_trap_fixture():
+    path = CONFORMANCE / "is_trap.json"
+    if not path.exists() and not os.environ.get("CI"):
+        return [pytest.param(None, marks=pytest.mark.skip(reason="is_trap.json not found (outside the trappsec repository)"))]
+    return [json.loads(path.read_text(encoding="utf-8"))]
+
+
+@pytest.mark.parametrize("fx", _is_trap_fixture())
+def test_is_trap(fx):
+    with mock.patch.object(Sentry, "_register", lambda self, app: None):
+        ts = Sentry(object(), "svc", "test")
+    for t in fx["traps"]:
+        ts.trap(t["path"]).methods(*t["methods"])
+    ts.request.method = lambda r: r[0]
+    ts.request.path = lambda r: r[1]
+    for case in fx["cases"]:
+        assert ts.is_trap((case["method"], case["path"])) is case["is_trap"], case

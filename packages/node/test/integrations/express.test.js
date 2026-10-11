@@ -128,6 +128,93 @@ for (const [label, pkg] of [['express4', 'express4'], ['express5', 'express']]) 
         assert.deepEqual(events[0].found_fields.map((f) => f.type).sort(), ['body', 'query']);
     });
 
+    test(`${label}: trap duplicating a route inside a mounted sub-router fails loud`, async () => {
+        const app = express();
+        const { sentry } = makeSentry(app);
+        sentry.trap('/api/secret').methods('GET');
+        const api = express.Router();
+        api.get('/secret', (req, res) => res.send('real'));
+        app.use('/api', api);
+        assert.throws(() => sentry.bootstrap(), /GET \/api\/secret duplicates an existing application route/);
+
+        // a different method, or a different mount, is not a duplicate
+        const app2 = express();
+        const s2 = makeSentry(app2).sentry;
+        s2.trap('/api/secret').methods('POST');
+        s2.trap('/other/secret').methods('GET');
+        const api2 = express.Router();
+        api2.get('/secret', (req, res) => res.send('real'));
+        app2.use('/api', api2);
+        s2.bootstrap();
+    });
+
+    test(`${label}: watch on a sub-router mounted under a parameterised path fires`, async (t) => {
+        const app = express();
+        const { sentry, events } = makeSentry(app);
+        sentry.watch('/users/:id/x').query('debug');
+        const r = express.Router({ mergeParams: true });
+        r.get('/x', (req, res) => res.json({ q: req.query, id: req.params.id }));
+        r.get('/y', (req, res) => res.json({ q: req.query }));
+        app.use('/users/:id', r);
+        const { server, close } = await serve(app);
+        t.after(close);
+
+        let res = await request(server, { path: '/users/5/x?debug=1&k=v' });
+        assert.deepEqual(res.json, { q: { k: 'v' }, id: '5' });
+        assert.equal(events.length, 1);
+        assert.equal(events[0].found_fields[0].field, 'debug');
+        res = await request(server, { path: '/users/6/y?debug=1' }); // unwatched route
+        assert.deepEqual(res.json, { q: { debug: '1' } });
+        assert.equal(events.length, 1);
+    });
+
+    test(`${label}: a router mounted twice resolves each mount to its own watch`, async (t) => {
+        const app = express();
+        const { sentry, events } = makeSentry(app);
+        sentry.watch('/a/x').query('debug');
+        const r = express.Router();
+        r.get('/x', (req, res) => res.json(req.query));
+        app.use('/a', r);
+        app.use('/b', r);
+        const { server, close } = await serve(app);
+        t.after(close);
+        assert.deepEqual((await request(server, { path: '/b/x?debug=1' })).json, { debug: '1' });
+        assert.equal(events.length, 0);
+        assert.deepEqual((await request(server, { path: '/a/x?debug=1' })).json, {});
+        assert.equal(events.length, 1);
+    });
+
+    test(`${label}: watch that may be inside a mounted sub-app logs a warning naming the mount`, async (t) => {
+        const app = express();
+        const { sentry } = makeSentry(app);
+        sentry.watch('/sub/things').query('debug');
+        sentry.watch('/elsewhere').query('debug');
+        const sub = express();
+        sub.get('/things', (req, res) => res.json(req.query));
+        app.use('/sub', sub);
+        app.get('/elsewhere', (req, res) => res.json(req.query));
+        const { server, close } = await serve(app);
+        t.after(close);
+        await request(server, { path: '/elsewhere' });
+        const warns = sentry.logger.logs.warn.filter((w) => w.includes('sub-app'));
+        assert.equal(warns.length, 1);
+        assert.match(warns[0], /\/sub\/things.*mounted at \/sub.*Install trappsec on the sub-app/);
+    });
+
+    test(`${label}: plain Express does not enter AsyncLocalStorage for pending body watches`, async (t) => {
+        const ExpressIntegration = require('../../src/integrations/express');
+        const app = express();
+        const { sentry } = makeSentry(app);
+        sentry.watch('/p').body('is_admin');
+        let store = 'unset';
+        app.post('/p', express.json(), (req, res) => { store = ExpressIntegration.pendingRequest.getStore(); res.json(req.body); });
+        const { server, close } = await serve(app);
+        t.after(close);
+        const r = await request(server, { method: 'POST', path: '/p', body: { is_admin: true, n: 1 } });
+        assert.deepEqual(r.json, { n: 1 });
+        assert.equal(store, undefined);
+    });
+
     test(`${label}: multi-value query watch`, async (t) => {
         const app = express();
         const { sentry, events } = makeSentry(app);

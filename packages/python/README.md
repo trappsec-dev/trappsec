@@ -39,6 +39,8 @@ ts.watch("/profile").body("is_admin", default=False, intent="Privilege Escalatio
                     .query("debug", default=NO_DEFAULT, intent="Reconnaissance")
 ```
 
+`ts.default_response(...)` and `ts.default_unauthenticated_response(...)` take the same arguments as `respond` / `if_unauthenticated` and set the responses of traps that do not call them.
+
 Traps and watches are installed at application startup. Call `ts.bootstrap()` yourself (it is idempotent) if you serve the app through a custom test client or server; the first request also bootstraps lazily where the framework allows it.
 
 ## Alerting
@@ -49,7 +51,7 @@ Events are written to the `trappsec` logger as JSON. trappsec never configures l
 * `add_slack(url, alerts_only=True)`: Slack incoming webhook.
 * `add_otel()`: adds attributes and events to the current OpenTelemetry span.
 
-Call `ts.close()` on shutdown to stop heartbeats and flush pending deliveries.
+Call `ts.close()` on shutdown (for example `atexit.register(ts.close)`) to stop heartbeats and flush pending deliveries; `timeout` is in seconds (default 5).
 
 ## License
 

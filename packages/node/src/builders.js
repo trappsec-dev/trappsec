@@ -1,6 +1,28 @@
 const NO_DEFAULT = Symbol('NO_DEFAULT');
 
-const hasOwn = (o, k) => o != null && Object.prototype.hasOwnProperty.call(o, k);
+/**
+ * Shared by `Sentry.default_response` and `TrapBuilder.respond`: returns the new
+ * response settings for `base` (the settings so far) after applying `opts`.
+ * Only the options passed change anything; `template` replaces everything.
+ */
+function mergeResponse(label, templates, base, { status, body, mime_type, template } = {}) {
+    const provided = (v) => v !== undefined && v !== null;
+    if (provided(template)) {
+        if (provided(status) || provided(body) || provided(mime_type)) {
+            throw new Error(`${label}: \`template\` cannot be used together with \`status\`, \`body\`, or \`mime_type\`.`);
+        }
+        if (!Object.hasOwn(templates, template)) {
+            throw new Error(`${label}: template '${template}' not found.`);
+        }
+        // Shallow copy: function bodies must survive.
+        return { ...templates[template] };
+    }
+    const next = { ...base };
+    if (provided(status)) next.status_code = status;
+    if (provided(body)) next.response_body = body;
+    if (provided(mime_type)) next.mime_type = mime_type;
+    return next;
+}
 
 class TrapBuilder {
     constructor(ts, path) {
@@ -17,6 +39,7 @@ class TrapBuilder {
 
     methods(...args) {
         this.config.methods = args;
+        if (this.ts && typeof this.ts._traps_changed === 'function') this.ts._traps_changed();
         return this;
     }
 
@@ -25,29 +48,8 @@ class TrapBuilder {
         return this;
     }
 
-    _respond(kind, { status = undefined, body = undefined, mime_type = undefined, template = undefined } = {}) {
-        const provided = (v) => v !== undefined && v !== null;
-        const ov = this._overrides[kind] || {};
-
-        if (provided(template)) {
-            if (provided(status) || provided(body) || provided(mime_type)) {
-                throw new Error("response_builder: `template` cannot be used together with `status`, `body`, or `mime_type`.");
-            }
-
-            const tmpl = hasOwn(this.ts._templates, template) ? this.ts._templates[template] : undefined;
-            if (!tmpl) {
-                throw new Error(`response_builder: template '${template}' not found.`);
-            }
-
-            // Shallow copy: function bodies must survive.
-            this._overrides[kind] = { ...tmpl };
-        } else {
-            if (provided(status)) ov.status_code = status;
-            if (provided(body)) ov.response_body = body;
-            if (provided(mime_type)) ov.mime_type = mime_type;
-            this._overrides[kind] = ov;
-        }
-
+    _respond(kind, opts = {}) {
+        this._overrides[kind] = mergeResponse("response_builder", this.ts._templates, this._overrides[kind] || {}, opts);
         return this;
     }
 
@@ -64,7 +66,7 @@ class TrapBuilder {
         const base = { ...this.ts.default_responses[kind] };
         if (ov) {
             for (const k of ["status_code", "response_body", "mime_type"]) {
-                if (hasOwn(ov, k)) base[k] = ov[k];
+                if (Object.hasOwn(ov, k)) base[k] = ov[k];
             }
         }
         return base;
@@ -80,6 +82,16 @@ class TrapBuilder {
     }
 }
 
+// `{ default, intent }`, as in Python; `defaultValue` is the pre-0.3 name.
+function fieldRule(opts) {
+    const o = opts || {};
+    let def = NO_DEFAULT;
+    if (Object.hasOwn(o, 'default')) def = o.default;
+    else if (Object.hasOwn(o, 'defaultValue')) def = o.defaultValue;
+    if (def === undefined) def = NO_DEFAULT;
+    return { default: def, intent: o.intent === undefined ? null : o.intent };
+}
+
 class WatchBuilder {
     constructor(path) {
         this.path = path;
@@ -87,13 +99,13 @@ class WatchBuilder {
         this._body = Object.create(null);
     }
 
-    query(name, { defaultValue = NO_DEFAULT, intent = null } = {}) {
-        this._query[name] = { default: defaultValue, intent: intent };
+    query(name, opts = {}) {
+        this._query[name] = fieldRule(opts);
         return this;
     }
 
-    body(name, { defaultValue = NO_DEFAULT, intent = null } = {}) {
-        this._body[name] = { default: defaultValue, intent: intent };
+    body(name, opts = {}) {
+        this._body[name] = fieldRule(opts);
         return this;
     }
 
@@ -106,4 +118,4 @@ class WatchBuilder {
     }
 }
 
-module.exports = { TrapBuilder, WatchBuilder, NO_DEFAULT };
+module.exports = { mergeResponse, TrapBuilder, WatchBuilder, NO_DEFAULT };

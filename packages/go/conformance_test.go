@@ -57,8 +57,9 @@ func TestConformanceValuesMatch(t *testing.T) {
 	for i, c := range fx.Cases {
 		name := fmt.Sprintf("%d:%v~%v", i, c.Actual, c.Expected)
 		t.Run(name, func(t *testing.T) {
-			if got := valuesMatch(c.Actual, c.Expected); got != c.Match {
-				t.Fatalf("valuesMatch(%#v, %#v) = %v, want %v", c.Actual, c.Expected, got, c.Match)
+			actual, expected := expandRepeat(c.Actual), expandRepeat(c.Expected)
+			if got := valuesMatch(actual, expected); got != c.Match {
+				t.Fatalf("valuesMatch(%v, %v) = %v, want %v", c.Actual, c.Expected, got, c.Match)
 			}
 		})
 	}
@@ -93,14 +94,14 @@ func TestConformanceDetectHoneyFields(t *testing.T) {
 			}
 
 			s := NewSentry("svc", "test")
-			data, found, touched := s.DetectHoneyFieldsAny(c.Data, rules, nil, source)
+			data, found, touched := s.detectHoneyFieldsAny(expandRepeat(c.Data), rules, nil, source)
 			if found == nil {
 				found = []FoundField{}
 			}
 
 			want := make([]map[string]any, 0, len(c.Found))
 			for _, f := range c.Found {
-				want = append(want, map[string]any{"type": source, "field": f["field"], "value": f["value"], "intent": f["intent"]})
+				want = append(want, map[string]any{"type": source, "field": f["field"], "value": expandRepeat(f["value"]), "intent": f["intent"]})
 			}
 			sort.Slice(found, func(i, j int) bool { return found[i].Field < found[j].Field })
 			sort.Slice(want, func(i, j int) bool { return want[i]["field"].(string) < want[j]["field"].(string) })
@@ -108,7 +109,7 @@ func TestConformanceDetectHoneyFields(t *testing.T) {
 			if got, exp := normalizeJSON(t, found), normalizeJSON(t, want); !reflect.DeepEqual(got, exp) {
 				t.Errorf("found = %v, want %v", got, exp)
 			}
-			if got, exp := normalizeJSON(t, data), normalizeJSON(t, c.Result); !reflect.DeepEqual(got, exp) {
+			if got, exp := normalizeJSON(t, data), normalizeJSON(t, expandRepeat(c.Result)); !reflect.DeepEqual(got, exp) {
 				t.Errorf("data = %v, want %v", got, exp)
 			}
 			if touched != c.Touched {
@@ -130,8 +131,8 @@ func TestConformanceEventKeys(t *testing.T) {
 	s := NewSentry("svc", "test")
 	capture := &captureHandler{}
 	s.handlers = []EventHandler{capture}
-	s.TriggerTrapEvent(nil, TrapConfig{Path: "/t"})
-	s.TriggerWatchEvent(nil, []FoundField{{Type: "body", Field: "f"}})
+	s.triggerTrapEvent(nil, TrapConfig{Path: "/t"})
+	s.triggerWatchEvent(nil, []FoundField{{Type: "body", Field: "f"}})
 	s.Trigger(nil, "", "", nil)
 
 	keysOf := func(v any) []string {
@@ -188,6 +189,14 @@ func expandRepeat(v any) any {
 		}
 		return out
 	case map[string]any:
+		if _, ok := t["$nest"]; ok {
+			n, _ := t["$nest"].(json.Number).Int64()
+			out := expandRepeat(t["leaf"])
+			for i := int64(0); i < n; i++ { // iteratively: the value may be thousands deep
+				out = []any{out}
+			}
+			return out
+		}
 		if s, ok := t["$repeat"].(string); ok {
 			n, _ := t["count"].(json.Number).Int64()
 			prefix, _ := t["prefix"].(string)
@@ -234,5 +243,33 @@ func TestConformanceSafeValue(t *testing.T) {
 	if m["path"] != ev["path_out"] || m["user_agent"] != ev["user_agent_out"] {
 		t.Errorf("event path/user_agent: got %d/%d chars, want %d/%d",
 			len(m["path"].(string)), len(m["user_agent"].(string)), len(ev["path_out"].(string)), len(ev["user_agent_out"].(string)))
+	}
+}
+
+func TestConformanceIsTrap(t *testing.T) {
+	var fx struct {
+		Traps []struct {
+			Path    string   `json:"path"`
+			Methods []string `json:"methods"`
+		} `json:"traps"`
+		Cases []struct {
+			Method string `json:"method"`
+			Path   string `json:"path"`
+			IsTrap bool   `json:"is_trap"`
+		} `json:"cases"`
+	}
+	loadConformance(t, "is_trap.json", &fx)
+	s := NewSentry("svc", "test")
+	for _, tr := range fx.Traps {
+		s.Trap(tr.Path).Methods(tr.Methods...)
+	}
+	for _, c := range fx.Cases {
+		t.Run(c.Method+" "+c.Path, func(t *testing.T) {
+			s.Request.Method = func(any) string { return c.Method }
+			s.Request.Path = func(any) string { return c.Path }
+			if got := s.IsTrap(nil); got != c.IsTrap {
+				t.Fatalf("IsTrap(%s %s) = %v, want %v", c.Method, c.Path, got, c.IsTrap)
+			}
+		})
 	}
 }

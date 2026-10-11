@@ -134,6 +134,8 @@ func NewWebhookHandler(url string, opts *WebhookOptions) (*WebhookHandler, error
 	if opts.HeartbeatInterval > 0 {
 		h.hbDone = make(chan struct{})
 		go h.heartbeatLoop(opts.HeartbeatInterval)
+	} else if opts.HeartbeatInterval < 0 {
+		logger.Printf("trappsec: webhook HeartbeatInterval %d is not positive; heartbeat disabled", opts.HeartbeatInterval)
 	}
 
 	return h, nil

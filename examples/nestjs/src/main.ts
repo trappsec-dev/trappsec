@@ -34,6 +34,10 @@ async function bootstrap() {
 
     // trappsec initialization
     const ts = new trappsec.Sentry(app, "NestJSApp", "Development");
+    // Flush queued webhook/Slack deliveries before exiting.
+    for (const sig of ['SIGINT', 'SIGTERM']) {
+        process.once(sig, async () => { await ts.close(); process.exit(0); });
+    }
 
     if (values.otel) {
         ts.add_otel();
@@ -62,8 +66,7 @@ async function bootstrap() {
         return headers['x-real-ip'] || req.ip || req.socket.remoteAddress;
     });
 
-    // Explicitly setting default unauthenticated response via direct object access 
-    ts.default_responses.unauthenticated.response_body = { "error": "authentication required" };
+    ts.default_unauthenticated_response({ body: { "error": "authentication required" } });
 
 
     // 4. Decoy Routes (Traps)
@@ -105,8 +108,8 @@ async function bootstrap() {
 
     // 5.1 /auth/register
     ts.watch("/auth/register")
-        .body("role", { defaultValue: "user", intent: "Privilege Escalation (role)" })
-        .body("credits", { defaultValue: 0, intent: "Credit Manipulation" });
+        .body("role", { default: "user", intent: "Privilege Escalation (role)" })
+        .body("credits", { default: 0, intent: "Credit Manipulation" });
 
     // 5.2 /api/v2/profile
     ts.watch("/api/v2/profile")
@@ -114,16 +117,16 @@ async function bootstrap() {
 
     // 5.3 /api/v2/orders/:id
     ts.watch("/api/v2/orders/:id")
-        .query("discount_code", { defaultValue: "NONE", intent: "Coupon Tampering" });
+        .query("discount_code", { default: "NONE", intent: "Coupon Tampering" });
 
     // 5.4 Echo routes for field stripping verification
     ts.watch("/api/v2/echo/query")
         .query("honey_q", { intent: "Query Field Test" })
-        .query("role_q", { defaultValue: "user", intent: "Query Default Test" });
+        .query("role_q", { default: "user", intent: "Query Default Test" });
 
     ts.watch("/api/v2/echo/body")
         .body("honey_b", { intent: "Body Field Test" })
-        .body("role_b", { defaultValue: "user", intent: "Body Default Test" });
+        .body("role_b", { default: "user", intent: "Body Default Test" });
 
     ts.watch("/api/v2/echo/form")
         .body("honey_f", { intent: "Form Field Test" });

@@ -13,10 +13,10 @@ Design notes
   2.x series); if it is unavailable an error is logged once and watches are
   inactive rather than falling back to raw-URL guessing.
 * Only requests that resolve to a watched route are touched. The body is only
-  buffered when the watch has body fields, the content type is JSON /
-  urlencoded / multipart and the declared ``Content-Length`` is below
-  ``MAX_INSPECT_BYTES``; otherwise the request streams untouched. When a body is
-  rewritten the ``Content-Length`` header is updated to match.
+  buffered when the watch has body fields and the declared ``Content-Length`` is
+  below ``MAX_INSPECT_BYTES`` (any content type: a JSON body is sniffed even
+  when it is not labelled as JSON); otherwise the request streams untouched.
+  When a body is rewritten the ``Content-Length`` header is updated to match.
 * ``identify_user`` and callable defaults receive a real ``litestar.Request``
   built on an isolated copy of the ASGI scope (so cookies/headers work and no
   parsed state leaks into the application's own ``Request``). Litestar
@@ -30,90 +30,17 @@ Design notes
 import json
 import re
 import threading
-from urllib.parse import parse_qsl, urlencode
+from functools import lru_cache
 
-from . import _jsonbody
+from . import _formbody, _jsonbody
 from ._version import warn_if_older
 
 MAX_INSPECT_BYTES = 10 * 1024 * 1024
 
 _TYPED_PARAM_RE = re.compile(r"\{([^}:]+):[^}]+\}")
-_NAME_RE = re.compile(r';\s*name=(?:"([^"]*)"|([^;\s]*))', re.I)
-_FILENAME_RE = re.compile(r";\s*filename\*?=", re.I)
 
 
-def _media_type(content_type):
-    return (content_type or "").split(";")[0].strip().lower()
-
-
-def _group_pairs(pairs):
-    """[(k, v), ...] -> {k: scalar | [v, v, ...]} (lists only for repeated keys)."""
-    out = {}
-    for k, v in pairs:
-        if k in out:
-            if isinstance(out[k], list):
-                out[k].append(v)
-            else:
-                out[k] = [out[k], v]
-        else:
-            out[k] = v
-    return out
-
-
-def _multipart_boundary(content_type):
-    for param in (content_type or "").split(";")[1:]:
-        param = param.strip()
-        if param.lower().startswith("boundary="):
-            return param.split("=", 1)[1].strip().strip('"')
-    return None
-
-
-def _multipart_parts(body, boundary):
-    """Split a multipart body into (preamble, parts, tail); raw bytes are kept so
-    unrelated parts can be re-emitted byte-for-byte."""
-    delim = b"--" + boundary.encode("utf-8")
-    chunks = body.split(delim)
-    preamble, tail, parts = chunks[0], b"", []
-    for seg in chunks[1:]:
-        if seg.startswith(b"--"):
-            tail = seg
-            break
-        head, sep, rest = seg.partition(b"\r\n\r\n")
-        name, is_file = None, False
-        for line in head.split(b"\r\n"):
-            text = line.decode("latin1")
-            if text.lower().startswith("content-disposition"):
-                m = _NAME_RE.search(text)
-                if m:
-                    name = m.group(1) if m.group(1) is not None else m.group(2)
-                is_file = bool(_FILENAME_RE.search(text))
-        value = rest[:-2] if rest.endswith(b"\r\n") else rest
-        parts.append({"name": name, "is_file": is_file, "raw": seg, "value": value.decode("utf-8", "replace")})
-    return preamble, parts, tail or b"--\r\n"
-
-
-def _rebuild_multipart(preamble, parts, tail, boundary, drop):
-    delim = b"--" + boundary.encode("utf-8")
-    kept = [p["raw"] for p in parts if p["is_file"] or p["name"] not in drop]
-    return preamble + b"".join(delim + raw for raw in kept) + delim + tail
-
-
-def _detect_json(ts, obj, rules, req):
-    """Top-level object -> inspect; array -> inspect every object element; else skip."""
-    found, touched = [], False
-    if isinstance(obj, dict):
-        obj, mod, touched = ts._detect_honey_fields(obj, rules, req)
-        found.extend(mod or [])
-    elif isinstance(obj, list):
-        for i, el in enumerate(obj):
-            if isinstance(el, dict):
-                el, mod, t = ts._detect_honey_fields(el, rules, req)
-                obj[i] = el
-                found.extend(mod or [])
-                touched = touched or t
-    return obj, found, touched
-
-
+@lru_cache(maxsize=1024)
 def _normalize_template(path):
     path = _TYPED_PARAM_RE.sub(r"{\1}", str(path))
     if not path.startswith("/"):
@@ -176,15 +103,6 @@ class LitestarIntegration:
             if self._bootstrap_error is not None:
                 raise self._bootstrap_error
 
-    def _fallback_response(self):
-        cfg = dict(self.ts.default_responses.get("unauthenticated") or {})
-        cfg.setdefault("status_code", 401)
-        cfg.setdefault("mime_type", "application/json")
-        body = cfg.get("response_body", {})
-        if callable(body):
-            body = {}
-        return body, cfg
-
     def _inject_traps(self):
         from litestar import Request, Response
         from litestar.handlers import HTTPRouteHandler
@@ -210,7 +128,7 @@ class LitestarIntegration:
                     body, cfg = ts._trigger_trap_event(request, _trap)
                 except Exception as e:
                     ts.logger.error("trappsec trap error: %s", e)
-                    body, cfg = self._fallback_response()
+                    body, cfg = ts._trap_fallback(_trap)
                 if not isinstance(body, (str, bytes)):
                     body = json.dumps(body, default=str)
                 if isinstance(body, str):
@@ -300,9 +218,8 @@ class LitestarIntegration:
 
         self.app.asgi_handler = wrapped
 
-    async def _read_body(self, scope, receive, headers):
+    async def _read_body(self, receive, headers):
         """Buffer the body only if it is worth inspecting; returns (messages, body) or None."""
-        media = _media_type(headers.get("content-type", ""))
         try:
             length = int(headers.get("content-length", "0") or 0)
         except ValueError:
@@ -336,7 +253,7 @@ class LitestarIntegration:
         messages, body = [], None
         app_receive = receive
         if body_fields:
-            read = await self._read_body(scope, receive, headers)
+            read = await self._read_body(receive, headers)
             if read is not None:
                 messages, body = read
                 app_receive = _replay(messages, fallback=receive)
@@ -353,14 +270,11 @@ class LitestarIntegration:
 
         try:
             if query_fields:
-                qs = scope.get("query_string", b"").decode("utf-8", "replace")
+                qs = scope.get("query_string", b"")
                 if qs:
-                    pairs = parse_qsl(qs, keep_blank_values=True)
-                    data, mod, touched = self.ts._detect_honey_fields(
-                        _group_pairs(pairs), query_fields, request, source="query")
-                    found.extend(mod or [])
-                    if touched:
-                        new_qs = urlencode([(k, v) for k, v in pairs if k in data]).encode("utf-8")
+                    mod, new_qs = _formbody.inspect_urlencoded(
+                        self.ts, qs, query_fields, request, source="query")
+                    found.extend(mod)
 
             if body:
                 new_body = self._inspect_body(body, headers, body_fields, request, found)
@@ -397,7 +311,7 @@ class LitestarIntegration:
     def _inspect_body(self, body, headers, rules, request, found):
         """Returns the rewritten body bytes if something was stripped, else None."""
         ctype = headers.get("content-type", "")
-        media = _media_type(ctype)
+        media = _jsonbody.media_type(ctype)
 
         if media not in _jsonbody.FORM_MEDIA:
             # request.json() ignores Content-Type, so sniff any non-form body.
@@ -410,25 +324,13 @@ class LitestarIntegration:
                 obj = _jsonbody.sniff_json(body)
                 if obj is None:
                     return None
-            obj, mod, touched = _detect_json(self.ts, obj, rules, request)
+            obj, mod, touched = self.ts._detect_honey_fields(obj, rules, request)
             found.extend(mod)
             return _jsonbody.serialize(obj) if touched else None
 
         if media == "application/x-www-form-urlencoded":
-            pairs = parse_qsl(body.decode("utf-8", "replace"), keep_blank_values=True)
-            data, mod, touched = self.ts._detect_honey_fields(_group_pairs(pairs), rules, request)
-            found.extend(mod or [])
-            return urlencode([(k, v) for k, v in pairs if k in data]).encode("utf-8") if touched else None
-
-        if media == "multipart/form-data":
-            boundary = _multipart_boundary(ctype)
-            if not boundary:
-                return None
-            preamble, parts, tail = _multipart_parts(body, boundary)
-            pairs = [(p["name"], p["value"]) for p in parts if p["name"] and not p["is_file"]]
-            data, mod, touched = self.ts._detect_honey_fields(_group_pairs(pairs), rules, request)
-            found.extend(mod or [])
-            if touched:
-                drop = {k for k, _ in pairs if k not in data}
-                return _rebuild_multipart(preamble, parts, tail, boundary, drop)
-        return None
+            mod, new_body = _formbody.inspect_urlencoded(self.ts, body, rules, request)
+        else:
+            mod, new_body = _formbody.inspect_multipart(self.ts, body, ctype, rules, request)
+        found.extend(mod)
+        return new_body

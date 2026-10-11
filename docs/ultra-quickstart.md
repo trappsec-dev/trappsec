@@ -178,7 +178,7 @@ func main() {
     })
 
     // 2. Honey Field (Watch)
-    app.Watch("/profile").Body("is_admin", trappsec.NoDefault, "PrivEsc")
+    app.Watch("/profile").Body("is_admin", trappsec.Intent("PrivEsc"))
 
     app.GET("/profile", func(c *gin.Context) {
         mu.Lock()

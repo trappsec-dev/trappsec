@@ -321,3 +321,36 @@ def test_traps_answer_under_flask_wtf_csrf(csrf_first):
     assert c.post("/real").status_code == 400  # CSRF still protects real routes
     assert c.post("/admin/backup").status_code == 401
     assert len([e for e in cap.events if e["event"] == "trappsec.trap_hit"]) == 1
+
+
+def test_trap_with_path_params_and_catch_all():
+    app, sentry, cap = make()
+    sentry.trap("/users/<id>/secret").methods("GET")
+    sentry.trap("/dump/<path:p>").methods("GET")
+    c = app.test_client()
+    assert c.get("/users/7/secret").status_code == 401
+    assert c.get("/dump/a/b").status_code == 401
+    assert len([e for e in cap.events if e["event"] == "trappsec.trap_hit"]) == 2
+
+
+def test_query_strip_rewrites_raw_query_string():
+    app, sentry, cap = make()
+
+    @app.route("/raw")
+    def raw():
+        return jsonify(qs=request.query_string.decode(), full=request.full_path,
+                       url=request.url, args=request.args.getlist("keep"))
+
+    sentry.watch("/raw").query("debug")
+    r = app.test_client().get("/raw?debug=1&keep=a&keep=b")
+    assert r.json["qs"] == "keep=a&keep=b"
+    assert r.json["full"] == "/raw?keep=a&keep=b"
+    assert r.json["url"].endswith("/raw?keep=a&keep=b")
+    assert r.json["args"] == ["a", "b"]
+
+
+def test_single_occurrence_scalar_for_list_default():
+    app, sentry, cap = make()
+    sentry.watch("/items").query("role", default=["1"]).query("mode", default="1")
+    app.test_client().get("/items?role=1&mode=1")
+    assert [f["field"] for f in watch_events(cap)[0]["found_fields"]] == ["role"]

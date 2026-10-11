@@ -1,9 +1,13 @@
 const os = require('os');
-const { TrapBuilder, WatchBuilder, NO_DEFAULT } = require('./builders');
-const { LogHandler, WebhookHandler, SlackHandler, OTELHandler, safeStringify } = require('./handlers');
+const { mergeResponse, TrapBuilder, WatchBuilder, NO_DEFAULT } = require('./builders');
+const { LogHandler, WebhookHandler, SlackHandler, OTELHandler, safeStringify, isAsyncResult } = require('./handlers');
+const { normalizePath } = require('./integrations/_common');
 
 const MAX_STR = 1024;
-const hasOwn = (o, k) => o != null && Object.prototype.hasOwnProperty.call(o, k);
+// Containers nested deeper than this are never matched and are recorded as
+// NESTED (a top-level array or object is depth 1), so no input can exhaust the stack.
+const MAX_DEPTH = 32;
+const NESTED = "<nested>";
 
 /** Truncate to `limit` code points (as Python and Go do), never splitting a surrogate pair. */
 function truncStr(v, limit = MAX_STR) {
@@ -19,17 +23,37 @@ function isPlainObject(v) {
     return p === Object.prototype || p === null;
 }
 
-/** Sanitize a recorded value (C3). */
-function safe_value(v) {
+/** Copy of `v` with every array / plain object deeper than MAX_DEPTH replaced by NESTED. */
+function clip(v, depth) {
+    const arr = Array.isArray(v);
+    if (!arr && !isPlainObject(v)) return v;
+    if (depth > MAX_DEPTH) return NESTED;
+    if (arr) return v.map((x) => clip(x, depth + 1));
+    const out = Object.create(null);
+    for (const k of Object.keys(v)) out[k] = clip(v[k], depth + 1);
+    return out;
+}
+
+function sanitize(v, depth) {
     if (v === null || v === undefined) return null;
     const t = typeof v;
     if (t === 'boolean' || t === 'number') return v;
     if (t === 'bigint') return String(v);
     if (t === 'string') return truncStr(v);
-    if (Array.isArray(v)) return v.slice(0, 20).map(safe_value);
-    if (isPlainObject(v)) return truncStr(safeStringify(v, { sortKeys: true }));
+    if (Array.isArray(v)) return depth > MAX_DEPTH ? NESTED : v.slice(0, 20).map((x) => sanitize(x, depth + 1));
+    if (isPlainObject(v)) {
+        if (depth > MAX_DEPTH) return NESTED;
+        let clipped;
+        try { clipped = clip(v, depth); } catch (e) { return "<Object>"; } // throwing getter
+        return truncStr(safeStringify(clipped, { sortKeys: true }));
+    }
     const name = (v && v.constructor && v.constructor.name) || 'Object';
     return `<${name}>`;
+}
+
+/** Sanitize a recorded value (C3). */
+function safe_value(v) {
+    return sanitize(v, 1);
 }
 
 function canonical(v) {
@@ -38,20 +62,21 @@ function canonical(v) {
 }
 
 /** Loose-but-safe equality between a received value and the configured default (C3). */
-function values_match(actual, expected) {
+function values_match(actual, expected, depth = 1) {
+    const aArr = Array.isArray(actual), eArr = Array.isArray(expected);
+    const aObj = isPlainObject(actual), eObj = isPlainObject(expected);
+    if ((aArr || eArr || aObj || eObj) && depth > MAX_DEPTH) return false;
     if (actual === expected) return true;
     // Containers compare element-wise / key-wise with these same rules.
-    const aArr = Array.isArray(actual), eArr = Array.isArray(expected);
     if (aArr || eArr) {
         return aArr && eArr && actual.length === expected.length
-            && actual.every((a, i) => values_match(a, expected[i]));
+            && actual.every((a, i) => values_match(a, expected[i], depth + 1));
     }
-    const aObj = isPlainObject(actual), eObj = isPlainObject(expected);
     if (aObj || eObj) {
         if (!aObj || !eObj) return false;
         const keys = Object.keys(actual);
         return keys.length === Object.keys(expected).length
-            && keys.every(k => hasOwn(expected, k) && values_match(actual[k], expected[k]));
+            && keys.every(k => Object.hasOwn(expected, k) && values_match(actual[k], expected[k], depth + 1));
     }
     const isNum = (x) => typeof x === 'number' || typeof x === 'bigint';
     if (isNum(actual) && isNum(expected)) return Number(actual) === Number(expected);
@@ -61,20 +86,28 @@ function values_match(actual, expected) {
     return false;
 }
 
-function trapPath(p) {
-    if (typeof p !== 'string' || !p) return null;
-    let out = p.split('?')[0].split('#')[0];
-    if (!out.startsWith('/')) out = '/' + out;
-    return out.length > 1 ? out.replace(/\/+$/, '') : out;
+// Path segments that match any single non-empty segment, and the forms that, as
+// the LAST segment, match one or more remaining segments instead.
+const PARAM_SEG = /^(:\w+\??|\{[^}]*\}|<[^>]*>|\*\w*)$/;
+const CATCH_ALL_SEG = /^(\*\w*|\{[^}]*(\.\.\.|:path)\}|<path:[^>]*>)$/;
+
+/** A trap path as {key} (no placeholders: exact lookup) or {segs, catchAll}. */
+function compileTrapPath(path) {
+    const want = normalizePath(path);
+    if (!want) return null;
+    const segs = want.split('/');
+    const catchAll = segs.length > 1 && CATCH_ALL_SEG.test(segs[segs.length - 1]);
+    if (!catchAll && !segs.some((seg) => PARAM_SEG.test(seg))) return { key: want };
+    return { segs: segs.map((seg, i) => (i === segs.length - 1 && catchAll) || PARAM_SEG.test(seg) ? null : seg), catchAll };
 }
 
-function trapPathMatches(pattern, path) {
-    const want = trapPath(pattern);
-    if (!want) return false;
-    const a = want.split('/');
-    const b = path.split('/');
-    if (a.length !== b.length) return false;
-    return a.every((seg, i) => seg === b[i] || (b[i] !== '' && /^(:\w+\??|\{[^}]*\}|<[^>]*>)$/.test(seg)));
+function trapPatternMatches({ segs, catchAll }, parts) {
+    if (catchAll ? parts.length < segs.length : parts.length !== segs.length) return false;
+    for (let i = 0; i < segs.length; i++) {
+        if (segs[i] === null ? parts[i] === '' : segs[i] !== parts[i]) return false;
+    }
+    // A catch-all needs a non-empty segment at its own position and after it.
+    return !catchAll || parts.slice(segs.length - 1).every((p) => p !== '');
 }
 
 class Sentry {
@@ -89,13 +122,17 @@ class Sentry {
             auth: null
         };
 
-        this.requestContext = {
+        // Same name and keys as Python's `ts.request`; `requestContext` and
+        // `userAgent` remain as aliases.
+        this.request = {
             path: r => null,
-            userAgent: r => null,
+            user_agent: r => null,
             method: r => null
         };
 
         this._traps = [];
+        this._trap_index = null;
+        this._warnedAsync = new Set();
         this._watches = [];
         this._templates = Object.create(null);
         this._handlers = [new LogHandler(this.logger)];
@@ -114,6 +151,37 @@ class Sentry {
         };
 
         this._register(app);
+        // Integrations install their default extractor above; override_source_ip
+        // falls back to it when the override fails.
+        this._default_ip = this.identity.ip;
+    }
+
+    /** @deprecated Use `request`. */
+    get requestContext() {
+        return this.request;
+    }
+
+    set requestContext(value) {
+        this.request = value;
+    }
+
+    /**
+     * Default response for authenticated requests to traps that do not call
+     * `respond`. Same options as `TrapBuilder.respond`: only the options you
+     * pass change the default, and `template` replaces it.
+     */
+    default_response(opts = {}) {
+        return this._set_default("authenticated", opts || {});
+    }
+
+    /** Default response for unauthenticated requests to traps that do not call `if_unauthenticated`. */
+    default_unauthenticated_response(opts = {}) {
+        return this._set_default("unauthenticated", opts || {});
+    }
+
+    _set_default(kind, opts) {
+        this.default_responses[kind] = mergeResponse("default_response", this._templates, this.default_responses[kind], opts);
+        return this;
     }
 
     template(name, status_code, response_body, mime_type = "application/json") {
@@ -124,6 +192,7 @@ class Sentry {
     trap(path) {
         const builder = new TrapBuilder(this, path);
         this._traps.push(builder);
+        this._traps_changed();
         return builder;
     }
 
@@ -156,17 +225,16 @@ class Sentry {
     }
 
     override_source_ip(callback) {
-        if (this._default_ip === undefined) this._default_ip = this.identity.ip;
         this.identity.ip = callback;
         return this;
     }
 
     get traps() {
-        return this._traps.map(t => t.build ? t.build() : t);
+        return this._traps.map(t => t.build());
     }
 
     get watches() {
-        return this._watches.map(w => w.build ? w.build() : w);
+        return this._watches.map(w => w.build());
     }
 
     /** Idempotent: installs traps and watches (delegates to the integration). */
@@ -176,12 +244,26 @@ class Sentry {
         }
     }
 
-    /** Stop heartbeats and flush in-flight deliveries (default timeout 5s). */
-    async close(timeout = 5000) {
+    /**
+     * Stop heartbeats and flush in-flight deliveries. `timeout` is in seconds
+     * (default 5), as in Python. Values of 1000 or more are read as
+     * milliseconds, the unit used before 0.3, with a deprecation warning.
+     */
+    async close(timeout = 5) {
+        let ms = Number(timeout);
+        if (!Number.isFinite(ms) || ms < 0) ms = 5;
+        if (ms >= 1000) {
+            if (!this._warnedCloseMs) {
+                this._warnedCloseMs = true;
+                this.logger.warn("trappsec: close(timeout) is now in seconds; reading " + timeout + " as milliseconds. Pass seconds instead.");
+            }
+        } else {
+            ms *= 1000;
+        }
         await Promise.all(this._handlers.map(async (h) => {
             if (typeof h.close !== 'function') return;
             try {
-                await h.close(timeout);
+                await h.close(ms);
             } catch (e) {
                 this.logger.error("error closing handler:", e);
             }
@@ -198,19 +280,60 @@ class Sentry {
      */
     is_trap(req) {
         try {
-            const method = String(this.requestContext.method(req) || '').toUpperCase();
-            const path = trapPath(this.requestContext.path(req));
+            const method = String(this.request.method(req) || '').toUpperCase();
+            const path = normalizePath(this.request.path(req));
             if (!method || !path) return false;
-            return this.traps.some((t) => (t.methods || []).some((m) => String(m).toUpperCase() === method)
-                && trapPathMatches(t.path, path));
+            const index = this._get_trap_index();
+            if (index.exact.has(`${method} ${path}`)) return true;
+            const patterns = index.patterns.get(method);
+            if (!patterns) return false;
+            const parts = path.split('/');
+            return patterns.some((p) => trapPatternMatches(p, parts));
         } catch (e) {
             return false;
         }
     }
 
-    /** Emit a custom trappsec.rule_hit event. Never throws. */
-    trigger(req, reason, intent = null, metadata = null) {
+    /** Drop the is_trap index; call after a trap is added or its methods change. */
+    _traps_changed() {
+        this._trap_index = null;
+    }
+
+    /** Lazy lookup for is_trap: exact "METHOD path" keys plus compiled patterns per method. */
+    _get_trap_index() {
+        const idx = this._trap_index;
+        if (idx && idx.src === this._traps && idx.len === this._traps.length) return idx;
+        const built = { src: this._traps, len: this._traps.length, exact: new Set(), patterns: new Map() };
+        for (const t of this._traps) {
+            const compiled = compileTrapPath(t.config.path);
+            if (!compiled) continue;
+            for (const m of t.config.methods || []) {
+                const method = String(m).toUpperCase();
+                if (compiled.key !== undefined) {
+                    built.exact.add(`${method} ${compiled.key}`);
+                } else {
+                    if (!built.patterns.has(method)) built.patterns.set(method, []);
+                    built.patterns.get(method).push(compiled);
+                }
+            }
+        }
+        this._trap_index = built;
+        return built;
+    }
+
+    /**
+     * Emit a custom trappsec.rule_hit event: `trigger(req, reason, { intent, metadata })`.
+     * The positional form `trigger(req, reason, intent, metadata)` is still accepted.
+     * Never throws.
+     */
+    trigger(req, reason, opts = null, legacyMetadata = null) {
         try {
+            let intent = opts;
+            let metadata = legacyMetadata;
+            if (opts !== null && typeof opts === 'object' && !Array.isArray(opts)) {
+                intent = opts.intent === undefined ? null : opts.intent;
+                metadata = opts.metadata === undefined ? null : opts.metadata;
+            }
             const ctx = this._base_event(req, "trappsec.rule_hit");
             ctx.reason = reason === undefined ? null : reason;
             ctx.intent = intent === undefined ? null : intent;
@@ -286,6 +409,7 @@ class Sentry {
         if (typeof response_body === 'function') {
             try {
                 response_body = response_body(req);
+                if (this._async_result(response_body, "dynamic trap body")) response_body = {};
             } catch (e) {
                 this.logger.error("dynamic trap response body failed:", e);
                 response_body = {};
@@ -324,15 +448,16 @@ class Sentry {
         }
 
         for (const key of Object.keys(data)) {
-            if (!hasOwn(rules, key)) continue;
+            if (!Object.hasOwn(rules, key)) continue;
             touched = true;
             const rule_definition = rules[key] || {};
-            let expected = hasOwn(rule_definition, 'default') ? rule_definition.default : NO_DEFAULT;
+            let expected = Object.hasOwn(rule_definition, 'default') ? rule_definition.default : NO_DEFAULT;
 
             try {
                 if (typeof expected === 'function') {
                     try {
                         expected = expected(request_obj);
+                        if (this._async_result(expected, "callable watch default")) expected = NO_DEFAULT;
                     } catch (e) {
                         this.logger.error(`failed to evaluate callable expected value for ${source} field \`${key}\`:`, e);
                         expected = NO_DEFAULT;
@@ -385,7 +510,8 @@ class Sentry {
 
         if (this.identity.auth) {
             try {
-                const auth_context = this.identity.auth(req);
+                let auth_context = this.identity.auth(req);
+                if (this._async_result(auth_context, "identify_user")) auth_context = null;
                 if (auth_context) {
                     u = auth_context.user || null;
                     r = auth_context.role == null ? null : auth_context.role;
@@ -401,16 +527,31 @@ class Sentry {
         if (this.identity.ip) {
             try {
                 ip = this.identity.ip(req);
+                if (this._async_result(ip, "override_source_ip")) ip = this._fallback_ip(req);
             } catch (e) {
                 this.logger.error("override_source_ip callback failed:", e);
-                ip = null;
-                if (typeof this._default_ip === 'function' && this._default_ip !== this.identity.ip) {
-                    try { ip = this._default_ip(req); } catch (e2) { ip = null; }
-                }
+                ip = this._fallback_ip(req);
             }
         }
 
         return { user: u, role: r, ip: ip == null ? null : ip };
+    }
+
+    /** The integration's default extractor, for when the override fails; null if there is none. */
+    _fallback_ip(req) {
+        if (typeof this._default_ip !== 'function' || this._default_ip === this.identity.ip) return null;
+        try {
+            const ip = this._default_ip(req);
+            return this._async_result(ip, "default source ip") ? null : ip;
+        } catch (e) {
+            return null;
+        }
+    }
+
+    /** True when a callback returned a promise (logged once; see isAsyncResult). */
+    _async_result(result, kind) {
+        if (!this._warnedAsync) this._warnedAsync = new Set();
+        return isAsyncResult(result, this.logger, kind, this._warnedAsync);
     }
 
     _get_request_context(req) {
@@ -420,10 +561,11 @@ class Sentry {
                 return null;
             }
         };
+        const rc = this.request || {};
         return {
-            path: safe(this.requestContext.path),
-            userAgent: safe(this.requestContext.userAgent),
-            method: safe(this.requestContext.method)
+            path: safe(rc.path),
+            userAgent: safe(rc.user_agent || rc.userAgent),
+            method: safe(rc.method)
         };
     }
 
