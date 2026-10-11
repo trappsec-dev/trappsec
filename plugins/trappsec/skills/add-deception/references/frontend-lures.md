@@ -60,7 +60,7 @@ Camouflage: an uncalled method blends in where the codebase already has uncalled
 
 The more powerful the capability, the more it needs a gated entry point. In blind reviews:
 - uncalled methods that impersonate users, switch tenants or redeem vouchers drew 45–55% suspicion;
-- a flag-gated ownership transfer or workspace export drew 5–12%.
+- a single flag-gated ownership transfer or workspace export drew 5–12%.
 
 ### B. Role- or permission-gated UI the backend never grants
 
@@ -83,6 +83,7 @@ If the app has feature flags, gate an entry point to the decoy behind a flag tha
 
   Record the flag name in the report so nobody later reuses it for a real feature.
 - **Name it like the team's other flags.**
+- **Use it once.** Two flag-gated features of the same shape (a per-user flag plus an owner check, each in front of a high-value endpoint) drew 40–45% each in one review, against 5–12% for a single one. The reviewer saw the template repeat, while the app's only other flag was cosmetic. For a second decoy, use a different pattern or an inferred decoy.
 
 ### D. A legacy path or version fallback
 
@@ -104,7 +105,7 @@ The real UI must either never send the field or send back exactly what the serve
 
 In a form the app really submits, add `<input type="hidden" name="..." value="...">` in the app's field-naming style. Every legitimate submission carries the default value, and the watch uses that default.
 
-- **Carry plausible values.** A hidden input should carry something a real form plausibly sends: display currency, locale, a form or plan version. A business value the server obviously owns (a platform fee, an order total) is suspicious, especially next to text stating the same value. Blind reviewers rated exactly that pairing as a likely honey field, whether the control was hidden or disabled.
+- **Carry what the app's forms already carry.** Ask whether another real form in this app already sends this kind of value. A hidden input of a kind no other form uses stands out. It stands out more when the server obviously knows the value already, or when nearby text states it. Examples: the seller's own shop ID when the product form gets the shop from the session; the currency of a single-currency site; a platform fee printed next to the form. Blind reviewers rated such fields 20–65%, most of them above 40%, whether the control was hidden or disabled.
 - **Follow the app's idiom for read-only values.** A disabled control fits only if the app already shows read-only settings that way. If it states them as text, a form control for the same value is unnatural ("a display-only value needs no `<input>`"). Browsers never submit disabled controls, so any submitted value is tampering, but the control must look like it belongs.
 - **Give every field a feature.** A hidden field that is always empty and that no UI ever fills (for example a voucher code in an app with no voucher input) reads as planted. Prefer fields the real UI already sends.
 - Avoid names browsers autofill: email, name, address, phone, password fields.
@@ -157,6 +158,8 @@ Before finishing, look at each lure the way an attacker would, and remove:
   - untranslated strings where everything else is translated;
   - a different error-handling pattern.
 - **Orphans:** a method in an unrelated module, a feature with no natural footprint, or the only uncalled method in a codebase that otherwise has none.
+- **Care that doesn't match the stakes:** an irreversible action with no confirmation step; one feature under three names across method, flag and UI string; a button squeezed into an unrelated form; an owner-only gate on low-value data; code cloned line for line from a neighboring feature.
+- **Repetition:** two lures built from one template. Each makes the other look deliberate.
 - **Dangling references:** something nothing consumes, such as a `data-` attribute no script reads or a config key no code uses. It exists only to be found, and reviewers treat it that way.
 - **Clichés:** "internal", "debug", "do not use", "remove before prod", `/admin/secret`, `superuser`.
 - **Mismatches with the backend:** a different method, a path that answers 404, a response that doesn't fit the type the frontend declares.
@@ -175,12 +178,12 @@ Before finishing, look at each lure the way an attacker would, and remove:
 - **Svelte / SvelteKit.** Use client modules. Loaders (`+page.ts`) run on navigation, so never put a decoy call in a loader that real users trigger. `+page.server.ts` never ships.
 - **Server-rendered templates (Django, Jinja, ERB-style, Go templates, EJS).** Content inside a server-side role check (`{% if user.is_staff %}`) never reaches other users, so it is not a lure. What everyone receives is hidden inputs, data attributes, the app's static JavaScript, and response fields of JSON endpoints.
 
-  Client-side lures are weak here. A script hook for markup no page ever renders (a submit handler for a form that never appears) is a dangling reference, and blind reviewers rated these 55–60%. So did hidden inputs that duplicate state the server already holds (the user's own shop ID, a single-currency site's currency).
+  Client-side lures are weak here. A script hook for markup no page ever renders (a submit handler for a form that never appears) is a dangling reference, and blind reviewers rated these 55–60%. Hidden inputs that duplicate state the server already holds (the user's own shop ID, a single-currency site's currency) drew 20–65%, most of them above 40%.
 
   Prefer, in order:
   1. inferred decoys (backend-traps.md §1);
   2. honey fields the real JSON already exposes (rated 5–25%);
-  3. fields the real forms already submit.
+  3. values the real forms never offer in fields they already submit, such as a shipping option or payout schedule the form doesn't list (backend-traps.md §2, rated 4–5%).
 - **Mobile apps.** Decompilers read endpoint strings out of the binary. The same patterns apply, but slow release cycles make lures harder to maintain.
 
 ## 8. Apps without a frontend, or a frontend you can't change

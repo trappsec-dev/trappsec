@@ -30,7 +30,7 @@ A decoy route is the endpoint behind a story. Pick stories that fit the app's hi
 - the collection behind a singular route, or the item behind a collection;
 - the previous API version.
 
-A decoy at such a path leaves nothing in the client for anyone to scrutinize. In blind reviews it was invisible, while every client-side lure drew some suspicion.
+A decoy at such a path leaves nothing in the client to scrutinize. Someone reading the bundle or the pages finds nothing, and the only way to meet the decoy is to probe for it, which is exactly the behavior you want to catch. Every client-side lure, by contrast, drew some suspicion in blind reviews.
 
 Pick paths and methods that the real API plausibly lacks and that no real client calls. Answer them the way the real API answers a forbidden request on that resource. Expect method-fuzzing scanners to hit them anonymously (signals only).
 
@@ -69,6 +69,12 @@ Callable defaults receive the framework request and must be cheap and synchronou
 
 Only impossible values then alert, such as a role nobody can hold through this endpoint, or a tenant the caller doesn't belong to. Write down any blind spot this creates.
 
+### Values the real form never offers
+
+A field the real handler reads can't be a honey field, because trappsec strips it. A value the real UI never sends can still be a tripwire: a shipping option, payout schedule, role or status the form doesn't offer. Where the handler already rejects or falls back on unknown values, call `ts.trigger(request, reason, intent, metadata)` in that branch (trappsec-api.md §6), and keep the existing behavior. The lure is the real form, so nothing new ships to the client.
+
+Only values that no version of the real form ever offered qualify. A tab opened before an option was retired still submits it.
+
 ### Bait it
 
 A honey field nobody sees rarely gets tried. Return the field in a real GET response for the same resource, either constant for everyone or the caller's own value. Add it to the frontend type, and optionally display it read-only. Requirements:
@@ -93,9 +99,9 @@ A honey field nobody sees rarely gets tried. Return the field in a real GET resp
 | The app's real 404 shape | Resource-by-ID decoys, where the real API hides existence with 404 | Matches the app's own existence-hiding behavior |
 | The app's retired-version response | Version decoys, if the app really announces retirement that way | Matches history, but ends exploration. Prefer a 403 or success if you want engagement. |
 
-****Every caller gets the same status.** A trap's status depends on whether the caller is authenticated, not on who they are. Your most privileged users will be denied too, even where real routes let them through. So pick cover stories in which every role is plausibly denied: a flag that is off, a plan that doesn't include the feature, a function that moved to a hosted portal. Dynamic bodies can vary the body per caller, but not the status.
+**Every caller gets the same status.** A trap's status depends on whether the caller is authenticated, not on who they are. Your most privileged users will be denied too, even where real routes let them through. So pick cover stories in which every role is plausibly denied: a flag that is off, a plan that doesn't include the feature, a function that moved to a hosted portal. Dynamic bodies can vary the body per caller, but not the status.
 
-Synthetic data must look like the app's real data:**
+**Synthetic data must look like the app's real data:**
 - same ID format;
 - realistic values;
 - timestamps in the app's format;

@@ -47,18 +47,18 @@ Seven habits produce that:
    - feature flags hide unreleased endpoints;
    - support tooling is over-privileged.
 3. **Give every lure an innocent reason to exist.** Real dead code always has a story: deprecated, behind a flag, role-gated, or kept for an older client. Write the one-sentence cover story first. It decides naming, location and response.
-4. **Let them discover it.** A full URL next to a "do not use" comment reads as bait. A role-gated button, a flag-gated code path or an extra response field is something the attacker feels clever for finding, and people trust what they discover. Blind red-team reviews of agent-built deception measured how suspicious each kind of lure looks:
+4. **Let them discover it.** A full URL next to a "do not use" comment reads as bait. A role-gated button, a flag-gated code path or an extra response field is something the attacker feels clever for finding, and people trust what they discover. In blind reviews of agent-built deception, red-team reviewers rated how likely each lure was to be planted:
 
-   | Lure | Suspicion |
+   | Lure | Rated likely planted |
    |---|---|
-   | Flag- or role-gated entry points | 5–12% |
-   | Fields the real UI already echoes | 8–30% |
-   | Uncalled methods for powerful capabilities | 38–55% |
-   | Hidden or disabled fields carrying server-owned values | 48–62% |
-   | Markup nothing uses (a `data-` attribute no script reads, a commented-out form) | 65–80% |
+   | Tripwires on fields the real client already handles: response fields it echoes back, values its forms never offer | 4–30% |
+   | One flag- or role-gated entry point to a decoy | 5–12% |
+   | An uncalled client method for a powerful capability | 25–55% |
+   | A hidden or disabled field of a kind the app's other forms don't carry | 20–65%, mostly above 40% |
+   | Something nothing uses: a `data-` attribute no script reads, a handler for a form no page renders, a commented-out form | 60–80% |
 
-   Prefer the top of this list.
-5. **Keep every layer consistent.** Frontend calls a decoy with POST → the trap accepts POST. There is a client method → there is a type. The app translates every string → the lure's strings are translated. Real 403s have a certain shape → the decoy's 403 has it too.
+   These come from single reviews of a few apps, so read them as an ordering, not as measurements. Prefer the top of the list, but use each pattern once: lures built from one template corroborate each other, and two flag-gated features of the same shape scored 40–45% each in one review. Decoys inferred from the API's own conventions leave nothing in the client at all (references/backend-traps.md §1).
+5. **Keep every layer consistent.** Frontend calls a decoy with POST → the trap accepts POST. There is a client method → there is a type. The app translates every string → the lure's strings are translated. Real 403s have a certain shape → the decoy's 403 has it too. Give a lure the care a real feature with the same stakes would get: one name across method, flag, handler and strings; its own place in the layout; a gate as strict as the value warrants; a confirmation step before anything irreversible.
 6. **Chain the breadcrumbs.** Design at least one path where touching one tripwire leads to the next. Example: a decoy's 403 names a permission, a response field shows where permissions live, and sending that permission trips a honey field. Each step is another alert, and the second step removes doubt about intent.
 7. **Leave no fingerprints, including this skill's.** Names in this skill and its references only illustrate patterns. Never reuse them: a decoy path shared by many apps becomes a signature attackers learn. Never ship trappsec's default responses either.
 
@@ -125,11 +125,11 @@ If there is a frontend, read references/frontend-lures.md now.
 1. **Threat narrative.** In two or three sentences: who would attack this app, and what do they want? Examples: a B2B SaaS draws privilege escalation and cross-tenant access; a marketplace draws price and payout manipulation; a fintech app draws limit and balance tampering. Pick the 3–5 intents that matter.
 2. **Portfolio.** For a typical app, 4–8 tripwires in total:
    - 1–3 decoy routes, each reached through a frontend lure or inferred from the API's own conventions (references/backend-traps.md §1);
-   - 1–3 honey fields on real write endpoints, each baited by a field in a real response or a hidden form value;
+   - 1–3 honey fields on real write endpoints, each baited by a field in a real response, or by a hidden input of a kind the app's forms already use;
    - optionally, a version-skew decoy, a honey query parameter, or a protocol decoy (e.g. GraphQL in an app that doesn't use it);
    - at least one breadcrumb chain linking two of the above.
 
-   More is not better. Every decoy adds maintenance, false-positive risk and another chance of discovery.
+   More is not better. Every decoy adds maintenance, false-positive risk and another chance of discovery. Reviewers judge the client as a whole, and three anomalies in a small client make each one look more deliberate. So in a small client, add something new and visible for one or two tripwires at most, each with a different pattern. Cover the rest with inferred decoys and with honey fields that real responses already bait.
 3. **Specification.** For each tripwire, write down:
    - cover story and See → Think → Do;
    - path and method in house style;
