@@ -56,7 +56,11 @@ Add the decoy call beside its real siblings. Use the same helper, naming, typing
 
 Survival: class methods and object properties survive bundling even when unused. A standalone `export function` that nothing imports is removed by tree-shaking. Either give it a gated caller (B, C) or attach it to the client object.
 
-Camouflage: an uncalled method blends in where the codebase already has uncalled siblings. Several orphans read as unfinished UI. A lone orphan on a sensitive resource (billing, ownership) stands out. If yours would be the only one, give it a gated caller instead. In blind reviews, a flag-gated call drew less than half the suspicion of the same call left uncalled.
+Camouflage: an uncalled method blends in where the codebase already has uncalled siblings. Several orphans read as unfinished UI. A lone orphan on a sensitive resource (billing, ownership, tokens, tenancy) stands out. If yours would be the only one, give it a gated caller instead.
+
+The more powerful the capability, the more it needs a gated entry point. In blind reviews:
+- uncalled methods that impersonate users, switch tenants or redeem vouchers drew 45–55% suspicion;
+- a flag-gated ownership transfer or workspace export drew 5–12%.
 
 ### B. Role- or permission-gated UI the backend never grants
 
@@ -100,8 +104,9 @@ The real UI must either never send the field or send back exactly what the serve
 
 In a form the app really submits, add `<input type="hidden" name="..." value="...">` in the app's field-naming style. Every legitimate submission carries the default value, and the watch uses that default.
 
-- **Carry plausible values.** A hidden input should carry something a real form plausibly sends: display currency, locale, a form or plan version. A business value the server obviously owns (a platform fee, an order total) is suspicious, especially next to text stating the same value. Blind reviewers rated exactly that pairing as a likely honey field.
-- **Prefer displayed bait.** Bait the user can see, such as a read-only or disabled field showing the current plan, beats a hidden one. Browsers never submit disabled controls, so any submitted value is tampering.
+- **Carry plausible values.** A hidden input should carry something a real form plausibly sends: display currency, locale, a form or plan version. A business value the server obviously owns (a platform fee, an order total) is suspicious, especially next to text stating the same value. Blind reviewers rated exactly that pairing as a likely honey field, whether the control was hidden or disabled.
+- **Follow the app's idiom for read-only values.** A disabled control fits only if the app already shows read-only settings that way. If it states them as text, a form control for the same value is unnatural ("a display-only value needs no `<input>`"). Browsers never submit disabled controls, so any submitted value is tampering, but the control must look like it belongs.
+- **Give every field a feature.** A hidden field that is always empty and that no UI ever fills (for example a voucher code in an app with no voucher input) reads as planted. Prefer fields the real UI already sends.
 - Avoid names browsers autofill: email, name, address, phone, password fields.
 - Check form libraries that whitelist fields or reject unknown ones.
 

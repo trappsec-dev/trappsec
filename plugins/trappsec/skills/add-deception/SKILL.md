@@ -47,7 +47,17 @@ Seven habits produce that:
    - feature flags hide unreleased endpoints;
    - support tooling is over-privileged.
 3. **Give every lure an innocent reason to exist.** Real dead code always has a story: deprecated, behind a flag, role-gated, or kept for an older client. Write the one-sentence cover story first. It decides naming, location and response.
-4. **Let them discover it.** A full URL next to a "do not use" comment reads as bait. A role-gated button, a flag-gated code path or an extra response field is something the attacker feels clever for finding, and people trust what they discover.
+4. **Let them discover it.** A full URL next to a "do not use" comment reads as bait. A role-gated button, a flag-gated code path or an extra response field is something the attacker feels clever for finding, and people trust what they discover. Blind red-team reviews of agent-built deception measured how suspicious each kind of lure looks:
+
+   | Lure | Suspicion |
+   |---|---|
+   | Flag- or role-gated entry points | 5–12% |
+   | Fields the real UI already echoes | 8–30% |
+   | Uncalled methods for powerful capabilities | 38–55% |
+   | Hidden or disabled fields carrying server-owned values | 48–62% |
+   | Markup nothing uses (a `data-` attribute no script reads, a commented-out form) | 65–80% |
+
+   Prefer the top of this list.
 5. **Keep every layer consistent.** Frontend calls a decoy with POST → the trap accepts POST. There is a client method → there is a type. The app translates every string → the lure's strings are translated. Real 403s have a certain shape → the decoy's 403 has it too.
 6. **Chain the breadcrumbs.** Design at least one path where touching one tripwire leads to the next. Example: a decoy's 403 names a permission, a response field shows where permissions live, and sending that permission trips a honey field. Each step is another alert, and the second step removes doubt about intent.
 7. **Leave no fingerprints, including this skill's.** Names in this skill and its references only illustrate patterns. Never reuse them: a decoy path shared by many apps becomes a signature attackers learn. Never ship trappsec's default responses either.
