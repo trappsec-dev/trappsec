@@ -220,3 +220,27 @@ def test_encoding_and_content_type_bypasses_stripped(ctype, raw):
     d = TestClient(app).post("/raw", content=raw, headers={"content-type": ctype}).json()
     assert d == {"json": {"name": "x"}, "raw": {"name": "x"}}
     assert len(watch_events(cap)) == 1
+
+
+@pytest.mark.parametrize("routes_first", [True, False])
+def test_catch_all_route_does_not_shadow_trap(routes_first):
+    """R2: FastAPI matches routes in order, so traps must be prepended."""
+    app = FastAPI()
+
+    def routes():
+        @app.get("/{rest:path}")
+        def catch_all(rest: str):
+            return {"catchall": rest}
+
+    if routes_first:
+        routes()
+    sentry = Sentry(app, "svc", "test")
+    cap = Capture()
+    sentry._handlers.append(cap)
+    sentry.trap("/admin/backup")
+    if not routes_first:
+        routes()
+    with TestClient(app) as c:
+        assert c.get("/admin/backup").status_code == 401
+        assert c.get("/other").json() == {"catchall": "other"}
+    assert len([e for e in cap.events if e["event"] == "trappsec.trap_hit"]) == 1

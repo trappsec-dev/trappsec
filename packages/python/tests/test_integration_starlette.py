@@ -231,3 +231,62 @@ def test_non_json_unknown_body_passes_through_untouched():
     r = TestClient(app, raise_server_exceptions=False).post(
         "/raw", content=b"\x00\x01binary", headers={"content-type": "application/octet-stream"})
     assert r.status_code == 500 and watch_events(cap) == []
+
+
+def test_is_trap_lets_a_global_csrf_middleware_skip_traps():
+    """R22: third-party CSRF middleware runs before routing; is_trap() is the skip hook."""
+    from starlette.middleware.base import BaseHTTPMiddleware
+    from starlette.responses import PlainTextResponse
+
+    async def real(request):
+        return PlainTextResponse("ok")
+
+    app = Starlette(routes=[Route("/real", real, methods=["POST"])])
+    sentry = Sentry(app, "svc", "test")
+    cap = Capture()
+    sentry._handlers.append(cap)
+    sentry.trap("/admin/backup").methods("POST")
+
+    async def csrf(request, call_next):  # stand-in for starlette-csrf & co.
+        if request.method == "POST" and not sentry.is_trap(request) and "x-csrf-token" not in request.headers:
+            return PlainTextResponse("csrf", status_code=403)
+        return await call_next(request)
+
+    app.add_middleware(BaseHTTPMiddleware, dispatch=csrf)
+    with TestClient(app) as c:
+        assert c.post("/real").status_code == 403
+        assert c.post("/admin/backup").status_code == 401
+    assert len([e for e in cap.events if e["event"] == "trappsec.trap_hit"]) == 1
+
+
+@pytest.mark.parametrize("skip", [False, True])
+def test_is_trap_with_starlette_csrf(skip):
+    """R22 with the real starlette-csrf: it has no skip callback, so traps bypass it
+    in a thin ASGI wrapper; without that the trap is blocked and alerts nothing."""
+    csrf = pytest.importorskip("starlette_csrf")
+    from starlette.requests import Request
+    from starlette.responses import PlainTextResponse
+
+    async def real(request):
+        return PlainTextResponse("ok")
+
+    app = Starlette(routes=[Route("/real", real, methods=["POST"])])
+    sentry = Sentry(app, "svc", "test")
+    cap = Capture()
+    sentry._handlers.append(cap)
+    sentry.trap("/admin/backup").methods("POST")
+
+    class SkipTraps:
+        def __init__(self, app, **options):
+            self.app = app
+            self.csrf = csrf.CSRFMiddleware(app, **options)
+
+        async def __call__(self, scope, receive, send):
+            target = self.app if skip and scope["type"] == "http" and sentry.is_trap(Request(scope)) else self.csrf
+            await target(scope, receive, send)
+
+    app.add_middleware(SkipTraps, secret="test-secret")
+    with TestClient(app) as c:
+        assert c.post("/real").status_code == 403
+        assert c.post("/admin/backup").status_code == (401 if skip else 403)
+    assert len([e for e in cap.events if e["event"] == "trappsec.trap_hit"]) == (1 if skip else 0)

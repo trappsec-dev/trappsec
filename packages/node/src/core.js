@@ -5,9 +5,12 @@ const { LogHandler, WebhookHandler, SlackHandler, OTELHandler, safeStringify } =
 const MAX_STR = 1024;
 const hasOwn = (o, k) => o != null && Object.prototype.hasOwnProperty.call(o, k);
 
+/** Truncate to `limit` code points (as Python and Go do), never splitting a surrogate pair. */
 function truncStr(v, limit = MAX_STR) {
     if (typeof v !== 'string') return v == null ? null : v;
-    return v.length > limit ? v.slice(0, limit) + "..." : v;
+    if (v.length <= limit) return v; // UTF-16 length >= code point count
+    const points = Array.from(v);
+    return points.length > limit ? points.slice(0, limit).join("") + "..." : v;
 }
 
 function isPlainObject(v) {
@@ -24,7 +27,7 @@ function safe_value(v) {
     if (t === 'bigint') return String(v);
     if (t === 'string') return truncStr(v);
     if (Array.isArray(v)) return v.slice(0, 20).map(safe_value);
-    if (isPlainObject(v)) return truncStr(safeStringify(v));
+    if (isPlainObject(v)) return truncStr(safeStringify(v, { sortKeys: true }));
     const name = (v && v.constructor && v.constructor.name) || 'Object';
     return `<${name}>`;
 }
@@ -37,12 +40,41 @@ function canonical(v) {
 /** Loose-but-safe equality between a received value and the configured default (C3). */
 function values_match(actual, expected) {
     if (actual === expected) return true;
+    // Containers compare element-wise / key-wise with these same rules.
+    const aArr = Array.isArray(actual), eArr = Array.isArray(expected);
+    if (aArr || eArr) {
+        return aArr && eArr && actual.length === expected.length
+            && actual.every((a, i) => values_match(a, expected[i]));
+    }
+    const aObj = isPlainObject(actual), eObj = isPlainObject(expected);
+    if (aObj || eObj) {
+        if (!aObj || !eObj) return false;
+        const keys = Object.keys(actual);
+        return keys.length === Object.keys(expected).length
+            && keys.every(k => hasOwn(expected, k) && values_match(actual[k], expected[k]));
+    }
     const isNum = (x) => typeof x === 'number' || typeof x === 'bigint';
     if (isNum(actual) && isNum(expected)) return Number(actual) === Number(expected);
     const scalar = (x) => typeof x === 'boolean' || isNum(x);
     if (typeof actual === 'string' && scalar(expected)) return actual === canonical(expected);
     if (typeof expected === 'string' && scalar(actual)) return expected === canonical(actual);
     return false;
+}
+
+function trapPath(p) {
+    if (typeof p !== 'string' || !p) return null;
+    let out = p.split('?')[0].split('#')[0];
+    if (!out.startsWith('/')) out = '/' + out;
+    return out.length > 1 ? out.replace(/\/+$/, '') : out;
+}
+
+function trapPathMatches(pattern, path) {
+    const want = trapPath(pattern);
+    if (!want) return false;
+    const a = want.split('/');
+    const b = path.split('/');
+    if (a.length !== b.length) return false;
+    return a.every((seg, i) => seg === b[i] || (b[i] !== '' && /^(:\w+\??|\{[^}]*\}|<[^>]*>)$/.test(seg)));
 }
 
 class Sentry {
@@ -154,6 +186,26 @@ class Sentry {
                 this.logger.error("error closing handler:", e);
             }
         }));
+    }
+
+    /**
+     * True when the request targets a trap (method and path). Use it to skip
+     * middleware that would otherwise reject a trap before it can answer, such as
+     * CSRF protection (R22): a trap that answers 403 is both disabled and easy to
+     * fingerprint. `:id`, `{id}` and `<id>` segments match any single segment.
+     * Install such a wrapper at app level so the request path is the full path.
+     * Never throws.
+     */
+    is_trap(req) {
+        try {
+            const method = String(this.requestContext.method(req) || '').toUpperCase();
+            const path = trapPath(this.requestContext.path(req));
+            if (!method || !path) return false;
+            return this.traps.some((t) => (t.methods || []).some((m) => String(m).toUpperCase() === method)
+                && trapPathMatches(t.path, path));
+        } catch (e) {
+            return false;
+        }
     }
 
     /** Emit a custom trappsec.rule_hit event. Never throws. */
@@ -288,16 +340,22 @@ class Sentry {
                 }
 
                 let actual = data[key];
-                if (Array.isArray(actual) && actual.length === 1) actual = actual[0];
 
+                // Multi-valued fields arrive as arrays: unless the whole array
+                // matches (an array default), every element must match.
                 let violation;
                 if (expected === NO_DEFAULT) {
                     violation = true;
-                } else if (Array.isArray(actual) && actual.length > 1) {
+                } else if (values_match(actual, expected)) {
+                    violation = false;
+                } else if (Array.isArray(actual) && actual.length > 0) {
                     violation = !actual.every(a => values_match(a, expected));
                 } else {
-                    violation = !values_match(actual, expected);
+                    violation = true;
                 }
+
+                // A one-element array is reported as its scalar.
+                if (Array.isArray(actual) && actual.length === 1) actual = actual[0];
 
                 if (violation) {
                     found_fields.push({

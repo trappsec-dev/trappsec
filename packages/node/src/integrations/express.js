@@ -1,9 +1,15 @@
 'use strict';
 
+const { AsyncLocalStorage } = require('node:async_hooks');
+
 const {
     normalizePath, isObject, buildWatchMap, hasFields, replaceInPlace, detect,
-    resolveTrap, emitWatch, warnOnce, BODY_METHODS
+    resolveTrap, emitWatch, warnOnce, BODY_METHODS, bodyLooksUnparsed, stripRawQuery
 } = require('./_common');
+
+const PENDING = Symbol('trappsec.pendingWatch');
+const INSPECTED = Symbol('trappsec.inspectedWatch');
+const pendingRequest = new AsyncLocalStorage();
 
 const TRAP_METHODS = ['get', 'post', 'put', 'delete', 'patch', 'head', 'options'];
 
@@ -15,6 +21,10 @@ class ExpressIntegration {
         this.app = app;
         this._bootstrapped = false;
         this._warned = new Set();
+        // NestJS runs its whole pipeline (interceptors such as multer, pipes, the
+        // controller) inside one Express handler, so it finishes deferred body
+        // inspection itself (from a global pipe) instead of at the route's final handler.
+        this._finishAtHandler = options.finishAtHandler !== false;
 
         if (!this.ts.identity.ip) {
             this.ts.identity.ip = r => r.ip || r.socket?.remoteAddress || r.connection?.remoteAddress || "0.0.0.0";
@@ -191,7 +201,45 @@ class ExpressIntegration {
             };
             wrapped.__trappsecWrapped = true;
             layer.handle = wrapped;
+            if (this._finishAtHandler) this._wrapRouteHandlers(layer.route);
         }
+    }
+
+    /**
+     * Route-level middleware (e.g. `app.post('/x', multer().none(), handler)` or a
+     * route-level `express.json()`) parses the body only after the route is entered.
+     * Body inspection deferred at route entry is completed right before the route's
+     * final handler for the request method, once that middleware has run.
+     */
+    _wrapRouteHandlers(route) {
+        if (!Array.isArray(route.stack)) return;
+        const integration = this;
+        route.stack.forEach((inner, i) => {
+            if (!inner || typeof inner.handle !== 'function' || inner.handle.__trappsecWrapped) return;
+            if (inner.handle.length >= 4) return; // error handler: keep its arity
+            const original = inner.handle;
+            const wrapped = function (req, res, next) {
+                if (req[PENDING] && integration._isFinalHandler(route, i, req.method)) {
+                    integration._finishInspection(req);
+                }
+                return original.apply(this, arguments);
+            };
+            wrapped.__trappsecWrapped = true;
+            inner.handle = wrapped;
+        });
+    }
+
+    _isFinalHandler(route, index, method) {
+        const m = String(method || '').toLowerCase();
+        const handles = (l) => {
+            if (!l || typeof l.handle !== 'function' || l.handle.length >= 4) return false;
+            if (!l.method) return true; // route.all()
+            return l.method === m || (m === 'head' && l.method === 'get');
+        };
+        for (let j = index + 1; j < route.stack.length; j++) {
+            if (handles(route.stack[j])) return false;
+        }
+        return true;
     }
 
     _inspectRequest(req, watchMap) {
@@ -218,27 +266,59 @@ class ExpressIntegration {
                     // Express 5's req.query is a getter that re-parses on every read, so an
                     // own data property is the only way to make the stripped copy stick.
                     Object.defineProperty(req, 'query', { value: data, writable: true, configurable: true, enumerable: true });
+                    req.url = stripRawQuery(req.url, Object.keys(watch.query_fields)); // originalUrl stays as received
                 }
             }
         }
 
         if (hasFields(watch.body_fields)) {
-            const body = req.body;
-            if (body === undefined) {
-                if (BODY_METHODS.has(String(req.method).toUpperCase())) {
-                    warnOnce(this.ts, this._warned, 'body:' + watch.path,
-                        `Trappsec: body watches on ${watch.path} cannot run because req.body is undefined. ` +
-                        'Register a body parser (e.g. express.json()) before your routes.');
+            if (bodyLooksUnparsed(req.body, req.headers, req._body === true)) {
+                // Not parsed yet: a route-level parser may still run. Finish before the
+                // final handler, or when the response ends if the route never gets there.
+                req[PENDING] = { watch, found };
+                pendingRequest.enterWith(req); // lets a framework hook (NestJS pipe) find it later
+                const res = req.res;
+                if (res && typeof res.once === 'function') {
+                    res.once('close', () => { if (req[PENDING]) this._finishInspection(req, true); });
                 }
-            } else if (isObject(body)) {
-                const { found: f, data, touched } = detect(this.ts, body, watch.body_fields, req, 'body');
-                found.push(...f);
-                if (touched) replaceInPlace(body, data);
+                return;
             }
+            found.push(...this._inspectBody(req, watch));
         }
 
         emitWatch(this.ts, req, found, 'Express');
     }
+
+    _inspectBody(req, watch) {
+        const body = req.body;
+        if (!isObject(body)) return [];
+        const { found, data, touched } = detect(this.ts, body, watch.body_fields, req, 'body');
+        if (touched) replaceInPlace(body, data);
+        return found;
+    }
+
+    _finishInspection(req, responseEnded = false) {
+        const pending = req[PENDING];
+        delete req[PENDING];
+        req[INSPECTED] = pending.watch;
+        try {
+            const found = pending.found;
+            if (req.body !== undefined) {
+                found.push(...this._inspectBody(req, pending.watch));
+            } else if (!responseEnded && BODY_METHODS.has(String(req.method).toUpperCase())) {
+                warnOnce(this.ts, this._warned, 'body:' + pending.watch.path,
+                    `Trappsec: body watches on ${pending.watch.path} cannot run because req.body is undefined. ` +
+                    'Register a body parser (e.g. express.json()) for this route.');
+            }
+            emitWatch(this.ts, req, found, 'Express');
+        } catch (e) {
+            this.ts.logger.error('Trappsec error in Express watch handler: ', e);
+        }
+    }
 }
+
+ExpressIntegration.PENDING = PENDING;
+ExpressIntegration.INSPECTED = INSPECTED;
+ExpressIntegration.pendingRequest = pendingRequest;
 
 module.exports = ExpressIntegration;

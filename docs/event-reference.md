@@ -20,13 +20,13 @@ Every event includes the following fields:
 | `type` | String | `signal` for unauthenticated events, `alert` if user context is present. |
 | `path` | String | The HTTP path of the request. |
 | `method` | String | The HTTP method (GET, POST, etc.). |
-| `user_agent` | String or null | The User-Agent string from the request (truncated to 1024 chars). |
+| `user_agent` | String or null | The User-Agent string from the request (over 1024 characters: the first 1024 followed by `...`). |
 | `ip` | String or null | The source IP address. |
 | `app` | Object | Application context containing `service`, `environment`, and `hostname`. |
 | `user` | String or null | The user ID, if identified. Always present, also on signals. |
 | `role` | String or null | The user role, if identified. Always present, also on signals. |
 
-**All keys are always present.** A value that is absent is `null`, never omitted, so receivers can rely on a stable schema. `path` is truncated to 1024 characters. Serialization never fails: values that are not JSON-native are stringified.
+**All keys are always present.** Each event carries exactly the common fields plus its own specific fields below; no other keys appear. A value that is absent is `null`, never omitted, so receivers can rely on a stable schema. `path` is truncated like `user_agent`: the first 1024 characters followed by `...`. Serialization never fails: values that are not JSON-native are stringified.
 
 ## Event Types
 
@@ -171,7 +171,7 @@ With multiple workers, every worker sends its own heartbeat; see [Production](/p
 | null, bool, number | unchanged |
 | string | truncated to 1024 characters, with `...` appended |
 | list | first 20 elements, each sanitized |
-| object / map | JSON string, truncated to 1024 characters |
+| object / map | compact JSON string with sorted keys and no HTML escaping (`{"a":1,"b":"<x>"}`), truncated to 1024 characters with `...` appended |
 | anything else (file uploads, bytes) | the type name, e.g. `"<UploadFile>"` |
 
 ## Value matching
@@ -180,7 +180,7 @@ A watch with a default value fires when the request value differs from it. Compa
 
 *   Equal values match.
 *   Numbers match numerically and booleans are never numbers: `1` matches `1.0`; `true` does not match `1`.
-*   A string matches a bool/number when it equals that value's canonical form: `"true"`/`"false"` (lowercase), `"5"` (not `"5.0"`), otherwise the shortest representation. So a form field `is_admin=false` matches a default of `false`.
+*   A string matches a bool/number when it equals that value's canonical form: `"true"`/`"false"` (lowercase), `"5"` (not `"5.0"`); other floats as JavaScript writes them (`"0.1"`, `"1e-7"`, `"1e+21"`), identically in every SDK. So a form field `is_admin=false` matches a default of `false`.
 *   Strings compare exactly (no trimming, no case folding): `"False"` does **not** match `false`.
 *   **Duplicate keys** (`?role=user&role=admin`, repeated form fields): one value is compared as a scalar; with several, the request is a violation unless every value matches. All occurrences are stripped.
 *   **JSON keys**: Python and Node match keys case-sensitively. Go matches case-insensitively (`IsAdmin`, `is_admin` and `IS_ADMIN` all hit), because `encoding/json` binds struct fields that way.

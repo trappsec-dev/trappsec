@@ -139,11 +139,14 @@ async function bootstrap() {
     }
 
     if (values.webhook) {
-        ts.add_webhook(values.webhook, { alerts_only: false });
+        ts.add_webhook(values.webhook, { secret: process.env.TRAPPSEC_WEBHOOK_SECRET || null, alerts_only: false });
+    }
+    if (process.env.TRAPPSEC_ALERTS_WEBHOOK) {  // second receiver with the default alerts_only: true
+        ts.add_webhook(process.env.TRAPPSEC_ALERTS_WEBHOOK, { secret: process.env.TRAPPSEC_WEBHOOK_SECRET || null });
     }
 
-    await fastify.listen({ port: 8000, host: '0.0.0.0' });
-    console.log('FastifyApp listening on http://127.0.0.1:8000');
+    await fastify.listen({ port: Number(process.env.PORT || 8000), host: '0.0.0.0' });
+    console.log('FastifyApp listening on http://127.0.0.1:' + (process.env.PORT || 8000));
 }
 
 bootstrap();

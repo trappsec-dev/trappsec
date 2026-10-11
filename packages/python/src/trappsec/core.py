@@ -1,10 +1,12 @@
 import time
 import json
+import decimal
 import math
+import re
 import typing
 import socket
 import logging
-from collections.abc import MutableMapping
+from collections.abc import Mapping, MutableMapping
 
 from .handlers import LogHandler, _truncate_text
 from .builders import TrapBuilder, WatchBuilder, NO_DEFAULT
@@ -19,22 +21,54 @@ def _is_number(v) -> bool:
     return isinstance(v, (int, float)) and not isinstance(v, bool)
 
 
+def _es_number(v: float) -> str:
+    """ECMAScript Number::toString(v): the float text JavaScript (and so Node) produces."""
+    if math.isnan(v):
+        return "NaN"
+    if math.isinf(v):
+        return "Infinity" if v > 0 else "-Infinity"
+    if v == 0:
+        return "0"
+    sign = "-" if v < 0 else ""
+    t = decimal.Decimal(repr(abs(v))).normalize().as_tuple()  # repr: shortest round-trip digits
+    digits = "".join(str(d) for d in t.digits)
+    k, n = len(digits), len(digits) + t.exponent  # value = 0.digits * 10**n
+    if k <= n <= 21:
+        text = digits + "0" * (n - k)
+    elif 0 < n <= 21:
+        text = digits[:n] + "." + digits[n:]
+    elif -6 < n <= 0:
+        text = "0." + "0" * -n + digits
+    else:
+        exp = ("+" if n - 1 >= 0 else "-") + str(abs(n - 1))
+        text = (digits if k == 1 else digits[0] + "." + digits[1:]) + "e" + exp
+    return sign + text
+
+
 def _canonical(v) -> typing.Optional[str]:
-    """Canonical string form of a bool/number, or None for anything else."""
+    """Canonical string form of a bool/number, or None for anything else (R17)."""
     if isinstance(v, bool):
         return "true" if v else "false"
     if isinstance(v, int):
         return str(v)
     if isinstance(v, float):
-        if math.isfinite(v) and v == int(v):
-            return str(int(v))
-        return repr(v)
+        return _es_number(v)
     return None
 
 
 def values_match(actual, expected) -> bool:
     """Loose equality between a request value and a configured default (C3)."""
     try:
+        # Containers compare element-wise with these same rules, never with ==
+        # (which would let True match 1 inside a list).
+        a_seq, e_seq = isinstance(actual, (list, tuple)), isinstance(expected, (list, tuple))
+        if a_seq or e_seq:
+            return (a_seq and e_seq and len(actual) == len(expected)
+                    and all(values_match(a, e) for a, e in zip(actual, expected)))
+        a_map, e_map = isinstance(actual, Mapping), isinstance(expected, Mapping)
+        if a_map or e_map:
+            return (a_map and e_map and actual.keys() == expected.keys()
+                    and all(values_match(actual[k], expected[k]) for k in actual))
         a_bool, e_bool = isinstance(actual, bool), isinstance(expected, bool)
         if a_bool or e_bool:
             if a_bool and e_bool:
@@ -54,6 +88,26 @@ def values_match(actual, expected) -> bool:
     return False
 
 
+_PARAM_SEGMENT = re.compile(r"^(:\w+\??|\{[^}]*\}|<[^>]*>)$")
+
+
+def _trap_path(p):
+    if not isinstance(p, str) or not p:
+        return None
+    p = p.split("?", 1)[0].split("#", 1)[0]
+    if not p.startswith("/"):
+        p = "/" + p
+    return p.rstrip("/") or "/"
+
+
+def _trap_path_matches(pattern, path) -> bool:
+    want = _trap_path(pattern)
+    if not want:
+        return False
+    a, b = want.split("/"), path.split("/")
+    return len(a) == len(b) and all(x == y or (y and _PARAM_SEGMENT.match(x)) for x, y in zip(a, b))
+
+
 def safe_value(v):
     """Sanitize a request-derived value for inclusion in an event (C3)."""
     if v is None or isinstance(v, bool):
@@ -67,8 +121,14 @@ def safe_value(v):
     if isinstance(v, (list, tuple)):
         return [safe_value(x) for x in list(v)[:_MAX_LIST]]
     if isinstance(v, dict):
+        # Compact, sorted, unescaped: the same text Node and Go produce (R19).
+        opts = {"default": str, "separators": (",", ":"), "ensure_ascii": False}
         try:
-            return _truncate_text(json.dumps(v, default=str), _MAX_STR)
+            try:
+                text = json.dumps(v, sort_keys=True, **opts)
+            except TypeError:  # keys of mixed types cannot be sorted
+                text = json.dumps(v, **opts)
+            return _truncate_text(text, _MAX_STR)
         except Exception:
             return "<dict>"
     return "<%s>" % type(v).__name__
@@ -249,7 +309,6 @@ class Sentry:
             "method": request_ctx["method"],
             "user_agent": _truncate_text(ua, _MAX_STR) if isinstance(ua, str) else ua,
             "ip": identity_ctx["ip"],
-            "intent": None,
             "user": None,
             "role": None,
         }
@@ -258,6 +317,26 @@ class Sentry:
             event["user"] = identity_ctx["user"]
             event["role"] = identity_ctx["role"]
         return event
+
+    def is_trap(self, request) -> bool:
+        """True when the request targets a trap (method and path).
+
+        Use it to skip middleware that would otherwise reject a trap before it can
+        answer, such as CSRF protection (R22): a trap that answers 403 is both
+        disabled and easy to fingerprint. ``:id``, ``{id}`` and ``<id>`` segments
+        match any single segment. Never raises.
+        """
+        try:
+            method = str(self.request.method(request) or "").upper()
+            path = _trap_path(self.request.path(request))
+            if not method or not path:
+                return False
+            return any(
+                method in {str(m).upper() for m in (t.get("methods") or [])} and _trap_path_matches(t.get("path"), path)
+                for t in self.traps
+            )
+        except Exception:
+            return False
 
     def trigger(self, req, reason: str, intent: str = None, metadata: dict = None):
         trigger_ctx = self._base_event("trappsec.rule_hit", req)
@@ -363,22 +442,23 @@ class Sentry:
                         self.logger.error("failed to evaluate callable default for %s field `%s`: %s", source, key, e)
                         expected = NO_DEFAULT
 
-                # Multi-valued fields arrive as lists. One element is compared
-                # as a scalar; several are a violation unless all match.
-                if isinstance(actual, (list, tuple)):
-                    actual = list(actual)
-                    if len(actual) == 1:
-                        actual = actual[0]
-                        violation = expected is NO_DEFAULT or not values_match(actual, expected)
-                    elif len(actual) == 0:
-                        violation = expected is NO_DEFAULT or not values_match(actual, expected)
-                    else:
-                        violation = expected is NO_DEFAULT or not all(values_match(a, expected) for a in actual)
+                # Multi-valued fields arrive as lists: unless the whole list
+                # matches (a list default), every element must match.
+                if expected is NO_DEFAULT:
+                    violation = True
+                elif values_match(actual, expected):
+                    violation = False
+                elif isinstance(actual, (list, tuple)) and len(actual) > 0:
+                    violation = not all(values_match(a, expected) for a in actual)
                 else:
-                    violation = expected is NO_DEFAULT or not values_match(actual, expected)
+                    violation = True
             except Exception as e:
                 self.logger.error("failed to evaluate %s field `%s`: %s", source, key, e)
                 violation = True
+
+            # A one-element list is reported as its scalar.
+            if isinstance(actual, (list, tuple)) and len(actual) == 1:
+                actual = actual[0]
 
             if violation:
                 found_fields.append({

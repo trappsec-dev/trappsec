@@ -1,0 +1,46 @@
+{
+  "description": "Shared R19 cases for safe_value(v), the sanitizer applied to found_fields[].value. {\"$repeat\": s, \"count\": n, \"prefix\": p, \"suffix\": x} stands for p, then s repeated n times, then x (prefix and suffix optional). Objects render as compact JSON with sorted keys and no HTML escaping. String lengths count Unicode code points (never UTF-16 units or bytes). Values JSON cannot express (NaN, uploads, bytes) are covered by each language's own tests.",
+  "max_string": 1024,
+  "max_list": 20,
+  "truncation_suffix": "...",
+  "cases": [
+    {"name": "null", "input": null, "output": null},
+    {"name": "true", "input": true, "output": true},
+    {"name": "false", "input": false, "output": false},
+    {"name": "zero", "input": 0, "output": 0},
+    {"name": "integer", "input": 5, "output": 5},
+    {"name": "float", "input": -1.5, "output": -1.5},
+    {"name": "string", "input": "abc", "output": "abc"},
+    {"name": "empty string", "input": "", "output": ""},
+    {"name": "string at the limit", "input": {"$repeat": "a", "count": 1024}, "output": {"$repeat": "a", "count": 1024}},
+    {"name": "string over the limit", "input": {"$repeat": "a", "count": 1025}, "output": {"$repeat": "a", "count": 1024, "suffix": "..."}},
+    {"name": "non-ASCII string over the limit is cut by code points", "input": {"$repeat": "\u00e9\ud83d\ude00", "count": 600},
+     "output": {"$repeat": "\u00e9\ud83d\ude00", "count": 512, "suffix": "..."}},
+    {"name": "markup in strings is kept", "input": "<b>&amp;</b>", "output": "<b>&amp;</b>"},
+
+    {"name": "list of scalars", "input": ["a", 1, true, null], "output": ["a", 1, true, null]},
+    {"name": "empty list", "input": [], "output": []},
+    {"name": "list keeps the first 20 elements",
+     "input": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23],
+     "output": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20]},
+    {"name": "nested list", "input": [[1, "x"], []], "output": [[1, "x"], []]},
+    {"name": "list elements are sanitized", "input": [{"$repeat": "b", "count": 1030}],
+     "output": [{"$repeat": "b", "count": 1024, "suffix": "..."}]},
+    {"name": "object inside a list becomes a JSON string", "input": [{"b": 1, "a": 2}], "output": ["{\"a\":2,\"b\":1}"]},
+
+    {"name": "object becomes compact JSON with sorted keys", "input": {"b": 1, "a": "x"}, "output": "{\"a\":\"x\",\"b\":1}"},
+    {"name": "empty object", "input": {}, "output": "{}"},
+    {"name": "nested object keys are sorted too", "input": {"z": {"y": [1, 2], "x": true}, "a": null},
+     "output": "{\"a\":null,\"z\":{\"x\":true,\"y\":[1,2]}}"},
+    {"name": "object JSON is not HTML-escaped", "input": {"h": "<b>&"}, "output": "{\"h\":\"<b>&\"}"},
+    {"name": "object JSON over the limit is truncated", "input": {"k": {"$repeat": "c", "count": 2000}},
+     "output": {"prefix": "{\"k\":\"", "$repeat": "c", "count": 1018, "suffix": "..."}}
+  ],
+  "events": {
+    "description": "path and user_agent in every event are sanitized like strings: at most 1024 characters, then the suffix.",
+    "path": {"$repeat": "p", "count": 3000},
+    "path_out": {"$repeat": "p", "count": 1024, "suffix": "..."},
+    "user_agent": {"$repeat": "u", "count": 3000},
+    "user_agent_out": {"$repeat": "u", "count": 1024, "suffix": "..."}
+  }
+}

@@ -40,7 +40,10 @@ async function bootstrap() {
     }
 
     if (values.webhook) {
-        ts.add_webhook(values.webhook as string, { alerts_only: false });
+        ts.add_webhook(values.webhook as string, { secret: process.env.TRAPPSEC_WEBHOOK_SECRET || null, alerts_only: false });
+    }
+    if (process.env.TRAPPSEC_ALERTS_WEBHOOK) {  // second receiver with the default alerts_only: true
+        ts.add_webhook(process.env.TRAPPSEC_ALERTS_WEBHOOK, { secret: process.env.TRAPPSEC_WEBHOOK_SECRET || null });
     }
 
     ts.identify_user((req) => {
@@ -128,8 +131,9 @@ async function bootstrap() {
     ts.watch("/api/v2/echo/multipart")
         .body("honey_m", { intent: "Multipart Field Test" });
 
-    await app.listen(8000, '0.0.0.0');
-    console.log(`NestJSApp listening on port 8000 (Driver: ${values.fastify ? 'Fastify' : 'Express'})`);
+    const port = Number(process.env.PORT || 8000);
+    await app.listen(port, '0.0.0.0');
+    console.log(`NestJSApp listening on port ${port} (Driver: ${values.fastify ? 'Fastify' : 'Express'})`);
 }
 bootstrap();
 

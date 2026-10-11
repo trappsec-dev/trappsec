@@ -66,3 +66,24 @@ test('hapi: raising identify_user is safe; authenticated trap; prototype keys ig
     assert.equal((await server.inject('/t')).statusCode, 200);
     assert.equal(events[before].type, 'alert');
 });
+
+test('hapi: routes registered by a plugin with a route prefix are watched (R7)', async () => {
+    const server = Hapi.server();
+    const { sentry, events } = makeSentry(server);
+    sentry.watch('/api/users/{id}').body('is_admin');
+    await server.register({
+        plugin: { name: 'users', register: (s) => {
+            s.route({ method: 'POST', path: '/users/{id}', handler: (req) => ({ b: req.payload }) });
+        } },
+    }, { routes: { prefix: '/api' } });
+    const r = await server.inject({ method: 'POST', url: '/api/users/7', payload: { is_admin: true, n: 1 } });
+    assert.deepEqual(r.result.b, { n: 1 });
+    assert.equal(events.length, 1);
+});
+
+test('hapi: a trap duplicating a real route fails loud (R20)', async () => {
+    const server = Hapi.server();
+    makeSentry(server).sentry.trap('/real').methods('GET');
+    server.route({ method: 'GET', path: '/real', handler: () => 'real' });
+    await assert.rejects(server.initialize(), /conflicts with existing/);
+});

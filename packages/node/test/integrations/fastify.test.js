@@ -101,3 +101,44 @@ test('fastify: plugin-registered (prefixed) routes are watched by full route pat
     assert.equal(events.length, 1);
     await app.close();
 });
+
+test('fastify: a trap duplicating a real route fails loud (R20)', async () => {
+    const app = Fastify();
+    makeSentry(app).sentry.trap('/real').methods('GET');
+    app.get('/real', async () => 'real');
+    await assert.rejects(app.ready(), /already declared/);
+});
+
+test('fastify: @fastify/multipart registered after Sentry cannot hide honey fields', async () => {
+    const { multipart } = require('./helpers');
+    for (const attachFieldsToBody of ['keyValues', true]) {
+        const app = Fastify();
+        const { sentry, events } = makeSentry(app);
+        app.register(require('@fastify/multipart'), { attachFieldsToBody });
+        sentry.watch('/form').query('debug').body('is_admin');
+        app.post('/form', async (req) => {
+            const out = {};
+            for (const [k, v] of Object.entries(req.body || {})) out[k] = (v && typeof v === 'object' && 'value' in v) ? v.value : v;
+            return out;
+        });
+        const mp = multipart({ is_admin: 'true', name: 'a' });
+        const r = await app.inject({ method: 'POST', url: '/form?debug=1', headers: mp.headers, payload: mp.body });
+        assert.deepEqual(r.json(), { name: 'a' }, `attachFieldsToBody=${attachFieldsToBody}`);
+        assert.equal(events.length, 1);
+        assert.deepEqual(events[0].found_fields.map((f) => f.field).sort(), ['debug', 'is_admin']);
+        await app.close();
+    }
+});
+
+test('fastify: traps and watches declared after `await app.register(...)` are installed', async () => {
+    const app = Fastify();
+    const { sentry, events } = makeSentry(app);
+    await app.register(async () => {}); // flushes the plugin queue, as any awaited register does
+    sentry.trap('/admin/backup').methods('POST');
+    sentry.watch('/items/:id').query('debug');
+    app.get('/items/:id', async (req) => ({ q: req.query }));
+    assert.equal((await app.inject({ method: 'POST', url: '/admin/backup' })).statusCode, 401);
+    assert.deepEqual((await app.inject({ url: '/items/1?debug=1&k=v' })).json().q, { k: 'v' });
+    assert.deepEqual(events.map((e) => e.event), ['trappsec.trap_hit', 'trappsec.watch_hit']);
+    await app.close();
+});

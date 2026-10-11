@@ -13,6 +13,7 @@ if (values.otel) {
 
 const Koa = require('koa');
 const Router = require('@koa/router');
+const multer = require('@koa/multer');
 const bodyParser = require('koa-bodyparser');
 const serve = require('koa-static');
 const path = require('path');
@@ -76,7 +77,8 @@ async function bootstrap() {
     router.get('/api/v2/echo/query', (ctx) => { ctx.body = ctx.query; });
     router.post('/api/v2/echo/body', (ctx) => { ctx.body = ctx.request.body || {}; });
     router.post('/api/v2/echo/form', (ctx) => { ctx.body = ctx.request.body || {}; });
-    router.post('/api/v2/echo/multipart', (ctx) => { ctx.body = { supported: false }; });
+    // @koa/multer parses multipart on the route itself; trappsec still sees the fields.
+    router.post('/api/v2/echo/multipart', multer().none(), (ctx) => { ctx.body = { ...ctx.request.body }; });
 
     app.use(router.routes());
     app.use(router.allowedMethods());
@@ -146,11 +148,14 @@ async function bootstrap() {
     }
 
     if (values.webhook) {
-        ts.add_webhook(values.webhook, { alerts_only: false });
+        ts.add_webhook(values.webhook, { secret: process.env.TRAPPSEC_WEBHOOK_SECRET || null, alerts_only: false });
+    }
+    if (process.env.TRAPPSEC_ALERTS_WEBHOOK) {  // second receiver with the default alerts_only: true
+        ts.add_webhook(process.env.TRAPPSEC_ALERTS_WEBHOOK, { secret: process.env.TRAPPSEC_WEBHOOK_SECRET || null });
     }
 
-    app.listen(8000, '0.0.0.0', () => {
-        console.log('KoaApp listening on http://127.0.0.1:8000');
+    app.listen(Number(process.env.PORT || 8000), '0.0.0.0', () => {
+        console.log('KoaApp listening on http://127.0.0.1:' + (process.env.PORT || 8000));
     });
 }
 

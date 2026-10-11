@@ -242,3 +242,27 @@ def test_encoding_and_content_type_bypasses_stripped(ctype, raw):
     _, r = app.test_client.post("/echo", content=raw, headers={"content-type": ctype})
     assert _json.loads(r.json["body"]) == {"name": "n"}
     assert len(hits(cap, "trappsec.watch_hit")) == 1
+
+
+def test_watch_on_blueprint_route():
+    """R7: routes mounted through a Blueprint (with url_prefix) are watched."""
+    from sanic import Blueprint, Sanic, json as sjson
+
+    bp = Blueprint("api_bp", url_prefix="/api")
+
+    @bp.post("/users/<uid>")
+    async def user(request, uid):
+        return sjson({"args": {k: v for k, v in request.args.items()}, "json": request.json})
+
+    app = Sanic("trappsec_blueprint_test")
+    app.blueprint(bp)
+    sentry = Sentry(app, "svc", "test")
+    cap = Capture()
+    sentry._handlers.append(cap)
+    sentry.watch("/api/users/<uid>").query("debug", intent="q").body("is_admin", intent="b")
+
+    _, r = app.test_client.post("/api/users/7?debug=1&x=1", json={"is_admin": True, "n": 1})
+    assert r.json == {"args": {"x": ["1"]}, "json": {"n": 1}}
+    events = hits(cap, "trappsec.watch_hit")
+    assert len(events) == 1
+    assert {f["field"] for f in events[0]["found_fields"]} == {"debug", "is_admin"}

@@ -25,10 +25,13 @@ type registerPayload struct {
 func main() {
 	otelEnabled := flag.Bool("otel", false, "Enable OpenTelemetry integration")
 	webhookURL := flag.String("webhook", "", "Enable webhook integration")
-	port := flag.String("port", "8000", "HTTP listen port")
+	port := flag.String("port", listenPort(), "HTTP listen port")
 	flag.Parse()
 
 	e := echo.New()
+	// Use the socket address for c.RealIP(); echo's default trusts X-Forwarded-For.
+	// Behind a proxy you control, use echo.ExtractIPFromXFFHeader(echo.TrustIPRange(...)).
+	e.IPExtractor = echo.ExtractIPDirect()
 	e.HideBanner = true
 	e.HTTPErrorHandler = func(err error, c echo.Context) {
 		_ = c.String(http.StatusInternalServerError, err.Error())
@@ -196,7 +199,10 @@ func main() {
 
 	if *webhookURL != "" {
 		alertsOnly := false
-		app.AddWebhook(*webhookURL, &trappsec.WebhookOptions{AlertsOnly: &alertsOnly})
+		app.AddWebhook(*webhookURL, &trappsec.WebhookOptions{Secret: os.Getenv("TRAPPSEC_WEBHOOK_SECRET"), AlertsOnly: &alertsOnly})
+	}
+	if u := os.Getenv("TRAPPSEC_ALERTS_WEBHOOK"); u != "" { // second receiver with the default AlertsOnly
+		app.AddWebhook(u, &trappsec.WebhookOptions{Secret: os.Getenv("TRAPPSEC_WEBHOOK_SECRET")})
 	}
 
 	addr := "127.0.0.1:" + *port
@@ -216,4 +222,12 @@ func setupOpenTelemetry() {
 		sdktrace.WithSampler(sdktrace.AlwaysSample()),
 	)
 	otel.SetTracerProvider(tp)
+}
+
+// listenPort is $PORT, or 8000.
+func listenPort() string {
+	if p := os.Getenv("PORT"); p != "" {
+		return p
+	}
+	return "8000"
 }

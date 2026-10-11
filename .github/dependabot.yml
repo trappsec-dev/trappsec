@@ -4,7 +4,8 @@
 # settings (Settings > Advanced Security), not by this file.
 #
 # examples/ is intentionally not listed: example apps are not published and
-# their dependencies are not managed by Dependabot.
+# their dependencies are not managed by Dependabot. Their lockfiles keep CI
+# reproducible; the weekly e2e-latest workflow tests them against new releases.
 version: 2
 updates:
   - package-ecosystem: pip

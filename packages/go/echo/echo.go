@@ -152,6 +152,7 @@ func defaultIP(req any) string {
 type echoIntegration struct {
 	ts       *core.Sentry
 	watchIdx map[string]core.WatchConfig
+	trapIdx  map[string]bool // "METHOD path" of every trap route
 	maxBody  int64
 
 	done atomic.Bool
@@ -195,6 +196,7 @@ func (a *App) Bootstrap() {
 	}
 
 	existing := map[string]bool{}
+	traps := map[string]bool{}
 	for _, ri := range a.Echo.Routes() {
 		existing[ri.Method+" "+ri.Path] = true
 	}
@@ -208,10 +210,35 @@ func (a *App) Bootstrap() {
 			}
 			a.Echo.Add(method, trap.Path, echoTrapHandler(in.ts, t))
 			existing[method+" "+trap.Path] = true
+			traps[method+" "+trap.Path] = true
 		}
 	}
 	in.watchIdx = idx
+	in.trapIdx = traps
+	routes := map[string]bool{}
+	for _, ri := range a.Echo.Routes() {
+		routes[ri.Path] = true
+	}
+	for path := range idx {
+		if !routes[path] {
+			in.ts.Logger().Printf("trappsec: watch %s matches no registered route and will never fire "+
+				"(watch paths are full route patterns, including group prefixes, e.g. /api/users/:id)", path)
+		}
+	}
 	a.Echo.Use(in.watchMiddleware())
+}
+
+// IsTrap reports whether the request matched a trap route. Use it as the
+// Skipper of middleware that would otherwise reject a trap before it can
+// answer, such as CSRF protection (R22): a trap that returns 403 is both
+// disabled and easy to fingerprint.
+//
+//	e.Use(middleware.CSRFWithConfig(middleware.CSRFConfig{Skipper: app.IsTrap}))
+//
+// It bootstraps lazily, so it is safe to call before the first request.
+func (a *App) IsTrap(c echo.Context) bool {
+	a.Bootstrap()
+	return a.integration.trapIdx[strings.ToUpper(c.Request().Method)+" "+c.Path()]
 }
 
 // SetMaxBodyBytes sets the largest request body that watch inspection buffers

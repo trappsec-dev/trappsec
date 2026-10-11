@@ -605,7 +605,7 @@ func TestDetectHoneyFieldsAnyShapes(t *testing.T) {
 // ---- events ---------------------------------------------------------------
 
 func TestEventJSONHasNullForEmptyFields(t *testing.T) {
-	b, err := json.Marshal(TriggerContext{Event: "trappsec.watch_hit", Type: "signal", Path: "/p", Method: "GET"})
+	b, err := json.Marshal(TriggerContext{Event: "trappsec.rule_hit", Type: "signal", Path: "/p", Method: "GET"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -613,16 +613,17 @@ func TestEventJSONHasNullForEmptyFields(t *testing.T) {
 	if err := json.Unmarshal(b, &m); err != nil {
 		t.Fatal(err)
 	}
-	for _, k := range []string{"ip", "user_agent", "intent", "user", "role", "reason", "metadata", "found_fields"} {
+	for _, k := range []string{"ip", "user_agent", "intent", "user", "role", "reason", "metadata"} {
 		v, ok := m[k]
 		if !ok || v != nil {
 			t.Errorf("key %q must be present and null, got %v (present=%v)", k, v, ok)
 		}
 	}
-	for _, k := range []string{"timestamp", "event", "type", "path", "method", "app"} {
-		if _, ok := m[k]; !ok {
-			t.Errorf("key %q missing", k)
-		}
+	b, _ = json.Marshal(TriggerContext{Event: "trappsec.watch_hit"})
+	m = nil
+	_ = json.Unmarshal(b, &m)
+	if f, ok := m["found_fields"].([]any); !ok || len(f) != 0 {
+		t.Errorf("watch_hit found_fields must be an empty array, got %#v", m["found_fields"])
 	}
 }
 
@@ -635,8 +636,8 @@ func TestEventJSONNeverFailsAndTruncates(t *testing.T) {
 	}
 	var m map[string]any
 	_ = json.Unmarshal(b, &m)
-	if len(m["path"].(string)) != 1024 || len(m["user_agent"].(string)) != 1024 {
-		t.Fatal("path/user_agent not truncated to 1024")
+	if m["path"] != strings.Repeat("p", 1024)+"..." || m["user_agent"] != strings.Repeat("u", 1024)+"..." {
+		t.Fatal("path/user_agent not truncated to 1024 + \"...\"")
 	}
 }
 
@@ -647,8 +648,8 @@ func TestSentryTruncatesPathAndUserAgentInEvents(t *testing.T) {
 	s.Request.Path = func(any) string { return strings.Repeat("a", 5000) }
 	s.Request.UserAgent = func(any) string { return strings.Repeat("b", 5000) }
 	s.Trigger(nil, "r", "i", nil)
-	if len(c.events[0].Path) != 1024 || len(c.events[0].UserAgent) != 1024 {
-		t.Fatal("not truncated")
+	if c.events[0].Path != strings.Repeat("a", 1024)+"..." || c.events[0].UserAgent != strings.Repeat("b", 1024)+"..." {
+		t.Fatal("not truncated to 1024 + \"...\"")
 	}
 }
 
@@ -877,5 +878,37 @@ func TestSentryCloseStopsAllWebhookAndSlackHandlers(t *testing.T) {
 	}
 	if err := s.Close(ctx); err != nil {
 		t.Fatalf("second close: %v", err)
+	}
+}
+
+func TestIsTrapMatchesMethodAndPathAndNeverPanics(t *testing.T) {
+	s := NewSentry("svc", "t")
+	s.Trap("/admin/backup").Methods("GET", "POST")
+	s.Trap("/api/v1/users/:id").Methods("DELETE")
+	s.Trap("/files/{name}").Methods("GET")
+	type r struct{ m, p string }
+	s.Request.Method = func(req any) string { return req.(r).m }
+	s.Request.Path = func(req any) string { return req.(r).p }
+	cases := []struct {
+		req  r
+		want bool
+	}{
+		{r{"POST", "/admin/backup"}, true},
+		{r{"post", "/admin/backup/?x=1"}, true},
+		{r{"PUT", "/admin/backup"}, false},
+		{r{"DELETE", "/api/v1/users/7"}, true},
+		{r{"DELETE", "/api/v1/users/7/x"}, false},
+		{r{"DELETE", "/api/v1/users/"}, false},
+		{r{"GET", "/files/a.txt"}, true},
+		{r{"GET", "/other"}, false},
+	}
+	for _, c := range cases {
+		if got := s.IsTrap(c.req); got != c.want {
+			t.Errorf("IsTrap(%v) = %v, want %v", c.req, got, c.want)
+		}
+	}
+	s.Request.Path = func(any) string { panic("boom") }
+	if s.IsTrap(r{"GET", "/admin/backup"}) {
+		t.Fatal("a panicking extractor must yield false")
 	}
 }

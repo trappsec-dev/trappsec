@@ -17,11 +17,14 @@ from wsgiref.simple_server import make_server
 
 from django.conf import settings
 from django.http import JsonResponse, HttpResponse
+from django.views.decorators.http import require_GET
 from django.urls import path, re_path
 from django.core.wsgi import get_wsgi_application
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../packages/python/src")))
 import trappsec
+
+PORT = int(os.environ.get("PORT", "8000"))
 
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -52,6 +55,7 @@ def profile(request):
     return JsonResponse({"error": "method not allowed"}, status=405)
 
 
+@require_GET
 def get_orders(_request):
     return JsonResponse({
         "orders": [
@@ -61,6 +65,7 @@ def get_orders(_request):
     })
 
 
+@require_GET
 def get_order_detail(_request, order_id):
     return JsonResponse({"id": order_id, "item": "Laptop", "amount": 1200, "status": "shipped"})
 
@@ -223,9 +228,12 @@ if __name__ == "__main__":
         ts.add_otel()
 
     if args.webhook:
-        ts.add_webhook(url=args.webhook, alerts_only=False)
+        ts.add_webhook(url=args.webhook, secret=os.environ.get("TRAPPSEC_WEBHOOK_SECRET"), alerts_only=False)
 
-    print("Starting server on http://127.0.0.1:8000")
-    httpd = make_server("127.0.0.1", 8000, app)
+    if os.environ.get("TRAPPSEC_ALERTS_WEBHOOK"):  # second receiver with the default alerts_only=True
+        ts.add_webhook(url=os.environ["TRAPPSEC_ALERTS_WEBHOOK"], secret=os.environ.get("TRAPPSEC_WEBHOOK_SECRET"))
+
+    print(f"Starting server on http://127.0.0.1:{PORT}")
+    httpd = make_server("127.0.0.1", PORT, app)
     httpd.serve_forever()
 

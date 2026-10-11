@@ -31,8 +31,11 @@ const MAX_IN_FLIGHT = 100;
 const MAX_RETRIES = 2;
 const WARN_INTERVAL_MS = 60000;
 
-/** JSON.stringify that never throws (bigint, cycles, getters that throw). */
-function safeStringify(value) {
+/**
+ * JSON.stringify that never throws (bigint, cycles, getters that throw).
+ * With sortKeys, plain-object keys are emitted in sorted order at every level.
+ */
+function safeStringify(value, { sortKeys = false } = {}) {
     try {
         const seen = new WeakSet();
         const out = JSON.stringify(value, (k, v) => {
@@ -40,6 +43,11 @@ function safeStringify(value) {
             if (v !== null && typeof v === 'object') {
                 if (seen.has(v)) return "[Circular]";
                 seen.add(v);
+                if (sortKeys && !Array.isArray(v) && typeof v.toJSON !== 'function') {
+                    const sorted = {};
+                    for (const key of Object.keys(v).sort()) sorted[key] = v[key];
+                    return sorted;
+                }
             }
             return v;
         });

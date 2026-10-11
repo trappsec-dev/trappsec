@@ -102,7 +102,7 @@ def test_events_always_have_user_role_keys_and_truncate():
     assert len(ev["path"]) == 1027 and ev["path"].endswith("...")
     assert len(ev["user_agent"]) == 1027
     for e in cap.events:
-        assert {"user", "role", "intent", "ip", "user_agent", "path", "method"} <= set(e)
+        assert {"user", "role", "ip", "user_agent", "path", "method"} <= set(e)
         json.dumps(e, default=str)
 
 
@@ -187,7 +187,7 @@ def test_safe_value():
     assert safe_value(UploadFile()) == "<UploadFile>"
     assert safe_value(b"xx") == "<bytes>"
     assert len(safe_value(list(range(50)))) == 20
-    assert safe_value({"d": datetime.date(2026, 1, 1)}) == '{"d": "2026-01-01"}'
+    assert safe_value({"d": datetime.date(2026, 1, 1)}) == '{"d":"2026-01-01"}'
     assert len(safe_value({"k": "v" * 3000})) == 1027
 
 
@@ -256,3 +256,49 @@ def test_watched_key_lookup_does_not_match_object_attributes():
     ts = make_sentry()
     data, found, touched = ts._detect_honey_fields({"constructor": 1}, {"a": {}})
     assert not touched and data == {"constructor": 1}
+
+
+def test_warn_if_older_than_tested_minimum(caplog):
+    from trappsec.integrations._version import warn_if_older
+
+    log = logging.getLogger("trappsec-test-version")
+    with mock.patch("importlib.metadata.version", return_value="2.12.4"):
+        with caplog.at_level(logging.ERROR, logger="trappsec-test-version"):
+            warn_if_older(log, "litestar", (2, 13), "honey fields may be missed")
+    assert "litestar 2.12.4 is older than the oldest supported version 2.13" in caplog.text
+
+    caplog.clear()
+    for installed in ("2.13.0", "3.0", "2.13.0rc1"):
+        with mock.patch("importlib.metadata.version", return_value=installed):
+            warn_if_older(log, "litestar", (2, 13), "x")
+    with mock.patch("importlib.metadata.version", side_effect=Exception("not installed")):
+        warn_if_older(log, "litestar", (2, 13), "x")
+    with mock.patch("importlib.metadata.version", return_value="weird"):
+        warn_if_older(log, "litestar", (2, 13), "x")
+    assert caplog.text == ""
+
+
+@pytest.mark.parametrize("app", [object(), None, {}, type("Bottle", (), {})()])
+def test_unknown_framework_fails_loud(app):
+    """R9: an unsupported app must raise, never run silently unprotected."""
+    with pytest.raises(Exception, match="trappsec error: unknown framework"):
+        Sentry(app, "svc", "test")
+
+
+def test_is_trap_matches_method_and_path_and_never_raises():
+    ts = make_sentry()
+    ts.trap("/admin/backup").methods("GET", "POST")
+    ts.trap("/api/v1/users/<int:uid>").methods("DELETE")
+    ts.trap("/files/{name}").methods("GET")
+    req = lambda m, p: (m, p)  # noqa: E731
+    ts.request.method = lambda r: r[0]
+    ts.request.path = lambda r: r[1]
+    assert ts.is_trap(req("POST", "/admin/backup"))
+    assert ts.is_trap(req("post", "/admin/backup/?x=1"))
+    assert not ts.is_trap(req("PUT", "/admin/backup"))
+    assert ts.is_trap(req("DELETE", "/api/v1/users/7"))
+    assert not ts.is_trap(req("DELETE", "/api/v1/users/7/x"))
+    assert ts.is_trap(req("GET", "/files/a.txt"))
+    assert not ts.is_trap(req("GET", "/other"))
+    ts.request.path = lambda r: 1 / 0
+    assert ts.is_trap(req("GET", "/admin/backup")) is False

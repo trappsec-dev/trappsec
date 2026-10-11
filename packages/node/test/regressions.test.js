@@ -329,3 +329,65 @@ test("otel attributes are valid types", () => {
   assert.equal("metadata.n" in attrs, false);
   assert.equal("trappsec.user" in attrs, false);
 });
+
+test("otel: trap/rule attributes, non-recording spans and the real API without an SDK", () => {
+  const attrs = {};
+  let recording = true;
+  const span = { isRecording: () => recording, setAttribute: (k, v) => { attrs[k] = v; }, addEvent: () => {} };
+  const h = Object.create(OTELHandler.prototype);
+  h.otel = { trace: { getSpan: () => span }, context: { active: () => ({}) } };
+
+  h.emit({ event: "trappsec.trap_hit", type: "signal", intent: "Recon", user: null, role: null, ip: "1.2.3.4" });
+  assert.equal(attrs["trappsec.detected"], true);
+  assert.equal(attrs["trappsec.event"], "trappsec.trap_hit");
+  assert.equal(attrs["trappsec.intent"], "Recon");
+  assert.equal(attrs["trappsec.ip"], "1.2.3.4");
+
+  h.emit({ event: "trappsec.rule_hit", type: "alert", intent: "Abuse", reason: "too many", user: "u" });
+  assert.equal(attrs["trappsec.reason"], "too many");
+  assert.equal(attrs["trappsec.user"], "u");
+
+  for (const k of Object.keys(attrs)) delete attrs[k];
+  recording = false;
+  h.emit({ event: "trappsec.trap_hit", type: "alert", intent: "Recon" });
+  assert.deepEqual(attrs, {});
+
+  // Real @opentelemetry/api with no SDK registered: no active span, emit is a no-op.
+  const real = new OTELHandler();
+  assert.doesNotThrow(() => real.emit({ event: "trappsec.trap_hit", type: "alert", intent: "Recon" }));
+});
+
+test("unknown framework fails loud (R9)", () => {
+  for (const app of [null, {}, { listen() {} }, function () {}]) {
+    assert.throws(() => new Sentry(app, "svc", "test"), /trappsec error: unknown framework/);
+  }
+});
+
+test("a handler that throws does not affect the request or other handlers (R12)", () => {
+  const ts = harness();
+  const seen = [];
+  const errors = [];
+  ts.logger = { ...quiet, error: (...a) => errors.push(a) };
+  ts.service = "svc"; ts.environment = "test"; ts.hostname = "h";
+  delete ts._trigger; // use the real fan-out
+  ts._handlers = [{ emit() { throw new Error("handler exploded"); } }, { emit: (e) => seen.push(e) }];
+  assert.doesNotThrow(() => ts.trigger({}, "reason"));
+  assert.equal(seen.length, 1);
+  assert.equal(errors.length, 1);
+});
+
+test("is_trap matches method and path, with parameter segments; never throws", () => {
+  const ts = harness();
+  ts._traps = [new TrapBuilder(ts, "/admin/backup").methods("GET", "POST"), new TrapBuilder(ts, "/api/v1/users/:id").methods("DELETE")];
+  const req = (method, path) => ({ method, path });
+  ts.requestContext = { path: (r) => r.path, method: (r) => r.method, userAgent: () => null };
+  assert.equal(ts.is_trap(req("POST", "/admin/backup")), true);
+  assert.equal(ts.is_trap(req("post", "/admin/backup/?x=1")), true);
+  assert.equal(ts.is_trap(req("PUT", "/admin/backup")), false);
+  assert.equal(ts.is_trap(req("DELETE", "/api/v1/users/7")), true);
+  assert.equal(ts.is_trap(req("DELETE", "/api/v1/users/7/x")), false);
+  assert.equal(ts.is_trap(req("DELETE", "/api/v1/users/")), false);
+  assert.equal(ts.is_trap(req("GET", "/other")), false);
+  ts.requestContext.path = () => { throw new Error("boom"); };
+  assert.equal(ts.is_trap(req("GET", "/admin/backup")), false);
+});

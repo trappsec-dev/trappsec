@@ -261,3 +261,97 @@ def test_encoding_and_content_type_bypasses_stripped(ctype, raw):
         assert json.loads(d["body"]) == {"name": "n"}
         assert int(d["clen"]) == len(d["body"].encode())
         assert len(hits(cap, "trappsec.watch_hit")) == 1
+
+
+def test_body_over_inspect_limit_passes_through_intact(monkeypatch):
+    import trappsec.integrations.litestar as ls_integration
+
+    monkeypatch.setattr(ls_integration, "MAX_INSPECT_BYTES", 200)
+    app, s, cap = make(watch_x)
+    big = json.dumps({"x": "evil", "pad": "a" * 5000}).encode()
+    with TestClient(app) as c:
+        d = c.post("/echo", content=big, headers={"content-type": "application/json"}).json()
+    assert d["body"] == big.decode()
+    assert hits(cap, "trappsec.watch_hit") == []
+
+
+def test_streamed_body_over_inspect_limit_is_replayed_intact(monkeypatch):
+    """No content-length: the chunks read before the limit are replayed, then the rest streams."""
+    import asyncio
+    import trappsec.integrations.litestar as ls_integration
+
+    monkeypatch.setattr(ls_integration, "MAX_INSPECT_BYTES", 200)
+    app, s, cap = make(watch_x)
+    big = json.dumps({"x": "evil", "pad": "a" * 5000}).encode()
+    chunks = [big[i:i + 150] for i in range(0, len(big), 150)]
+    messages = [{"type": "http.request", "body": ch, "more_body": i < len(chunks) - 1} for i, ch in enumerate(chunks)]
+    sent = []
+
+    async def receive():
+        return messages.pop(0) if messages else {"type": "http.disconnect"}
+
+    async def send(message):
+        sent.append(message)
+
+    scope = {
+        "type": "http", "asgi": {"version": "3.0"}, "http_version": "1.1", "method": "POST",
+        "scheme": "http", "path": "/echo", "raw_path": b"/echo", "root_path": "", "query_string": b"",
+        "headers": [(b"host", b"testserver"), (b"content-type", b"application/json")],
+        "client": ("127.0.0.1", 1234), "server": ("testserver", 80), "state": {},
+    }
+    asyncio.run(app(scope, receive, send))
+    body = b"".join(m.get("body", b"") for m in sent if m["type"] == "http.response.body")
+    assert json.loads(body)["body"] == big.decode()
+    assert hits(cap, "trappsec.watch_hit") == []
+
+
+def test_body_under_inspect_limit_is_inspected(monkeypatch):
+    import trappsec.integrations.litestar as ls_integration
+
+    monkeypatch.setattr(ls_integration, "MAX_INSPECT_BYTES", 200)
+    app, s, cap = make(watch_x)
+    with TestClient(app) as c:
+        d = c.post("/echo", json={"x": "evil", "pad": "a" * 50}).json()
+    assert d["json"] == {"pad": "a" * 50}
+    assert len(hits(cap, "trappsec.watch_hit")) == 1
+
+
+@pytest.mark.parametrize("key", [None, "skip_csrf"])
+def test_traps_answer_under_csrf_protection(key):
+    """R22: CSRF middleware must not turn a POST trap into a silent 403."""
+    from litestar.config.csrf import CSRFConfig
+
+    @post("/real", status_code=200)
+    async def real() -> dict:
+        return {"ok": True}
+
+    cfg = CSRFConfig(secret="s") if key is None else CSRFConfig(secret="s", exclude_from_csrf_key=key)
+    app = Litestar(route_handlers=[real], csrf_config=cfg)
+    sentry = Sentry(app, "svc", "test")
+    cap = Capture()
+    sentry._handlers.append(cap)
+    sentry.trap("/admin/backup").methods("POST")
+    with TestClient(app) as c:
+        assert c.post("/real", data={"a": "1"}).status_code == 403  # CSRF still protects real routes
+        assert c.post("/admin/backup", data={"a": "1"}).status_code == 401
+    assert len(hits(cap, "trappsec.trap_hit")) == 1
+
+
+def test_watch_on_router_route():
+    """R7: routes mounted through a Router (with a path prefix) are watched."""
+    from litestar import Router
+
+    @post("/users/{uid:str}", status_code=200)
+    async def user(uid: str, request: Request) -> dict:
+        return {"args": dict(request.query_params), "json": await request.json()}
+
+    app = Litestar(route_handlers=[Router(path="/api", route_handlers=[user])])
+    sentry = Sentry(app, "svc", "test")
+    cap = Capture()
+    sentry._handlers.append(cap)
+    sentry.watch("/api/users/{uid:str}").query("debug", intent="q").body("is_admin", intent="b")
+    with TestClient(app) as c:
+        r = c.post("/api/users/7?debug=1&x=1", json={"is_admin": True, "n": 1})
+    assert r.json() == {"args": {"x": "1"}, "json": {"n": 1}}
+    [event] = hits(cap, "trappsec.watch_hit")
+    assert {f["field"] for f in event["found_fields"]} == {"debug", "is_admin"}

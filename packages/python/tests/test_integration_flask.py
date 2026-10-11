@@ -242,3 +242,82 @@ def test_get_data_consistent_when_get_json_read_first():
     sentry.watch("/raw2").body("is_admin")
     d = app.test_client().post("/raw2", json=_PAYLOAD).get_json()
     assert d["first"] == {"name": "x"} and d["raw"] == {"name": "x"}
+
+
+def test_watch_on_blueprint_route():
+    """R7: routes mounted through a Blueprint (with url_prefix) are watched."""
+    from flask import Blueprint
+
+    app = Flask(__name__)
+    bp = Blueprint("api", __name__, url_prefix="/api")
+
+    @bp.post("/users/<uid>")
+    def user(uid):
+        return jsonify(args=request.args.to_dict(), json=request.get_json(silent=True))
+
+    app.register_blueprint(bp)
+    sentry = Sentry(app, "svc", "test")
+    cap = Capture()
+    sentry._handlers.append(cap)
+    sentry.watch("/api/users/<uid>").query("debug", intent="q").body("is_admin", intent="b")
+
+    r = app.test_client().post("/api/users/7?debug=1&x=1", json={"is_admin": True, "n": 1})
+    assert r.get_json() == {"args": {"x": "1"}, "json": {"n": 1}}
+    [event] = watch_events(cap)
+    assert {f["field"] for f in event["found_fields"]} == {"debug", "is_admin"}
+
+
+def test_concurrent_first_requests_bootstrap_once():
+    """R8: Flask bootstraps on the first request; under a threaded server many arrive at once."""
+    import threading
+    import urllib.error
+    import urllib.request
+    from werkzeug.serving import make_server
+
+    app = Flask(__name__)
+    sentry = Sentry(app, "svc", "test")
+    cap = Capture()
+    sentry._handlers.append(cap)
+    sentry.trap("/admin/backup")
+    srv = make_server("127.0.0.1", 0, app, threaded=True)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    codes, start = [], threading.Barrier(24)
+
+    def hit():
+        start.wait()
+        try:
+            urllib.request.urlopen("http://127.0.0.1:%d/admin/backup" % srv.server_port, timeout=10)
+        except urllib.error.HTTPError as e:
+            codes.append(e.code)
+
+    threads = [threading.Thread(target=hit) for _ in range(24)]
+    [t.start() for t in threads]
+    [t.join() for t in threads]
+    srv.shutdown()
+    assert codes == [401] * 24
+    assert len([e for e in cap.events if e["event"] == "trappsec.trap_hit"]) == 24
+
+
+@pytest.mark.parametrize("csrf_first", [True, False])
+def test_traps_answer_under_flask_wtf_csrf(csrf_first):
+    """R22: Flask-WTF's CSRFProtect must not turn a POST trap into a silent 400."""
+    csrf_mod = pytest.importorskip("flask_wtf.csrf")
+    app = Flask(__name__)
+    app.secret_key = "s"
+
+    @app.post("/real")
+    def real():
+        return "ok"
+
+    if csrf_first:
+        csrf_mod.CSRFProtect(app)
+    sentry = Sentry(app, "svc", "test")
+    cap = Capture()
+    sentry._handlers.append(cap)
+    sentry.trap("/admin/backup").methods("POST")
+    if not csrf_first:
+        csrf_mod.CSRFProtect(app)
+    c = app.test_client()
+    assert c.post("/real").status_code == 400  # CSRF still protects real routes
+    assert c.post("/admin/backup").status_code == 401
+    assert len([e for e in cap.events if e["event"] == "trappsec.trap_hit"]) == 1

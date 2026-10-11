@@ -92,6 +92,12 @@ type syncBuf struct {
 	b  bytes.Buffer
 }
 
+func (s *syncBuf) String() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.b.String()
+}
+
 func (s *syncBuf) Write(p []byte) (int, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -593,4 +599,158 @@ func TestConcurrentRequestsRace(t *testing.T) {
 		}
 		wg.Wait()
 	})
+}
+
+func TestUnreachableWatchIsLogged(t *testing.T) {
+	mux := http.NewServeMux()
+	app := InstallSentry(mux, "svc", "test")
+	logs := &syncBuf{}
+	app.Logger().SetOutput(logs)
+	sub := http.NewServeMux()
+	sub.HandleFunc("POST /users/{id}", func(http.ResponseWriter, *http.Request) {})
+	app.Handle("/api/", http.StripPrefix("/api", sub))
+	app.HandleFunc("POST /items/{id}", func(http.ResponseWriter, *http.Request) {})
+	app.Sentry.Watch("/api/users/{id}").Body("is_admin", core.NoDefault, "priv") // inside the sub-mux
+	app.Sentry.Watch("/items/{id}").Body("is_admin", core.NoDefault, "priv")     // served
+	app.Sentry.Watch("/api/").Body("is_admin", core.NoDefault, "priv")           // the mount itself
+	app.Bootstrap()
+	out := logs.String()
+	if !strings.Contains(out, `watch /api/users/{id} matches no route on this mux`) || !strings.Contains(out, `watch "/api/"`) {
+		t.Fatalf("expected a warning with a hint for the sub-mux route, got: %s", out)
+	}
+	if strings.Contains(out, "watch /items/{id} matches") || strings.Contains(out, "watch /api/ matches") {
+		t.Fatalf("served watches must not warn: %s", out)
+	}
+}
+
+func TestPanickingCallbacksNeverBreakRequests(t *testing.T) {
+	app := InstallSentry(http.NewServeMux(), "svc", "test")
+	app.Logger().SetOutput(&syncBuf{})
+	app.IdentifyUser(func(any) *core.AuthContext { panic("identify") })
+	app.OverrideSourceIP(func(any) string { panic("ip") })
+	app.Sentry.Trap("/admin").Methods("GET").Respond(core.ResponseConfig{Status: 200, Body: func(any) any { panic("body") }})
+	var bound map[string]any
+	app.HandleFunc("POST /w", func(w http.ResponseWriter, r *http.Request) { bound = nil; _ = json.NewDecoder(r.Body).Decode(&bound) })
+	app.Sentry.Watch("/w").Body("role", func(any) any { panic("default") }, "priv")
+
+	rec := httptest.NewRecorder()
+	app.ServeHTTP(rec, httptest.NewRequest("GET", "/admin", nil))
+	if rec.Code != 401 {
+		t.Fatalf("trap answered %d", rec.Code)
+	}
+	req := httptest.NewRequest("POST", "/w", strings.NewReader(`{"role":"user","n":1}`))
+	req.Header.Set("Content-Type", "application/json")
+	rec = httptest.NewRecorder()
+	app.ServeHTTP(rec, req)
+	if _, leaked := bound["role"]; rec.Code != 200 || leaked || bound["n"] == nil {
+		t.Fatalf("watched route: code=%d bound=%v", rec.Code, bound)
+	}
+}
+
+func TestIsTrapLetsCSRFMiddlewareSkipTraps(t *testing.T) {
+	app := InstallSentry(http.NewServeMux(), "svc", "test")
+	logs := &syncBuf{}
+	app.Logger().SetOutput(logs)
+	app.Sentry.Trap("/admin/backup").Methods("POST")
+	app.HandleFunc("POST /real", func(w http.ResponseWriter, r *http.Request) {})
+	// stand-in for gorilla/csrf: reject POSTs without a token unless IsTrap says skip
+	h := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == "POST" && r.Header.Get("X-CSRF-Token") == "" && !app.Sentry.IsTrap(r) {
+			http.Error(w, "csrf", http.StatusForbidden)
+			return
+		}
+		app.ServeHTTP(w, r)
+	})
+	do := func(path string) int {
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, httptest.NewRequest("POST", path, nil))
+		return rec.Code
+	}
+	if real, trap := do("/real"), do("/admin/backup"); real != 403 || trap != 401 {
+		t.Fatalf("real=%d trap=%d", real, trap)
+	}
+	if logs.count("trappsec.trap_hit") != 1 {
+		t.Fatal("trap event missing")
+	}
+}
+
+// The standard library's CSRF protection rejects cross-origin browser POSTs
+// before the mux, so traps behind it never answer unless IsTrap skips it.
+func TestIsTrapWithStdlibCrossOriginProtection(t *testing.T) {
+	for _, skip := range []bool{false, true} {
+		app := InstallSentry(http.NewServeMux(), "svc", "test")
+		logs := &syncBuf{}
+		app.Logger().SetOutput(logs)
+		app.Sentry.Trap("/admin/backup").Methods("POST")
+		app.HandleFunc("POST /real", func(w http.ResponseWriter, r *http.Request) {})
+		protected := http.NewCrossOriginProtection().Handler(app)
+		h := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if skip && app.Sentry.IsTrap(r) {
+				app.ServeHTTP(w, r)
+				return
+			}
+			protected.ServeHTTP(w, r)
+		})
+		do := func(path string) int {
+			req := httptest.NewRequest("POST", path, nil)
+			req.Header.Set("Sec-Fetch-Site", "cross-site")
+			rec := httptest.NewRecorder()
+			h.ServeHTTP(rec, req)
+			return rec.Code
+		}
+		real, trap := do("/real"), do("/admin/backup")
+		if want := map[bool]int{false: 403, true: 401}[skip]; real != 403 || trap != want {
+			t.Fatalf("skip=%v: real=%d trap=%d (want trap %d)", skip, real, trap, want)
+		}
+		if skip && logs.count("trappsec.trap_hit") != 1 {
+			t.Fatal("trap event missing")
+		}
+	}
+}
+
+func TestParameterisedWatchAndEventContext(t *testing.T) {
+	app := InstallSentry(http.NewServeMux(), "svc", "test")
+	logs := &syncBuf{}
+	app.Logger().SetOutput(logs)
+	var seen string
+	app.HandleFunc("GET /users/{id}", func(w http.ResponseWriter, r *http.Request) { seen = r.URL.RawQuery })
+	app.Sentry.Watch("/users/{id}").Query("debug", core.NoDefault, "recon")
+	req := httptest.NewRequest("GET", "/users/7?debug=1&x=1", nil)
+	req.Header.Set("User-Agent", "probe/1.0")
+	req.RemoteAddr = "203.0.113.5:4711"
+	app.ServeHTTP(httptest.NewRecorder(), req)
+	ev := logs.waitEvent(t, "trappsec.watch_hit")
+	if seen != "x=1" || ev["path"] != "/users/7" || ev["method"] != "GET" || ev["user_agent"] != "probe/1.0" || ev["ip"] != "203.0.113.5" {
+		t.Fatalf("handler saw %q; event %v", seen, ev)
+	}
+}
+
+// R10: watches declared before traps both work. R13: the indexes are built once
+// at startup, so a watch added while serving is never looked up; a per-request
+// scan of the configuration would pick it up.
+func TestWatchesBeforeTrapsAndIndexBuiltOnce(t *testing.T) {
+	app := InstallSentry(http.NewServeMux(), "svc", "test")
+	logs := &syncBuf{}
+	app.Logger().SetOutput(logs)
+	var seen string
+	app.HandleFunc("GET /users/{id}", func(w http.ResponseWriter, r *http.Request) { seen = r.URL.RawQuery })
+	app.Sentry.Watch("/users/{id}").Query("debug", core.NoDefault, "recon")
+	app.Sentry.Trap("/admin/backup").Methods("POST")
+	do := func(method, path string) int {
+		rec := httptest.NewRecorder()
+		app.ServeHTTP(rec, httptest.NewRequest(method, path, nil))
+		return rec.Code
+	}
+	if code := do("POST", "/admin/backup"); code != 401 {
+		t.Fatalf("trap answered %d", code)
+	}
+	logs.waitEvent(t, "trappsec.trap_hit")
+	if do("GET", "/users/7?debug=1&x=1"); seen != "x=1" {
+		t.Fatalf("watched field reached the handler: %q", seen)
+	}
+	logs.waitEvent(t, "trappsec.watch_hit")
+	app.Sentry.Watch("/users/{id}").Query("late", core.NoDefault, "recon")
+	if do("GET", "/users/8?late=1"); seen != "late=1" {
+		t.Fatalf("a watch added while serving was applied: handler saw %q", seen)
+	}
 }

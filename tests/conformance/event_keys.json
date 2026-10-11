@@ -1,0 +1,11 @@
+{
+  "description": "Exact top-level keys of each event (docs/event-reference.md). Every key is always present, with null for absent values; no other keys appear. Checked by each SDK's unit tests and by the e2e suite on every webhook delivery.",
+  "common": ["timestamp", "event", "type", "path", "method", "user_agent", "ip", "app", "user", "role"],
+  "app": ["service", "environment", "hostname"],
+  "events": {
+    "trappsec.trap_hit": ["intent"],
+    "trappsec.watch_hit": ["found_fields"],
+    "trappsec.rule_hit": ["reason", "intent", "metadata"]
+  },
+  "found_field": ["type", "field", "value", "intent"]
+}

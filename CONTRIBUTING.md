@@ -15,6 +15,8 @@ Thanks for helping. trappsec ships three parallel SDKs (Python, Node.js, Go) tha
 | `packages/go` | Go core module; adapters in `nethttp/`, `gin/`, `echo/` are separate modules |
 | `examples/` | One runnable app per framework, all following one shared spec |
 | `tests/e2e` | Black-box suite run against every example |
+| `tests/conformance` | Shared JSON cases (value matching, detection, event keys) every SDK's unit tests load |
+| `tests/package` | Builds the wheel, sdist and npm tarball and smoke-tests them installed |
 | `docs/` | Jekyll site (https://trappsec.dev) |
 
 ## Development setup
@@ -30,13 +32,13 @@ pytest packages/python/tests
 
 Integration tests skip when a framework is not installed.
 
-### Node.js (18+)
+### Node.js (20+)
 
 ```bash
 cd packages/node
 npm ci
 npm test
-cd test/integrations && npm install && node --test
+cd test/integrations && npm ci && node --test
 ```
 
 ### Go (see `go.mod` for the version)
@@ -58,7 +60,15 @@ python tests/e2e/run_examples.py --install --log-dir artifacts/e2e-logs
 python tests/e2e/run_examples.py --cases py-flask,node-express   # subset
 ```
 
-See [`tests/e2e/README.md`](tests/e2e/README.md) for options. If you add an example, add a case to `run_examples.py`. Every example's `identify_user` must return `user` and `role`.
+See [`tests/e2e/README.md`](tests/e2e/README.md) for options. If you add an example, add a case to `run_examples.py` (declare features it does not implement, e.g. `NO_MULTIPART`). Every example's `identify_user` must return `user` and `role`, and its webhook must read the signing secret from `TRAPPSEC_WEBHOOK_SECRET`.
+
+## Conformance fixtures and package checks
+
+[`tests/rule-coverage.md`](tests/rule-coverage.md) maps each integration rule to the tests that cover it per framework, with the open gaps. Update it when you add a framework or close a gap.
+
+Matching, detection and event-shape rules that must agree across languages live in `tests/conformance/*.json`. Change behaviour there first; the Python, Node and Go unit tests all load those files.
+
+`bash tests/package/run.sh` builds the Python and Node distributions, installs each into a clean environment outside the repo and runs a real app against it. Run it after touching packaging (`pyproject.toml`, `package.json` `files`/`exports`, `index.d.ts`, `index.mjs`).
 
 ## Pull requests
 

@@ -2,14 +2,18 @@
 
 const {
     normalizePath, isObject, buildWatchMap, hasFields, replaceInPlace, detect,
-    resolveTrap, emitWatch
+    resolveTrap, emitWatch, stripRawQuery
 } = require('./_common');
 
-// Traps and the watch hook are installed by a non-encapsulated plugin that is
-// registered when Sentry is constructed. Fastify loads it at ready() time (before
-// listen(), inject() or ready() resolve), after synchronous configuration code ran
-// and with routes still addable, so `await app.ready()` / `app.inject()` before
-// `listen()` work and nothing is registered inside a patched listen().
+const PENDING = Symbol('trappsec.pendingWatch');
+
+// Two non-encapsulated plugins. The watch hooks are registered when Sentry is
+// constructed, so they keep their place among the app's own hooks; the watch map
+// is built on the first request. Traps are registered when the app boots (ready(),
+// which listen() and inject() call), so routes declared after the plugin queue
+// was flushed by an earlier `await app.register(...)` are still installed.
+// The hooks are app-wide and resolve the route per request, so registering them
+// before the trap routes cannot miss a trap (the concern behind R10).
 //
 // Watches run in `preValidation`: the body is already parsed, but JSON-schema
 // validation has not run yet, so honey fields are seen and stripped even when the
@@ -33,40 +37,48 @@ class FastifyIntegration {
         this.ts.requestContext.userAgent = (req) => req.headers?.["user-agent"] || req.raw?.headers?.["user-agent"] || null;
         this.ts.requestContext.method = (req) => req.method || req.raw?.method || null;
 
+        const integration = this;
         if (options.hookListen !== false && typeof app.listen === 'function') {
-            const integration = this;
             const originalListen = app.listen;
             app.listen = function (...args) {
                 integration.bootstrap();
                 return originalListen.apply(this, args);
             };
         }
+        if (typeof app.ready === 'function') {
+            const originalReady = app.ready;
+            app.ready = function (...args) {
+                integration.bootstrap();
+                return originalReady.apply(this, args);
+            };
+        }
 
-        this.bootstrap();
+        this._hooksRegistered = this._register('trappsec-watches', (instance) => this.setup_watches(instance));
     }
 
-    // Public and idempotent. Registers the plugin that installs traps and watches.
+    // Public and idempotent. Registers the plugin that installs traps (and the
+    // watch hooks, if that failed at construction).
     bootstrap() {
+        if (!this._hooksRegistered) this._hooksRegistered = this._register('trappsec-watches', (instance) => this.setup_watches(instance));
         if (this._registered) return;
-        this._registered = true;
+        this._registered = this._register('trappsec', (instance) => this.inject_traps(instance));
+    }
 
-        const integration = this;
+    _register(name, install) {
         const plugin = function trappsecPlugin(instance, _opts, done) {
             try {
-                integration.inject_traps(instance);
-                integration.setup_watches(instance);
+                install(instance);
                 done();
             } catch (e) {
                 done(e);
             }
         };
         plugin[Symbol.for('skip-override')] = true; // do not encapsulate: hooks apply app-wide
-        plugin[Symbol.for('fastify.display-name')] = 'trappsec';
-
+        plugin[Symbol.for('fastify.display-name')] = name;
         try {
             this.app.register(plugin);
+            return true;
         } catch (e) {
-            this._registered = false;
             this.ts.logger.error('Trappsec could not register with Fastify (was the instance already started? Install Sentry before ready()/listen()): ', e);
             throw e;
         }
@@ -93,18 +105,29 @@ class FastifyIntegration {
     }
 
     setup_watches(instance = this.app) {
-        if (this.ts.watches.length === 0) return;
-
-        const watchMap = buildWatchMap(this.ts);
+        let watchMap = null; // built once, on the first request: watches are fixed by then (R13)
 
         instance.addHook('preValidation', (req, _reply, done) => {
             try {
+                if (watchMap === null) watchMap = buildWatchMap(this.ts);
                 const routePath = normalizePath(req.routeOptions?.url || req.routerPath || req.context?.config?.url);
                 const watch = routePath ? watchMap[routePath] : null;
                 if (watch) this._inspect(req, watch);
             } catch (e) {
                 this.ts.logger.error("Trappsec error in Fastify watch handler: ", e);
             }
+            done();
+        });
+
+        // A body parsed by a preValidation hook registered after Sentry (e.g.
+        // @fastify/multipart with attachFieldsToBody) is not there yet above: finish
+        // right before the handler, or report what was seen if the request ends first.
+        instance.addHook('preHandler', (req, _reply, done) => {
+            if (req[PENDING]) this._finishInspection(req);
+            done();
+        });
+        instance.addHook('onResponse', (req, _reply, done) => {
+            if (req[PENDING]) this._finishInspection(req, true);
             done();
         });
     }
@@ -115,16 +138,40 @@ class FastifyIntegration {
         if (hasFields(watch.query_fields) && isObject(req.query)) {
             const { found: f, data, touched } = detect(this.ts, req.query, watch.query_fields, req, 'query');
             found.push(...f);
-            if (touched) replaceInPlace(req.query, data); // in place: req.query may be getter-only
+            if (touched) {
+                replaceInPlace(req.query, data); // in place: req.query may be getter-only
+                if (req.raw) req.raw.url = stripRawQuery(req.raw.url, Object.keys(watch.query_fields)); // req.url reads it
+            }
         }
 
-        if (hasFields(watch.body_fields) && isObject(req.body)) {
-            const { found: f, data, touched } = detect(this.ts, req.body, watch.body_fields, req, 'body');
-            found.push(...f);
-            if (touched) replaceInPlace(req.body, data);
+        if (hasFields(watch.body_fields)) {
+            if (req.body === undefined || req.body === null) {
+                req[PENDING] = { watch, found };
+                return;
+            }
+            found.push(...this._inspectBody(req, watch));
         }
 
         emitWatch(this.ts, req, found, 'Fastify');
+    }
+
+    _inspectBody(req, watch) {
+        if (!isObject(req.body)) return [];
+        const { found, data, touched } = detect(this.ts, req.body, watch.body_fields, req, 'body');
+        if (touched) replaceInPlace(req.body, data);
+        return found;
+    }
+
+    _finishInspection(req, responseEnded = false) {
+        const pending = req[PENDING];
+        req[PENDING] = undefined;
+        try {
+            const found = pending.found;
+            if (!responseEnded) found.push(...this._inspectBody(req, pending.watch));
+            emitWatch(this.ts, req, found, 'Fastify');
+        } catch (e) {
+            this.ts.logger.error("Trappsec error in Fastify watch handler: ", e);
+        }
     }
 }
 

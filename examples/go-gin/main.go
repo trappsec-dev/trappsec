@@ -27,6 +27,9 @@ func main() {
 	flag.Parse()
 
 	r := gin.New()
+	// Trust no proxy headers: c.ClientIP() is then the socket address. Behind a
+	// proxy you control, list its addresses here instead.
+	_ = r.SetTrustedProxies(nil)
 	r.Use(gin.Recovery())
 	app := trappsec.InstallSentry(r, "GoGinApp", "Development")
 	app.SetDefaultUnauthenticated(401, gin.H{"error": "authentication required"}, "application/json")
@@ -179,11 +182,15 @@ func main() {
 
 	if *webhookURL != "" {
 		alertsOnly := false
-		app.AddWebhook(*webhookURL, &trappsec.WebhookOptions{AlertsOnly: &alertsOnly})
+		app.AddWebhook(*webhookURL, &trappsec.WebhookOptions{Secret: os.Getenv("TRAPPSEC_WEBHOOK_SECRET"), AlertsOnly: &alertsOnly})
+	}
+	if u := os.Getenv("TRAPPSEC_ALERTS_WEBHOOK"); u != "" { // second receiver with the default AlertsOnly
+		app.AddWebhook(u, &trappsec.WebhookOptions{Secret: os.Getenv("TRAPPSEC_WEBHOOK_SECRET")})
 	}
 
-	log.Println("Starting server on http://127.0.0.1:8000")
-	if err := app.Run("127.0.0.1:8000"); err != nil {
+	addr := "127.0.0.1:" + listenPort()
+	log.Printf("Starting server on http://%s", addr)
+	if err := app.Run(addr); err != nil {
 		log.Fatal(err)
 	}
 }
@@ -198,4 +205,12 @@ func setupOpenTelemetry() {
 		sdktrace.WithSampler(sdktrace.AlwaysSample()),
 	)
 	otel.SetTracerProvider(tp)
+}
+
+// listenPort is $PORT, or 8000.
+func listenPort() string {
+	if p := os.Getenv("PORT"); p != "" {
+		return p
+	}
+	return "8000"
 }

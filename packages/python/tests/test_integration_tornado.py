@@ -6,7 +6,7 @@ pytest.importorskip("tornado")
 
 import tornado.web  # noqa: E402
 from tornado.httpserver import HTTPServer  # noqa: E402
-from tornado.testing import AsyncHTTPTestCase, bind_unused_port  # noqa: E402
+import tornado.testing  # noqa: E402  (module import: pytest must not collect the base TestCase)
 
 from trappsec.core import Sentry  # noqa: E402
 
@@ -49,7 +49,7 @@ class MeHandler(tornado.web.RequestHandler):
         self.write({"who": "me", "args": {k: [v.decode() for v in vs] for k, vs in self.request.arguments.items()}})
 
 
-class SentryCase(AsyncHTTPTestCase):
+class SentryCase(tornado.testing.AsyncHTTPTestCase):
     watches = staticmethod(lambda s: s.watch("/echo").query("x", intent="q").body("x", intent="b"))
     identify = None
     traps = staticmethod(lambda s: s.trap("/admin/secret"))
@@ -74,6 +74,9 @@ class SentryCase(AsyncHTTPTestCase):
     def hits(self, event):
         return [e for e in self.cap.events if e["event"] == event]
 
+    def runTest(self):  # Tornado < 6.4 looks this name up when pytest instantiates the class
+        pass
+
 
 class TestTraps(SentryCase):
     @staticmethod
@@ -93,10 +96,16 @@ class TestTraps(SentryCase):
         assert traps[0]["type"] == "signal"
         assert traps[1]["type"] == "alert" and traps[1]["user"] == "bob"
 
-    def test_405_has_allow_header_and_does_not_trigger(self):
-        r = self.fetch("/admin/secret", method="POST", body="")
-        assert r.code == 405
-        assert r.headers.get("Allow") == "GET"
+    def test_wrong_method_looks_like_a_real_route_and_does_not_trigger(self):
+        """R14: a trap's 405 must be indistinguishable from an application route's."""
+        def shape(r):
+            skip = {"Date", "Content-Length", "Etag"}
+            return r.code, sorted(k for k in r.headers if k not in skip), r.body
+
+        trap = self.fetch("/admin/secret", method="DELETE")
+        real = self.fetch("/users/me", method="DELETE")  # MeHandler implements GET only
+        assert trap.code == 405
+        assert shape(trap) == shape(real)
         assert self.hits("trappsec.trap_hit") == []
 
     def test_bootstrap_idempotent(self):
@@ -228,7 +237,7 @@ def test_explicit_httpserver_listen_path():
         s._handlers.append(cap)
         s.trap("/admin/secret")
         s.watch("/echo").query("x")
-        sock, port = bind_unused_port()
+        sock, port = tornado.testing.bind_unused_port()
         server = HTTPServer(app)
         server.add_sockets([sock])
         from tornado.httpclient import AsyncHTTPClient
@@ -266,3 +275,47 @@ class BypassTests(SentryCase):
             assert json.loads(d["body"]) == {"name": "n"}, ctype
             assert int(d["clen"]) == len(d["body"].encode())
             assert len(self.hits("trappsec.watch_hit")) == n
+
+
+class TestTrapsUnderXsrfCookies(SentryCase):
+    """R22: xsrf_cookies must not turn a POST trap into a 403."""
+    traps = staticmethod(lambda s: s.trap("/admin/backup").methods("POST"))
+
+    def get_app(self):
+        app = super().get_app()
+        app.settings["xsrf_cookies"] = True
+        app.settings["cookie_secret"] = "s"
+        return app
+
+    def test_trap_answers_and_real_route_stays_protected(self):
+        assert self.fetch("/echo", method="POST", body="a=1").code == 403
+        assert self.fetch("/admin/backup", method="POST", body="a=1").code == 401
+        assert len(self.hits("trappsec.trap_hit")) == 1
+
+
+class TestNestedRouterWatch(SentryCase):
+    """R7: routes inside a nested Rule(PathMatches(...), [...]) are watched."""
+    traps = None
+    watches = staticmethod(lambda s: s.watch(r"/api/users/(\d+)").query("debug").body("is_admin"))
+
+    def get_app(self):
+        from tornado.routing import PathMatches, Rule
+
+        app = tornado.web.Application([Rule(PathMatches(r"/api/.*"), [(r"/api/users/(\d+)", NestedHandler)])])
+        self.sentry = Sentry(app, "svc", "test")
+        self.cap = Capture()
+        self.sentry._handlers.append(self.cap)
+        self.watches(self.sentry)
+        return app
+
+    def test_nested_route_watched(self):
+        r = self.fetch("/api/users/7?debug=1&x=1", method="POST", body=json.dumps({"is_admin": True, "n": 1}),
+                       headers={"Content-Type": "application/json"})
+        assert json.loads(r.body) == {"args": {"x": ["1"]}, "body": {"n": 1}}
+        assert len(self.hits("trappsec.watch_hit")) == 1
+
+
+class NestedHandler(tornado.web.RequestHandler):
+    def post(self, uid):
+        self.write({"args": {k: [v.decode() for v in vs] for k, vs in self.request.arguments.items()},
+                    "body": json.loads(self.request.body)})

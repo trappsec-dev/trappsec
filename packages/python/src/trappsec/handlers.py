@@ -2,9 +2,11 @@ import logging
 import json
 import hmac
 import hashlib
+import os
 import queue
 import threading
 import time
+import weakref
 from datetime import datetime, timezone
 
 try:
@@ -34,6 +36,19 @@ def _dumps(event) -> str:
         except Exception:
             name = event.get("event") if isinstance(event, dict) else None
             return json.dumps({"event": str(name), "error": "event could not be serialized"})
+
+
+# Webhook handlers alive in this process, reset in a forked child (see below).
+_webhook_handlers = weakref.WeakSet()
+
+
+def _reset_webhooks_after_fork():
+    for h in list(_webhook_handlers):
+        h._reset_after_fork()
+
+
+if hasattr(os, "register_at_fork"):
+    os.register_at_fork(after_in_child=_reset_webhooks_after_fork)
 
 
 class BaseHandler:
@@ -78,8 +93,21 @@ class WebhookHandler(BaseHandler):
         self._abandon = threading.Event()   # abort retries/backoff on close timeout
         self._last_drop_warning = None
 
+        _webhook_handlers.add(self)
         if heartbeat_interval:
             self._ensure_threads()
+
+    def _reset_after_fork(self):
+        """In a forked child (e.g. gunicorn --preload): the parent's threads are
+        gone, its locks may be held and its connections and queued events belong
+        to the parent, which delivers them. Start clean; threads restart lazily."""
+        self._lock = threading.Lock()
+        self._queue = queue.Queue(maxsize=self._queue.maxsize)
+        self._worker = None
+        self._heartbeat = None
+        self._stop = threading.Event()
+        self._abandon = threading.Event()
+        self.session = requests.Session()
 
     def _ensure_threads(self):
         """Start (or restart, e.g. after fork) the worker and heartbeat threads."""

@@ -17,9 +17,9 @@
 // (resolving the route pattern with a shadow router). For those pre-install
 // routes IdentifyUser runs before the application's middleware chain, so values
 // stored with c.Set by app middleware are not visible to it; headers and cookies
-// are. Install trappsec first to get full middleware context. Route groups
-// created (not just routes registered) before InstallSentry also lack the watch
-// middleware and are not covered; create groups after InstallSentry.
+// are. Install trappsec first to get full middleware context. Routes added to
+// a group created before InstallSentry never get the watch middleware either;
+// App.ServeHTTP inspects them the same way, so they are covered too.
 package trappsecgin
 
 import (
@@ -154,8 +154,13 @@ type ginIntegration struct {
 
 	watchIdx   map[string]core.WatchConfig
 	preInstall map[string]bool // "METHOD /pattern" registered before InstallSentry
-	shadow     *gin.Engine     // matcher over all routes, for pre-install routes
-	maxBody    int64
+	shadow     *gin.Engine     // matcher over all routes, for routes the middleware cannot reach
+	// covered records "METHOD /pattern" routes whose handler chain is known to
+	// include the watch middleware. Until the middleware has been seen on a
+	// route, ServeHTTP inspects it: a route added to a group created before
+	// InstallSentry never gets the middleware and so stays inspected there.
+	covered sync.Map
+	maxBody int64
 
 	done atomic.Bool
 	mu   sync.Mutex
@@ -221,10 +226,21 @@ func (a *App) Bootstrap() {
 		}
 	}
 
-	if len(in.preInstall) > 0 && len(idx) > 0 {
+	if len(idx) > 0 {
 		in.shadow = in.buildShadow()
 	}
 	in.watchIdx = idx
+
+	routes := map[string]bool{}
+	for _, ri := range a.Engine.Routes() {
+		routes[ri.Path] = true
+	}
+	for path := range idx {
+		if !routes[path] {
+			in.ts.Logger().Printf("trappsec: watch %s matches no registered route and will never fire "+
+				"(watch paths are full route patterns, including group prefixes, e.g. /api/users/:id)", path)
+		}
+	}
 }
 
 // SetMaxBodyBytes sets the largest request body that watch inspection buffers
@@ -273,23 +289,33 @@ func ginTrapHandler(ts *core.Sentry, trap core.TrapConfig) gin.HandlerFunc {
 	}
 }
 
-// ServeHTTP bootstraps lazily, inspects routes registered before InstallSentry
-// (which engine.Use middleware cannot reach), then dispatches to the engine.
+type inspectedKey struct{}
+
+// ServeHTTP bootstraps lazily, inspects watched routes the engine.Use
+// middleware cannot reach (registered before InstallSentry, or added to a
+// group created before it), then dispatches to the engine.
 func (a *App) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	a.Bootstrap()
 	in := a.integration
 	if in.shadow != nil {
 		pw := &probeWriter{h: http.Header{}}
 		in.shadow.ServeHTTP(pw, r)
-		if pat := pw.h.Get(patternHeader); pat != "" && in.preInstall[r.Method+" "+pat] {
-			if watch, ok := in.watchIdx[pat]; ok {
+		if pat := pw.h.Get(patternHeader); pat != "" {
+			key := r.Method + " " + pat
+			if watch, ok := in.watchIdx[pat]; ok && (in.preInstall[key] || !in.isCovered(key)) {
 				c := gin.CreateTestContextOnly(&probeWriter{h: http.Header{}}, in.engine)
 				c.Request = r
 				core.InspectWatch(in.ts, r, c, watch, atomic.LoadInt64(&in.maxBody))
+				r = r.WithContext(context.WithValue(r.Context(), inspectedKey{}, true))
 			}
 		}
 	}
 	a.Engine.ServeHTTP(w, r)
+}
+
+func (in *ginIntegration) isCovered(key string) bool {
+	_, ok := in.covered.Load(key)
+	return ok
 }
 
 func resolveAddr(addr []string) string {
@@ -359,8 +385,12 @@ func (in *ginIntegration) watchMiddleware() gin.HandlerFunc {
 			if path == "" {
 				path = c.Request.URL.Path
 			}
-			if watch, ok := in.watchIdx[path]; ok && !in.preInstall[c.Request.Method+" "+path] {
-				core.InspectWatch(in.ts, c.Request, c, watch, atomic.LoadInt64(&in.maxBody))
+			key := c.Request.Method + " " + path
+			if watch, ok := in.watchIdx[path]; ok && !in.preInstall[key] {
+				in.covered.Store(key, true) // the middleware reaches this route from now on
+				if c.Request.Context().Value(inspectedKey{}) == nil {
+					core.InspectWatch(in.ts, c.Request, c, watch, atomic.LoadInt64(&in.maxBody))
+				}
 			}
 		}
 		c.Next()

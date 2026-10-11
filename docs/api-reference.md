@@ -343,6 +343,7 @@ watch.Query("debug", "false", "Recon")
 
 *   Values are compared with canonical matching: `1` equals `1.0`, `true` equals `"true"`, `5` equals `"5"`. Strings compare exactly. See [Event Reference](/events/#value-matching).
 *   Multi-valued fields (`?debug=a&debug=b`): a single value is compared as a scalar; with several values it is a violation unless **every** value equals the default. All occurrences are stripped before your handler runs.
+*   List and object defaults (`default=[]`, `default={}`) are compared element by element and key by key with the same rules, so a request that sends exactly the default is not an alert.
 *   Every occurrence of a watched key is removed from the request your handler sees, so a honey field can never influence real logic.
 *   Go matches JSON keys case-insensitively (as `encoding/json` does); Python and Node are case-sensitive.
 *   A JSON body that is an array is inspected element by element (object elements only). Other body shapes are skipped.
@@ -639,6 +640,74 @@ ts.Trigger(c, "Velocity limit exceeded", "fraud_attempt", map[string]any{"amount
 *   **intent**, **metadata**: Optional; `null` in the event when omitted.
 
 `trigger` never raises into your handler; failures are logged.
+
+## `is_trap` / `IsTrap`
+
+Returns whether a request targets a trap (method and path). Use it to let traps through middleware that would otherwise reject them before they can answer, typically CSRF protection: a POST trap that answers 403 is disabled and easy to fingerprint. Trap path segments written as `:id`, `{id}`, `<id>` (and `*rest` in Go) match any single segment. It never raises.
+
+<div class="lang-content" data-lang="python" markdown="1">
+
+```python
+# e.g. inside a CSRF middleware's dispatch
+if request.method == "POST" and not ts.is_trap(request):
+    verify_csrf_token(request)
+
+# starlette-csrf has no skip callback: route traps around it
+from starlette.requests import Request
+from starlette_csrf import CSRFMiddleware
+
+class CSRFExceptTraps:
+    def __init__(self, app, **options):
+        self.app, self.csrf = app, CSRFMiddleware(app, **options)
+
+    async def __call__(self, scope, receive, send):
+        trap = scope["type"] == "http" and ts.is_trap(Request(scope))
+        await (self.app if trap else self.csrf)(scope, receive, send)
+
+app.add_middleware(CSRFExceptTraps, secret="...")
+```
+
+Flask-WTF's `CSRFProtect`, Django's CSRF middleware, Litestar's `CSRFConfig` and Tornado's `xsrf_cookies` exempt traps automatically.
+
+</div>
+<div class="lang-content" data-lang="node" markdown="1">
+
+```javascript
+// Express (csurf, csrf-csrf's doubleCsrfProtection): register at app level, so req.path is the full path
+app.use((req, res, next) => (ts.is_trap(req) ? next() : csrfProtection(req, res, next)));
+
+// Fastify (@fastify/csrf-protection)
+app.addHook('onRequest', (req, reply, done) => (ts.is_trap(req) ? done() : app.csrfProtection(req, reply, done)));
+```
+
+</div>
+<div class="lang-content" data-lang="go" markdown="1">
+
+```go
+// gorilla/csrf
+next := protect(app)
+http.ListenAndServe(":8000", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+    if app.Sentry.IsTrap(r) {
+        r = csrf.UnsafeSkipCheck(r)
+    }
+    next.ServeHTTP(w, r)
+}))
+
+// net/http's CrossOriginProtection
+protected := http.NewCrossOriginProtection().Handler(app)
+http.ListenAndServe(":8000", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+    if app.Sentry.IsTrap(r) {
+        app.ServeHTTP(w, r)
+        return
+    }
+    protected.ServeHTTP(w, r)
+}))
+
+// Echo: the adapter's App.IsTrap fits middleware.CSRFConfig.Skipper
+e.Use(middleware.CSRFWithConfig(middleware.CSRFConfig{Skipper: app.IsTrap}))
+```
+
+</div>
 
 ## `bootstrap` / `Bootstrap`
 

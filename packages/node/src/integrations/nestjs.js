@@ -26,7 +26,8 @@ class NestIntegration {
         if (this._adapterType === 'fastify') {
             this._delegate = new FastifyIntegration(ts, instance, { hookListen: false });
         } else if (this._adapterType === 'express') {
-            this._delegate = new ExpressIntegration(ts, instance, { hookListen: false });
+            this._delegate = new ExpressIntegration(ts, instance, { hookListen: false, finishAtHandler: false });
+            this._installBodyPipe(app);
         } else {
             throw new Error('trappsec error: unsupported NestJS HTTP adapter (expected Express or Fastify).');
         }
@@ -38,6 +39,44 @@ class NestIntegration {
             integration.bootstrap();
             return originalListen.apply(this, args);
         };
+    }
+
+    /**
+     * Route-level interceptors (AnyFilesInterceptor / FileInterceptor run multer)
+     * fill req.body after the Express route was entered and after any global
+     * interceptor. Global pipes run after all interceptors, right before the
+     * controller method, so a global pipe completes the deferred body inspection:
+     * it strips honey fields from req.body in place, from a value an earlier pipe
+     * already copied (e.g. a ValidationPipe DTO), and hides a single honey field
+     * requested with @Body('field').
+     */
+    _installBodyPipe(app) {
+        if (typeof app.useGlobalPipes !== 'function') return;
+        const delegate = this._delegate;
+        const { PENDING, INSPECTED, pendingRequest } = ExpressIntegration;
+        const pipe = {
+            transform(value, metadata) {
+                try {
+                    const req = pendingRequest.getStore();
+                    if (!req || !metadata || metadata.type !== 'body') return value;
+                    if (req[PENDING]) delegate._finishInspection(req);
+                    const watch = req[INSPECTED];
+                    const fields = watch && watch.body_fields;
+                    if (!fields) return value;
+                    const isHoney = (k) => Object.prototype.hasOwnProperty.call(fields, k);
+                    if (typeof metadata.data === 'string' && metadata.data) {
+                        return isHoney(metadata.data) ? undefined : value;
+                    }
+                    if (value && typeof value === 'object' && value !== req.body) {
+                        for (const k of Object.keys(value)) if (isHoney(k)) delete value[k];
+                    }
+                } catch (e) {
+                    delegate.ts.logger.error('Trappsec error in NestJS body pipe: ', e);
+                }
+                return value;
+            },
+        };
+        app.useGlobalPipes(pipe);
     }
 
     _resolveAdapterType(httpAdapter, instance) {

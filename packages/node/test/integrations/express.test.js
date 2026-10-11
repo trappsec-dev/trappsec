@@ -219,3 +219,83 @@ for (const [label, pkg] of [['express4', 'express4'], ['express5', 'express']]) 
         assert.equal((await request(server, { path: '/t' })).status, 401);
     });
 }
+
+for (const [label, pkg] of [['express4', 'express4'], ['express5', 'express']]) {
+    let express, multer;
+    try { express = require(pkg); multer = require('multer'); } catch (e) { continue; }
+    const { multipart } = require('./helpers');
+
+    async function start(t, build) {
+        const app = express();
+        const { sentry, events } = makeSentry(app);
+        build(app, sentry);
+        const server = await new Promise((r) => { const s = app.listen(0, '127.0.0.1', () => r(s)); });
+        t.after(() => server.close());
+        return { server, events };
+    }
+
+    test(`${label}: route-level body parsers cannot hide honey fields (multer, express.json)`, async (t) => {
+        const { server, events } = await start(t, (app, sentry) => {
+            sentry.watch('/form').body('is_admin', { intent: 'priv' });
+            sentry.watch('/json').query('debug').body('is_admin');
+            app.post('/form', multer().none(), (req, res) => res.json(req.body));
+            app.post('/json', express.json(), (req, res) => res.json({ body: req.body, query: req.query }));
+        });
+        const mp = multipart({ is_admin: 'true', name: 'a' });
+        let r = await request(server, { method: 'POST', path: '/form', headers: mp.headers, body: mp.body });
+        assert.deepEqual(r.json, { name: 'a' });
+        assert.equal(events.length, 1);
+        assert.equal(events[0].found_fields[0].field, 'is_admin');
+
+        // query and body honey fields on a route-level parser still make ONE event
+        r = await request(server, { method: 'POST', path: '/json?debug=1&x=1', body: { is_admin: true, n: 1 } });
+        assert.deepEqual(r.json, { body: { n: 1 }, query: { x: '1' } });
+        assert.equal(events.length, 2);
+        assert.deepEqual(events[1].found_fields.map((f) => f.field).sort(), ['debug', 'is_admin']);
+    });
+
+    test(`${label}: a route middleware that rejects the request still reports what was seen`, async (t) => {
+        const { server, events } = await start(t, (app, sentry) => {
+            sentry.watch('/admin').query('debug').body('is_admin');
+            app.post('/admin', (req, res) => res.status(403).json({ error: 'no' }), express.json(), (req, res) => res.json(req.body));
+        });
+        const r = await request(server, { method: 'POST', path: '/admin?debug=1', body: { is_admin: true } });
+        assert.equal(r.status, 403);
+        await new Promise((resolve) => setTimeout(resolve, 20)); // 'close' fires after the response
+        assert.equal(events.length, 1);
+        assert.deepEqual(events[0].found_fields.map((f) => f.field), ['debug']);
+    });
+
+    test(`${label}: per-method final handlers and route-level error handlers`, async (t) => {
+        const { server, events } = await start(t, (app, sentry) => {
+            sentry.watch('/thing').body('is_admin');
+            app.route('/thing')
+                .get((req, res) => res.json({ get: true }))
+                .post(express.json(), (req, res, next) => (req.body.fail ? next(new Error('boom')) : res.json(req.body)),
+                    // eslint-disable-next-line no-unused-vars
+                    (err, req, res, next) => res.status(500).json({ error: err.message, body: req.body }));
+        });
+        let r = await request(server, { method: 'POST', path: '/thing', body: { is_admin: true, n: 1 } });
+        assert.deepEqual(r.json, { n: 1 });
+        r = await request(server, { method: 'POST', path: '/thing', body: { is_admin: true, fail: 1 } });
+        assert.deepEqual(r.json, { error: 'boom', body: { fail: 1 } }); // error handler still runs, field stripped
+        assert.equal((await request(server, { path: '/thing' })).json.get, true);
+        assert.equal(events.length, 2);
+    });
+}
+
+test('express: is_trap lets a global CSRF middleware skip traps (R22)', async (t) => {
+    const express = require('express');
+    const app = express();
+    const { sentry, events } = makeSentry(app);
+    // stand-in for csurf / csrf-csrf: rejects state-changing requests without a token
+    const csrf = (req, res, next) => (req.method === 'POST' && !req.headers['x-csrf-token'] ? res.status(403).end() : next());
+    app.use((req, res, next) => (sentry.is_trap(req) ? next() : csrf(req, res, next)));
+    sentry.trap('/admin/backup').methods('POST');
+    app.post('/real', (req, res) => res.send('ok'));
+    const server = await new Promise((r) => { const s = app.listen(0, '127.0.0.1', () => r(s)); });
+    t.after(() => server.close());
+    assert.equal((await request(server, { method: 'POST', path: '/real' })).status, 403);
+    assert.equal((await request(server, { method: 'POST', path: '/admin/backup' })).status, 401);
+    assert.equal(events.length, 1);
+});

@@ -92,6 +92,12 @@ type syncBuf struct {
 	b  bytes.Buffer
 }
 
+func (s *syncBuf) String() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.b.String()
+}
+
 func (s *syncBuf) Write(p []byte) (int, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -593,4 +599,153 @@ func TestConcurrentRequestsRace(t *testing.T) {
 		}
 		wg.Wait()
 	})
+}
+
+func TestJSONTrailingDataCannotBypassBinder(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	engine := gin.New()
+	app := InstallSentry(engine, "svc", "test")
+	logs := &syncBuf{}
+	app.Logger().SetOutput(logs)
+	var bound map[string]any
+	app.POST("/submit", func(c *gin.Context) { bound = nil; _ = c.ShouldBindJSON(&bound); c.Status(200) })
+	app.Sentry.Watch("/submit").Body("is_admin", core.NoDefault, "priv")
+	for i, b := range []string{`{"is_admin":true} x`, `{"is_admin":true}{}`, `{"name":"a"}` + "\n" + `{"is_admin":true}`} {
+		req := httptest.NewRequest("POST", "/submit", strings.NewReader(b))
+		req.Header.Set("Content-Type", "application/json")
+		app.ServeHTTP(httptest.NewRecorder(), req)
+		if _, ok := bound["is_admin"]; ok {
+			t.Fatalf("%q: honey field reached the handler", b)
+		}
+		if got := logs.count("trappsec.watch_hit"); got != i+1 {
+			t.Fatalf("%q: watch events = %d, want %d", b, got, i+1)
+		}
+	}
+}
+
+func TestRouteGroupsCreatedBeforeInstallAreWatched(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	for _, mode := range []string{"group+route before install", "group before, route after install", "group+route after install"} {
+		t.Run(mode, func(t *testing.T) {
+			engine := gin.New()
+			var bound map[string]any
+			h := func(c *gin.Context) { bound = nil; _ = c.ShouldBindJSON(&bound); c.Status(200) }
+			var app *App
+			switch mode {
+			case "group+route before install":
+				engine.Group("/api").POST("/users/:id", h)
+				app = InstallSentry(engine, "svc", "test")
+			case "group before, route after install":
+				g := engine.Group("/api")
+				app = InstallSentry(engine, "svc", "test")
+				g.POST("/users/:id", h)
+			default:
+				app = InstallSentry(engine, "svc", "test")
+				app.Group("/api").POST("/users/:id", h)
+			}
+			logs := &syncBuf{}
+			app.Logger().SetOutput(logs)
+			app.Sentry.Watch("/api/users/:id").Body("is_admin", core.NoDefault, "priv")
+			for i := 1; i <= 3; i++ { // first request learns coverage; later ones must not double-report
+				req := httptest.NewRequest("POST", "/api/users/7", strings.NewReader(`{"is_admin":true,"n":1}`))
+				req.Header.Set("Content-Type", "application/json")
+				app.ServeHTTP(httptest.NewRecorder(), req)
+				if _, leaked := bound["is_admin"]; leaked {
+					t.Fatalf("request %d: honey field reached the handler", i)
+				}
+				if got := logs.count("trappsec.watch_hit"); got != i {
+					t.Fatalf("request %d: watch events = %d, want %d", i, got, i)
+				}
+			}
+		})
+	}
+}
+
+func TestUnreachableWatchIsLogged(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	app := InstallSentry(gin.New(), "svc", "test")
+	logs := &syncBuf{}
+	app.Logger().SetOutput(logs)
+	app.Group("/api").POST("/users/:id", func(*gin.Context) {})
+	app.Sentry.Watch("/api/users/:id").Body("is_admin", core.NoDefault, "priv")
+	app.Sentry.Watch("/users/:id").Body("is_admin", core.NoDefault, "priv") // missing the group prefix
+	app.Bootstrap()
+	out := logs.String()
+	if !strings.Contains(out, "watch /users/:id matches no registered route") || strings.Contains(out, "watch /api/users/:id matches") {
+		t.Fatalf("unexpected warnings: %s", out)
+	}
+}
+
+func TestPanickingCallbacksNeverBreakRequests(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	app := InstallSentry(gin.New(), "svc", "test")
+	app.Logger().SetOutput(&syncBuf{})
+	app.IdentifyUser(func(any) *core.AuthContext { panic("identify") })
+	app.OverrideSourceIP(func(any) string { panic("ip") })
+	app.Sentry.Trap("/admin").Methods("GET").Respond(core.ResponseConfig{Status: 200, Body: func(*gin.Context) any { panic("body") }})
+	var bound map[string]any
+	app.POST("/w", func(c *gin.Context) { bound = nil; _ = c.ShouldBindJSON(&bound); c.Status(200) })
+	app.Sentry.Watch("/w").Body("role", func(any) any { panic("default") }, "priv")
+
+	rec := httptest.NewRecorder()
+	app.ServeHTTP(rec, httptest.NewRequest("GET", "/admin", nil))
+	if rec.Code != 401 { // identify panicked: treated as unauthenticated
+		t.Fatalf("trap answered %d", rec.Code)
+	}
+	req := httptest.NewRequest("POST", "/w", strings.NewReader(`{"role":"user","n":1}`))
+	req.Header.Set("Content-Type", "application/json")
+	rec = httptest.NewRecorder()
+	app.ServeHTTP(rec, req)
+	if _, leaked := bound["role"]; rec.Code != 200 || leaked || bound["n"] == nil {
+		t.Fatalf("watched route: code=%d bound=%v", rec.Code, bound)
+	}
+}
+
+func TestParameterisedWatchAndEventContext(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	app := InstallSentry(gin.New(), "svc", "test")
+	logs := &syncBuf{}
+	app.Logger().SetOutput(logs)
+	var seen string
+	app.GET("/users/:id", func(c *gin.Context) { seen = c.Request.URL.RawQuery })
+	app.Sentry.Watch("/users/:id").Query("debug", core.NoDefault, "recon")
+	req := httptest.NewRequest("GET", "/users/7?debug=1&x=1", nil)
+	req.Header.Set("User-Agent", "probe/1.0")
+	req.RemoteAddr = "203.0.113.5:4711"
+	app.ServeHTTP(httptest.NewRecorder(), req)
+	ev := logs.waitEvent(t, "trappsec.watch_hit")
+	if seen != "x=1" || ev["path"] != "/users/7" || ev["method"] != "GET" || ev["user_agent"] != "probe/1.0" || ev["ip"] != "203.0.113.5" {
+		t.Fatalf("handler saw %q; event %v", seen, ev)
+	}
+}
+
+// R10: watches declared before traps both work. R13: the indexes are built once
+// at startup, so a watch added while serving is never looked up; a per-request
+// scan of the configuration would pick it up.
+func TestWatchesBeforeTrapsAndIndexBuiltOnce(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	app := InstallSentry(gin.New(), "svc", "test")
+	logs := &syncBuf{}
+	app.Logger().SetOutput(logs)
+	var seen string
+	app.GET("/users/:id", func(c *gin.Context) { seen = c.Request.URL.RawQuery })
+	app.Sentry.Watch("/users/:id").Query("debug", core.NoDefault, "recon")
+	app.Sentry.Trap("/admin/backup").Methods("POST")
+	do := func(method, path string) int {
+		rec := httptest.NewRecorder()
+		app.ServeHTTP(rec, httptest.NewRequest(method, path, nil))
+		return rec.Code
+	}
+	if code := do("POST", "/admin/backup"); code != 401 {
+		t.Fatalf("trap answered %d", code)
+	}
+	logs.waitEvent(t, "trappsec.trap_hit")
+	if do("GET", "/users/7?debug=1&x=1"); seen != "x=1" {
+		t.Fatalf("watched field reached the handler: %q", seen)
+	}
+	logs.waitEvent(t, "trappsec.watch_hit")
+	app.Sentry.Watch("/users/:id").Query("late", core.NoDefault, "recon")
+	if do("GET", "/users/8?late=1"); seen != "late=1" {
+		t.Fatalf("a watch added while serving was applied: handler saw %q", seen)
+	}
 }

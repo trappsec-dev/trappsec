@@ -1,5 +1,21 @@
-import { Controller, Get, Post, Body, Headers, HttpCode, Param, Req } from '@nestjs/common';
+import {
+    Controller, Get, Post, Body, Headers, HttpCode, Param, Req,
+    CallHandler, ExecutionContext, Injectable, NestInterceptor, UseInterceptors,
+} from '@nestjs/common';
+import { AnyFilesInterceptor } from '@nestjs/platform-express';
 import { Request } from 'express';
+
+// Parses multipart bodies on the Express adapter (multer, route-level); on Fastify
+// @fastify/multipart, registered in main.ts, has already attached the fields.
+@Injectable()
+class MultipartFields implements NestInterceptor {
+    private readonly multer = new (AnyFilesInterceptor())();
+
+    intercept(ctx: ExecutionContext, next: CallHandler) {
+        const req = ctx.switchToHttp().getRequest();
+        return req.raw ? next.handle() : this.multer.intercept(ctx, next);
+    }
+}
 
 @Controller()
 export class AppController {
@@ -55,7 +71,8 @@ export class AppController {
 
     @Post('api/v2/echo/multipart')
     @HttpCode(200)
-    echoMultipart() {
-        return { supported: false };
+    @UseInterceptors(MultipartFields)
+    echoMultipart(@Body() body: any) {
+        return { ...(body || {}) };
     }
 }

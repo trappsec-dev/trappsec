@@ -128,3 +128,73 @@ test('nest-fastify: inject without listen', async () => {
     assert.equal(events.length, 1);
     await app.close();
 });
+
+test('nest-express: route-level interceptors (multer) cannot hide honey fields; @Body(field) is hidden', async (t) => {
+    const { AnyFilesInterceptor } = require('@nestjs/platform-express');
+    const { multipart } = require('./helpers');
+    class UploadController {
+        up(body, query) { return { b: { ...body }, q: { ...query } }; }
+        one(isAdmin, body) { return { isAdmin: isAdmin === undefined ? 'hidden' : isAdmin, b: { ...body } }; }
+        js(body) { return { b: { ...body } }; }
+    }
+    common.Controller('u')(UploadController);
+    const P = UploadController.prototype;
+    const method = (name, decos, ...params) => {
+        const d = Object.getOwnPropertyDescriptor(P, name);
+        for (const deco of decos) deco(P, name, d);
+        params.forEach((p, i) => p(P, name, i));
+    };
+    method('up', [common.Post('up'), common.UseInterceptors(AnyFilesInterceptor())], common.Body(), common.Query());
+    method('one', [common.Post('one'), common.UseInterceptors(AnyFilesInterceptor())], common.Body('is_admin'), common.Body());
+    method('js', [common.Post('js')], common.Body());
+    class UploadModule {}
+    common.Module({ controllers: [UploadController] })(UploadModule);
+
+    const app = await NestFactory.create(UploadModule, new ExpressAdapter(), { logger: false });
+    const { sentry, events } = makeSentry(app);
+    for (const p of ['/u/up', '/u/one', '/u/js']) sentry.watch(p).query('debug').body('is_admin');
+    await app.listen(0, '127.0.0.1');
+    t.after(() => app.close());
+    const server = app.getHttpServer();
+
+    let mp = multipart({ is_admin: 'true', name: 'a' });
+    let r = await request(server, { method: 'POST', path: '/u/up?debug=1&x=1', headers: mp.headers, body: mp.body });
+    assert.deepEqual(r.json, { b: { name: 'a' }, q: { x: '1' } });
+    assert.equal(events.length, 1);
+    assert.deepEqual(events[0].found_fields.map((f) => f.field).sort(), ['debug', 'is_admin']);
+
+    mp = multipart({ is_admin: 'true', name: 'a' });
+    r = await request(server, { method: 'POST', path: '/u/one', headers: mp.headers, body: mp.body });
+    assert.deepEqual(r.json, { isAdmin: 'hidden', b: { name: 'a' } });
+    assert.equal(events.length, 2);
+
+    r = await request(server, { method: 'POST', path: '/u/js', body: { is_admin: true, n: 1 } });
+    assert.deepEqual(r.json, { b: { n: 1 } });
+    assert.equal(events.length, 3);
+});
+
+test('nest: controllers in imported modules under a global prefix are watched (R7)', async (t) => {
+    class UsersController { up(id, body) { return { id, b: { ...body } }; } }
+    common.Controller('users')(UsersController);
+    const P = UsersController.prototype;
+    const d = Object.getOwnPropertyDescriptor(P, 'up');
+    common.Post(':id')(P, 'up', d);
+    common.Param('id')(P, 'up', 0);
+    common.Body()(P, 'up', 1);
+    class UsersModule {}
+    common.Module({ controllers: [UsersController] })(UsersModule);
+    class RootModule {}
+    common.Module({ imports: [UsersModule] })(RootModule);
+
+    for (const adapter of [new ExpressAdapter(), new FastifyAdapter()]) {
+        const app = await NestFactory.create(RootModule, adapter, { logger: false });
+        app.setGlobalPrefix('api');
+        const { sentry, events } = makeSentry(app);
+        sentry.watch('/api/users/:id').body('is_admin');
+        await app.listen(0, '127.0.0.1');
+        const r = await request(app.getHttpServer(), { method: 'POST', path: '/api/users/7', body: { is_admin: true, n: 1 } });
+        await app.close();
+        assert.deepEqual(r.json, { id: '7', b: { n: 1 } });
+        assert.equal(events.length, 1);
+    }
+});

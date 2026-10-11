@@ -19,6 +19,8 @@ from sanic.response import file as file_response
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../packages/python/src")))
 import trappsec
 
+PORT = int(os.environ.get("PORT", "8000"))
+
 app = Sanic("trappsec-sanic-example")
 ts = trappsec.Sentry(app, service="SanicApp", environment="Development")
 
@@ -26,7 +28,9 @@ ts = trappsec.Sentry(app, service="SanicApp", environment="Development")
 # (which re-import this module but never execute __main__) pick them up.
 _webhook_url = os.environ.get("TRAPPSEC_WEBHOOK_URL")
 if _webhook_url:
-    ts.add_webhook(url=_webhook_url, alerts_only=False)
+    ts.add_webhook(url=_webhook_url, secret=os.environ.get("TRAPPSEC_WEBHOOK_SECRET"), alerts_only=False)
+if os.environ.get("TRAPPSEC_ALERTS_WEBHOOK"):  # second receiver with the default alerts_only=True
+    ts.add_webhook(url=os.environ["TRAPPSEC_ALERTS_WEBHOOK"], secret=os.environ.get("TRAPPSEC_WEBHOOK_SECRET"))
 
 ts.default_responses["unauthenticated"] = {
     "status_code": 401,
@@ -38,7 +42,7 @@ ts.identify_user(lambda r: {
     "user": r.headers.get("x-user-id"),
     "role": r.headers.get("x-user-role")
 })
-ts.override_source_ip(lambda r: r.headers.get("x-real-ip", r.remote_addr or "0.0.0.0"))
+ts.override_source_ip(lambda r: r.headers.get("x-real-ip", r.remote_addr or r.ip or "0.0.0.0"))
 
 
 @app.post("/auth/register")
@@ -192,8 +196,8 @@ if __name__ == "__main__":
         # Set before app.run() so spawned worker processes inherit this env var
         # and add the webhook handler via the module-level block above.
         os.environ["TRAPPSEC_WEBHOOK_URL"] = args.webhook
-        ts.add_webhook(url=args.webhook, alerts_only=False)
+        ts.add_webhook(url=args.webhook, secret=os.environ.get("TRAPPSEC_WEBHOOK_SECRET"), alerts_only=False)
 
-    print("Starting server on http://127.0.0.1:8000")
-    app.run(host="127.0.0.1", port=8000, access_log=False)
+    print(f"Starting server on http://127.0.0.1:{PORT}")
+    app.run(host="127.0.0.1", port=PORT, access_log=False)
 

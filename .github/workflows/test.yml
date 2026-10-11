@@ -25,7 +25,7 @@ jobs:
       - name: Ruff (syntax errors only)
         run: |
           pip install ruff
-          ruff check --select E9,F63,F7,F82 packages/python tests/e2e examples
+          ruff check --select E9,F63,F7,F82 packages/python tests/e2e tests/package examples
       - name: Node syntax check
         run: |
           find packages/node/src -name '*.js' -print0 | xargs -0 -n1 node --check
@@ -49,7 +49,7 @@ jobs:
           python -m pip install --upgrade pip
           pip install -e "packages/python[test,webhooks,otel]"
           # Explicit list so the job also works if an extra is missing from pyproject.
-          pip install pytest flask fastapi httpx python-multipart starlette django sanic sanic-testing tornado litestar opentelemetry-sdk requests
+          pip install pytest flask flask-wtf starlette-csrf fastapi httpx python-multipart starlette django sanic sanic-testing tornado litestar opentelemetry-sdk requests
       - name: Run tests
         run: pytest packages/python/tests
 
@@ -68,7 +68,7 @@ jobs:
           cache: npm
           cache-dependency-path: |
             packages/node/package-lock.json
-            packages/node/test/integrations/package.json
+            packages/node/test/integrations/package-lock.json
       - name: Core tests
         working-directory: packages/node
         run: |
@@ -77,7 +77,7 @@ jobs:
       - name: Integration tests
         working-directory: packages/node/test/integrations
         run: |
-          npm install
+          npm ci
           node --test
 
   go:
@@ -101,6 +101,78 @@ jobs:
       - name: Test (race)
         working-directory: ${{ matrix.module }}
         run: go test -race ./...
+
+  # Oldest framework versions we support (docs/supported-frameworks.md), each
+  # in its own environment on the oldest supported Python. Test-only tools are
+  # pinned to versions those releases work with (old TestClients need
+  # httpx<0.28; Flask 2.0 needs Werkzeug 2.0).
+  python-minimum:
+    name: Python minimum (${{ matrix.name }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { name: flask, module: flask, test: test_integration_flask.py, deps: "flask==2.0.* werkzeug<2.1" }
+          - { name: fastapi, module: fastapi, test: test_integration_fastapi.py, deps: "fastapi==0.95.* httpx<0.28 python-multipart" }
+          - { name: starlette, module: starlette, test: test_integration_starlette.py, deps: "starlette==0.24.* httpx<0.28 python-multipart" }
+          - { name: litestar, module: litestar, test: test_integration_litestar.py, deps: "litestar==2.13.* httpx<0.28 sniffio" }
+          - { name: django, module: django, test: test_integration_django.py, deps: "django==3.2.* werkzeug" }
+          - { name: sanic, module: sanic, test: test_integration_sanic.py, deps: "sanic==24.6.* sanic-testing==24.6.*" }
+          - { name: tornado, module: tornado, test: test_integration_tornado.py, deps: "tornado==6.0.*" }
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.10"
+      - name: Install ${{ matrix.name }} at its minimum version
+        env:
+          DEPS: ${{ matrix.deps }}  # via env: specs like httpx<0.28 must not reach the shell parser
+        run: |
+          set -f  # no globbing of ==2.0.*
+          pip install pytest requests $DEPS
+      - name: Run ${{ matrix.test }}
+        env:
+          PYTHONPATH: packages/python/src
+        run: |
+          python -c "import importlib.metadata as md, ${{ matrix.module }}; print('${{ matrix.module }}', md.version('${{ matrix.module }}'))"
+          pytest -rs packages/python/tests/${{ matrix.test }}
+
+  node-minimum:
+    name: Node minimum framework versions
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Integration tests against the oldest supported framework versions
+        working-directory: packages/node/test/integrations
+        run: |
+          npm ci
+          # --legacy-peer-deps: the test-only plugins' peer ranges follow the latest majors
+          npm install --no-save --no-audit --no-fund --legacy-peer-deps \
+            "express4@npm:express@4.17" "express@5.0" "fastify@4" "@fastify/multipart@8" "@fastify/formbody@7" "@fastify/cookie@9" "@fastify/csrf-protection@6" \
+            "koa@2.13" "@koa/router@10" "koa-bodyparser@4" "@hapi/hapi@20" \
+            "@nestjs/common@10" "@nestjs/core@10" "@nestjs/platform-express@10" "@nestjs/platform-fastify@10"
+          node -e "for (const p of ['express4','express','fastify','koa','@koa/router','@hapi/hapi','@nestjs/core']) console.log(p, require(p + '/package.json').version)"
+          node --test
+
+  package:
+    name: Package smoke tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.13"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      # Builds the wheel, sdist and npm tarball, installs each into a clean
+      # environment outside the repo and runs a real framework app against it.
+      - name: Build, install and smoke-test distributions
+        run: bash tests/package/run.sh
 
   go-examples:
     name: Build Go examples

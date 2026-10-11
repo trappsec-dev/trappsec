@@ -56,37 +56,45 @@ func nullable(s string) any {
 	return s
 }
 
-// MarshalJSON emits every key; empty ip/user_agent/intent/reason/user/role,
-// nil found_fields and nil metadata become null. It never fails: a metadata
-// value that cannot be encoded is replaced by its fmt representation.
+// MarshalJSON emits exactly the documented keys for the event: the common
+// keys plus intent (trap_hit), found_fields (watch_hit) or reason, intent and
+// metadata (rule_hit); other event names get all of them. Empty optional
+// values are null and found_fields is never null on a watch_hit. It never
+// fails: a metadata value that cannot be encoded is replaced by its fmt
+// representation.
 func (t TriggerContext) MarshalJSON() ([]byte, error) {
-	var found any
-	if t.Found != nil {
-		found = t.Found
+	m := map[string]any{
+		"timestamp":  t.Timestamp,
+		"event":      t.Event,
+		"type":       t.Type,
+		"path":       truncEllipsis(t.Path),
+		"method":     t.Method,
+		"ip":         nullable(t.IP),
+		"user":       nullable(t.User),
+		"role":       nullable(t.Role),
+		"user_agent": nullable(truncEllipsis(t.UserAgent)),
+		"app":        t.App,
 	}
-	return json.Marshal(struct {
-		Timestamp float64         `json:"timestamp"`
-		Event     string          `json:"event"`
-		Type      string          `json:"type"`
-		Reason    any             `json:"reason"`
-		Intent    any             `json:"intent"`
-		Path      string          `json:"path"`
-		Method    string          `json:"method"`
-		IP        any             `json:"ip"`
-		User      any             `json:"user"`
-		Role      any             `json:"role"`
-		UserAgent any             `json:"user_agent"`
-		Found     any             `json:"found_fields"`
-		Metadata  json.RawMessage `json:"metadata"`
-		App       AppInfo         `json:"app"`
-	}{
-		Timestamp: t.Timestamp, Event: t.Event, Type: t.Type,
-		Reason: nullable(t.Reason), Intent: nullable(t.Intent),
-		Path: truncate(t.Path, maxStringLen), Method: t.Method,
-		IP: nullable(t.IP), User: nullable(t.User), Role: nullable(t.Role),
-		UserAgent: nullable(truncate(t.UserAgent, maxStringLen)),
-		Found:     found, Metadata: safeMarshal(t.Metadata), App: t.App,
-	})
+	var found any = t.Found // a nil slice encodes as null
+	switch t.Event {
+	case "trappsec.trap_hit":
+		m["intent"] = nullable(t.Intent)
+	case "trappsec.watch_hit":
+		if t.Found == nil {
+			found = []FoundField{}
+		}
+		m["found_fields"] = found
+	case "trappsec.rule_hit":
+		m["reason"] = nullable(t.Reason)
+		m["intent"] = nullable(t.Intent)
+		m["metadata"] = safeMarshal(t.Metadata)
+	default:
+		m["intent"] = nullable(t.Intent)
+		m["reason"] = nullable(t.Reason)
+		m["found_fields"] = found
+		m["metadata"] = safeMarshal(t.Metadata)
+	}
+	return json.Marshal(m)
 }
 
 // safeMarshal never fails or panics; unencodable values degrade to a string.
@@ -107,18 +115,6 @@ func safeMarshal(v any) (out json.RawMessage) {
 		}
 	}
 	return b
-}
-
-// truncate shortens s to at most n characters (runes), without a suffix.
-func truncate(s string, n int) string {
-	if len(s) <= n {
-		return s
-	}
-	r := []rune(s)
-	if len(r) <= n {
-		return s
-	}
-	return string(r[:n])
 }
 
 type AppInfo struct {
@@ -380,6 +376,77 @@ func (s *Sentry) Traps() []TrapConfig {
 	return out
 }
 
+// IsTrap reports whether req targets a trap (method and path, read with the
+// Request extractors the adapter installed). Use it to skip middleware that
+// would otherwise reject a trap before it can answer, such as CSRF protection
+// (R22): a trap that answers 403 is both disabled and easy to fingerprint.
+// Path segments written as :id, {id}, <id> or *rest match any segment.
+// It never panics.
+func (s *Sentry) IsTrap(req any) (is bool) {
+	defer func() {
+		if recover() != nil {
+			is = false
+		}
+	}()
+	method := strings.ToUpper(s.Request.Method(req))
+	path := cleanTrapPath(s.Request.Path(req))
+	if method == "" || path == "" {
+		return false
+	}
+	for _, t := range s.Traps() {
+		for _, m := range t.Methods {
+			if strings.EqualFold(m, method) && trapPathMatches(t.Path, path) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func cleanTrapPath(p string) string {
+	if i := strings.IndexAny(p, "?#"); i >= 0 {
+		p = p[:i]
+	}
+	if p == "" {
+		return ""
+	}
+	if !strings.HasPrefix(p, "/") {
+		p = "/" + p
+	}
+	if t := strings.TrimRight(p, "/"); t != "" {
+		return t
+	}
+	return "/"
+}
+
+func trapPathMatches(pattern, path string) bool {
+	want := cleanTrapPath(patternPathOnly(pattern))
+	a, b := strings.Split(want, "/"), strings.Split(path, "/")
+	if len(a) != len(b) {
+		return false
+	}
+	for i, seg := range a {
+		if seg == b[i] {
+			continue
+		}
+		param := strings.HasPrefix(seg, ":") || strings.HasPrefix(seg, "*") ||
+			(strings.HasPrefix(seg, "{") && strings.HasSuffix(seg, "}")) ||
+			(strings.HasPrefix(seg, "<") && strings.HasSuffix(seg, ">"))
+		if !param || b[i] == "" {
+			return false
+		}
+	}
+	return true
+}
+
+// patternPathOnly drops a net/http "METHOD [HOST]" prefix from a pattern.
+func patternPathOnly(p string) string {
+	if i := strings.IndexByte(p, '/'); i > 0 {
+		return p[i:]
+	}
+	return p
+}
+
 func (s *Sentry) Watches() []WatchConfig {
 	s.mu.RLock()
 	builders := append([]*WatchBuilder(nil), s.watches...)
@@ -408,9 +475,9 @@ func (s *Sentry) newEvent(req any, name string) (TriggerContext, extractedIdenti
 		Timestamp: float64(time.Now().UnixNano()) / 1e9,
 		Event:     name,
 		Type:      "signal",
-		Path:      truncate(request.Path, maxStringLen),
+		Path:      truncEllipsis(request.Path),
 		Method:    request.Method,
-		UserAgent: truncate(request.UserAgent, maxStringLen),
+		UserAgent: truncEllipsis(request.UserAgent),
 		IP:        identity.IP,
 	}
 	if identity.User != "" {
@@ -532,7 +599,7 @@ func (s *Sentry) DetectHoneyFields(data map[string]any, rules map[string]WatchFi
 			found = append(found, FoundField{
 				Type:   src,
 				Field:  ruleName,
-				Value:  SafeValue(value),
+				Value:  SafeValue(reportedValue(value)),
 				Intent: rule.Intent,
 			})
 		}
@@ -603,6 +670,22 @@ func (s *Sentry) isViolation(value any, rule WatchFieldRule, requestObj any) (vi
 		}
 	}
 	return false
+}
+
+// reportedValue returns the value recorded for a violation: a one-element
+// list is reported as its element, matching how it is compared.
+func reportedValue(v any) any {
+	switch l := v.(type) {
+	case []any:
+		if len(l) == 1 {
+			return l[0]
+		}
+	case []string:
+		if len(l) == 1 {
+			return l[0]
+		}
+	}
+	return v
 }
 
 func (s *Sentry) callDefault(fn func(any) any, req any) (out any) {
@@ -702,12 +785,52 @@ func canonical(v any) (string, bool) {
 		return strconv.FormatUint(n.u, 10), true
 	case n.isInt:
 		return strconv.FormatInt(n.i, 10), true
-	case math.IsNaN(n.f) || math.IsInf(n.f, 0):
-		return strconv.FormatFloat(n.f, 'g', -1, 64), true
-	case n.f == math.Trunc(n.f) && math.Abs(n.f) < 1e15:
-		return strconv.FormatInt(int64(n.f), 10), true
 	}
-	return strconv.FormatFloat(n.f, 'f', -1, 64), true
+	return esNumber(n.f), true
+}
+
+// esNumber formats f like ECMAScript Number::toString, the text JavaScript
+// (and so the Node SDK) produces, so canonical matching agrees across SDKs.
+func esNumber(f float64) string {
+	switch {
+	case math.IsNaN(f):
+		return "NaN"
+	case math.IsInf(f, 1):
+		return "Infinity"
+	case math.IsInf(f, -1):
+		return "-Infinity"
+	case f == 0:
+		return "0"
+	}
+	sign := ""
+	if f < 0 {
+		sign, f = "-", -f
+	}
+	// Shortest round-trip digits: "d.ddde±XX".
+	mant, expText, _ := strings.Cut(strconv.FormatFloat(f, 'e', -1, 64), "e")
+	digits := strings.Replace(mant, ".", "", 1)
+	e, _ := strconv.Atoi(expText)
+	k, n := len(digits), e+1 // value = 0.digits * 10^n
+	var text string
+	switch {
+	case k <= n && n <= 21:
+		text = digits + strings.Repeat("0", n-k)
+	case 0 < n && n <= 21:
+		text = digits[:n] + "." + digits[n:]
+	case -6 < n && n <= 0:
+		text = "0." + strings.Repeat("0", -n) + digits
+	default:
+		exp := strconv.Itoa(n - 1)
+		if n-1 >= 0 {
+			exp = "+" + exp
+		}
+		if k == 1 {
+			text = digits + "e" + exp
+		} else {
+			text = digits[:1] + "." + digits[1:] + "e" + exp
+		}
+	}
+	return sign + text
 }
 
 // valuesMatch implements C3 values_match(actual, expected).
@@ -800,7 +923,8 @@ func SafeValue(v any) any {
 		}
 		return out
 	case reflect.Map:
-		b, err := json.Marshal(v)
+		// Same text as Python and Node: compact, sorted keys, no HTML escaping.
+		b, err := marshalJSON(v)
 		if err != nil {
 			return truncEllipsis(fmt.Sprintf("%v", v))
 		}

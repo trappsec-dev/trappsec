@@ -22,6 +22,8 @@ class FlaskIntegration:
         self.ts.request.user_agent = lambda r: str(r.user_agent)
         self.ts.request.method = lambda r: r.method
 
+        self._trap_views = []
+        self._csrf_exempted = set()
         self._patch_startup()
 
     # ------------------------------------------------------------------ public
@@ -70,6 +72,18 @@ class FlaskIntegration:
 
             endpoint.__name__ = "trappsec_%d" % idx
             self.app.add_url_rule(decoy["path"], endpoint.__name__, endpoint, methods=decoy["methods"])
+            self._trap_views.append(endpoint)
+
+    def _exempt_traps_from_csrf(self):
+        """R22: Flask-WTF's CSRFProtect would answer a POST trap with 400 and no
+        event. Exempt the trap views from whichever instance the app registers,
+        whenever it is registered (checked per request: one dict lookup)."""
+        csrf = self.app.extensions.get("csrf")
+        if csrf is None or id(csrf) in self._csrf_exempted or not hasattr(csrf, "exempt"):
+            return
+        for view in self._trap_views:
+            csrf.exempt(view)
+        self._csrf_exempted.add(id(csrf))
 
     @staticmethod
     def _fallback(trap):
@@ -187,6 +201,11 @@ class FlaskIntegration:
                     self.ts.logger.error("trappsec bootstrap failed: %s", e)
                     self._bootstrapped = True  # do not retry on every request
 
+            if self._trap_views:
+                try:
+                    self._exempt_traps_from_csrf()
+                except Exception as e:
+                    self.ts.logger.error("trappsec could not exempt traps from CSRF protection: %s", e)
             return original_wsgi_app(environ, start_response)
 
         self.app.wsgi_app = trappsec_wrapper

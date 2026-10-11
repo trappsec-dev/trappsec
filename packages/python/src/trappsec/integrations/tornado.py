@@ -16,8 +16,10 @@ Design notes
   If a trap path is also an application route, bootstrap raises when the
   methods overlap (never silently shadows/replaces) and otherwise restricts the
   trap to its own methods so the application route keeps serving the others.
-* A trap answers only its declared methods; every other method gets a 405 with
-  an ``Allow`` header, like a real Tornado route. Traps skip XSRF checks.
+* A trap answers only its declared methods; every other method gets Tornado's
+  own 405 (no ``Allow`` header, like a real handler without that method), so the
+  response cannot tell a trap from an application route (R14). Traps skip XSRF
+  checks.
 * Watches wrap the per-request ``_HandlerDelegate.execute`` of requests whose
   matched handler class/route has a watch; user handler classes are never
   patched. The raw ``request.body`` is the source of truth: it is rewritten
@@ -114,19 +116,12 @@ def _make_trap_handler(trap, methods, ts, fallback):
     """Factory that captures trap/methods/ts by value, avoiding the loop-variable closure bug."""
     import tornado.web
 
-    allow = ", ".join(sorted(methods))
-
     class TrapHandler(tornado.web.RequestHandler):
         _trappsec_trap = True
         SUPPORTED_METHODS = tuple(sorted(methods))
 
         def check_xsrf_cookie(self):  # traps must never be blocked by XSRF protection
             return
-
-        def write_error(self, status_code, **kwargs):
-            if status_code == 405:
-                self.set_header("Allow", allow)
-            super().write_error(status_code, **kwargs)
 
         async def _serve(self, *args, **kwargs):
             try:

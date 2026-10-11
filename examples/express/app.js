@@ -5,6 +5,7 @@ if (otelEnabled) {
 }
 
 const express = require('express');
+const multer = require('multer');
 const path = require('path');
 const trappsec = require('../../packages/node/src/index'); // Importing local package
 
@@ -61,7 +62,8 @@ app.get("/api/v2/orders/:id", (req, res) => {
 app.get("/api/v2/echo/query", (req, res) => res.json(req.query));
 app.post("/api/v2/echo/body", (req, res) => res.json(req.body || {}));
 app.post("/api/v2/echo/form", (req, res) => res.json(req.body || {}));
-app.post("/api/v2/echo/multipart", (req, res) => res.json({ supported: false }));
+// multer parses multipart on the route itself; trappsec still sees the fields.
+app.post("/api/v2/echo/multipart", multer().none(), (req, res) => res.json({ ...req.body }));
 
 // Traps
 ts.trap("/deployment/config")
@@ -132,10 +134,13 @@ if (values.otel) {
 }
 
 if (values.webhook) {
-    ts.add_webhook(values.webhook, { alerts_only: false });
+    ts.add_webhook(values.webhook, { secret: process.env.TRAPPSEC_WEBHOOK_SECRET || null, alerts_only: false });
+}
+if (process.env.TRAPPSEC_ALERTS_WEBHOOK) {  // second receiver with the default alerts_only: true
+    ts.add_webhook(process.env.TRAPPSEC_ALERTS_WEBHOOK, { secret: process.env.TRAPPSEC_WEBHOOK_SECRET || null });
 }
 
-const port = 8000;
+const port = Number(process.env.PORT || 8000);
 app.listen(port, () => {
     console.log(`Starting server on http://127.0.0.1:${port}`);
 });

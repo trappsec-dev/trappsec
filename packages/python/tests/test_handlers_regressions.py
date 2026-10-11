@@ -3,6 +3,7 @@ import hmac
 import http.server
 import json
 import logging
+import os
 import pathlib
 import sys
 import threading
@@ -288,3 +289,52 @@ def test_otel_handler_emits_valid_attributes():
     assert len(span.events) == 2
     assert "intent" not in span.events[0].attributes
     assert span.events[0].attributes["value"] == '{"a": 1}'
+
+
+@needs_requests
+@pytest.mark.skipif(not hasattr(os, "fork"), reason="needs os.fork")
+@pytest.mark.filterwarnings("ignore::DeprecationWarning")  # fork() with threads running
+def test_delivery_and_heartbeat_resume_in_forked_child(server):
+    """gunicorn --preload: a handler created before fork() keeps working in the worker."""
+    h = WebhookHandler(server.url, heartbeat_interval=1)
+    h.emit(ALERT)
+    assert server.wait(1)
+    pid = os.fork()
+    if pid == 0:  # child: worker and heartbeat threads did not survive fork()
+        code = 1
+        try:
+            h.emit(dict(ALERT, path="/child"))
+            h.close(timeout=5)
+            code = 0
+        finally:
+            os._exit(code)
+    _, status = os.waitpid(pid, 0)
+    assert os.waitstatus_to_exitcode(status) == 0
+    assert server.wait(2)
+    paths = [json.loads(b).get("path") for _, b in server.received]
+    assert "/child" in paths
+    h.close()
+
+
+@needs_requests
+@pytest.mark.skipif(not hasattr(os, "fork"), reason="needs os.fork")
+@pytest.mark.filterwarnings("ignore::DeprecationWarning")
+def test_forked_child_does_not_resend_parent_backlog():
+    srv = Server(delay=0.3)
+    try:
+        h = WebhookHandler(srv.url)
+        for i in range(3):
+            h.emit(dict(ALERT, path="/parent-%d" % i))
+        pid = os.fork()  # parent still has queued, undelivered events
+        if pid == 0:
+            try:
+                h.emit(dict(ALERT, path="/child"))
+                h.close(timeout=5)
+            finally:
+                os._exit(0)
+        os.waitpid(pid, 0)
+        h.close(timeout=5)
+        paths = sorted(json.loads(b)["path"] for _, b in srv.received)
+        assert paths == ["/child", "/parent-0", "/parent-1", "/parent-2"]
+    finally:
+        srv.stop()
