@@ -17,6 +17,7 @@ from wsgiref.simple_server import make_server
 
 from django.conf import settings
 from django.http import JsonResponse, HttpResponse
+from django.views.decorators.http import require_GET
 from django.urls import path, re_path
 from django.core.wsgi import get_wsgi_application
 
@@ -54,6 +55,7 @@ def profile(request):
     return JsonResponse({"error": "method not allowed"}, status=405)
 
 
+@require_GET
 def get_orders(_request):
     return JsonResponse({
         "orders": [
@@ -63,6 +65,7 @@ def get_orders(_request):
     })
 
 
+@require_GET
 def get_order_detail(_request, order_id):
     return JsonResponse({"id": order_id, "item": "Laptop", "amount": 1200, "status": "shipped"})
 

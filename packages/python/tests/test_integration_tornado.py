@@ -96,10 +96,16 @@ class TestTraps(SentryCase):
         assert traps[0]["type"] == "signal"
         assert traps[1]["type"] == "alert" and traps[1]["user"] == "bob"
 
-    def test_405_has_allow_header_and_does_not_trigger(self):
-        r = self.fetch("/admin/secret", method="POST", body="")
-        assert r.code == 405
-        assert r.headers.get("Allow") == "GET"
+    def test_wrong_method_looks_like_a_real_route_and_does_not_trigger(self):
+        """R14: a trap's 405 must be indistinguishable from an application route's."""
+        def shape(r):
+            skip = {"Date", "Content-Length", "Etag"}
+            return r.code, sorted(k for k in r.headers if k not in skip), r.body
+
+        trap = self.fetch("/admin/secret", method="DELETE")
+        real = self.fetch("/users/me", method="DELETE")  # MeHandler implements GET only
+        assert trap.code == 405
+        assert shape(trap) == shape(real)
         assert self.hits("trappsec.trap_hit") == []
 
     def test_bootstrap_idempotent(self):
@@ -285,3 +291,31 @@ class TestTrapsUnderXsrfCookies(SentryCase):
         assert self.fetch("/echo", method="POST", body="a=1").code == 403
         assert self.fetch("/admin/backup", method="POST", body="a=1").code == 401
         assert len(self.hits("trappsec.trap_hit")) == 1
+
+
+class TestNestedRouterWatch(SentryCase):
+    """R7: routes inside a nested Rule(PathMatches(...), [...]) are watched."""
+    traps = None
+    watches = staticmethod(lambda s: s.watch(r"/api/users/(\d+)").query("debug").body("is_admin"))
+
+    def get_app(self):
+        from tornado.routing import PathMatches, Rule
+
+        app = tornado.web.Application([Rule(PathMatches(r"/api/.*"), [(r"/api/users/(\d+)", NestedHandler)])])
+        self.sentry = Sentry(app, "svc", "test")
+        self.cap = Capture()
+        self.sentry._handlers.append(self.cap)
+        self.watches(self.sentry)
+        return app
+
+    def test_nested_route_watched(self):
+        r = self.fetch("/api/users/7?debug=1&x=1", method="POST", body=json.dumps({"is_admin": True, "n": 1}),
+                       headers={"Content-Type": "application/json"})
+        assert json.loads(r.body) == {"args": {"x": ["1"]}, "body": {"n": 1}}
+        assert len(self.hits("trappsec.watch_hit")) == 1
+
+
+class NestedHandler(tornado.web.RequestHandler):
+    def post(self, uid):
+        self.write({"args": {k: [v.decode() for v in vs] for k, vs in self.request.arguments.items()},
+                    "body": json.loads(self.request.body)})

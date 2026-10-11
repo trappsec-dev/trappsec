@@ -261,3 +261,52 @@ def test_watch_on_included_urlconf(env):
     assert r.get_json()["json"] == {"n": 1}
     [event] = watch_events(cap)
     assert {f["field"] for f in event["found_fields"]} == {"debug", "is_admin"}
+
+
+def test_catch_all_route_does_not_shadow_trap(env):
+    """R2: Django matches urlpatterns in order, so traps must come first."""
+    from django.urls import re_path
+
+    h, s, cap = env(urlpatterns=[re_path(r"^.*$", items)])
+    s.trap("/admin/backup")
+    c = client(h)
+    assert c.get("/admin/backup").status_code == 401
+    assert c.get("/other").status_code == 200
+    assert len([e for e in cap.events if e["event"] == "trappsec.trap_hit"]) == 1
+
+
+def test_concurrent_first_requests_bootstrap_once(env):
+    """R8: threaded WSGI servers can deliver many first requests at once."""
+    import threading
+    import urllib.error
+    import urllib.request
+    from socketserver import ThreadingMixIn
+    from wsgiref.simple_server import WSGIRequestHandler, WSGIServer, make_server
+
+    class Quiet(WSGIRequestHandler):
+        def log_message(self, *a):
+            pass
+
+    class Threaded(ThreadingMixIn, WSGIServer):
+        daemon_threads = True
+
+    h, s, cap = env()
+    s.trap("/admin/backup")
+    srv = make_server("127.0.0.1", 0, h, server_class=Threaded, handler_class=Quiet)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    codes, start = [], threading.Barrier(24)
+
+    def hit():
+        start.wait()
+        try:
+            urllib.request.urlopen("http://127.0.0.1:%d/admin/backup" % srv.server_port, timeout=10)
+        except urllib.error.HTTPError as e:
+            codes.append(e.code)
+
+    threads = [threading.Thread(target=hit) for _ in range(24)]
+    [t.start() for t in threads]
+    [t.join() for t in threads]
+    srv.shutdown()
+    srv.server_close()
+    assert codes == [401] * 24
+    assert len([e for e in cap.events if e["event"] == "trappsec.trap_hit"]) == 24

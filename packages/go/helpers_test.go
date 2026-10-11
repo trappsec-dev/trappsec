@@ -242,3 +242,54 @@ func equalValues(a, b url.Values) bool {
 	jb, _ := json.Marshal(b)
 	return bytes.Equal(ja, jb)
 }
+
+func TestInspectWatchDuplicateKeysDetectedAndStripped(t *testing.T) {
+	watch := WatchConfig{
+		Path:        "/w",
+		QueryFields: map[string]WatchFieldRule{"role": {Default: "user", Intent: "q"}},
+		BodyFields:  map[string]WatchFieldRule{"role": {Default: "user", Intent: "b"}},
+	}
+	var mp bytes.Buffer
+	w := multipart.NewWriter(&mp)
+	_ = w.WriteField("role", "user")
+	_ = w.WriteField("role", "admin")
+	_ = w.WriteField("name", "a")
+	_ = w.Close()
+
+	cases := []struct {
+		name, target, ct, body string
+	}{
+		{"query", "/w?role=user&role=admin&x=1", "", ""},
+		{"form", "/w", "application/x-www-form-urlencoded", "role=user&role=admin&name=a"},
+		{"multipart", "/w", w.FormDataContentType(), mp.String()},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			s := NewSentry("svc", "test")
+			capture := &captureHandler{}
+			s.handlers = []EventHandler{capture}
+			r := httptest.NewRequest("POST", c.target, strings.NewReader(c.body))
+			if c.ct != "" {
+				r.Header.Set("Content-Type", c.ct)
+			}
+			InspectWatch(s, r, r, watch, 0)
+			if r.URL.Query().Has("role") {
+				t.Fatalf("query still has role: %s", r.URL.RawQuery)
+			}
+			if c.ct != "" {
+				if err := r.ParseMultipartForm(1 << 20); err != nil && err != http.ErrNotMultipart {
+					t.Fatalf("parse: %v", err)
+				}
+				if r.PostForm.Has("role") || r.PostForm.Get("name") != "a" {
+					t.Fatalf("form after strip = %v", r.PostForm)
+				}
+			}
+			if len(capture.events) != 1 || len(capture.events[0].Found) != 1 {
+				t.Fatalf("events = %+v", capture.events)
+			}
+			if got, _ := json.Marshal(capture.events[0].Found[0].Value); string(got) != `["user","admin"]` {
+				t.Fatalf("recorded value = %s", got)
+			}
+		})
+	}
+}

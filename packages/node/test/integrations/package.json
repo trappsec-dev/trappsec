@@ -7,6 +7,7 @@
     "test": "node --test"
   },
   "devDependencies": {
+    "@fastify/formbody": "^9.0.1",
     "@fastify/multipart": "^10.1.3",
     "@hapi/hapi": "^21.3.0",
     "@koa/multer": "^4.0.0",

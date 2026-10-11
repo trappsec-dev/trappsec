@@ -9,23 +9,23 @@ Columns: Fl Flask · FA FastAPI · St Starlette · Li Litestar · Dj Django · S
 | Rule | Fl | FA | St | Li | Dj | Sa | To | Ex | Fy | Ha | Ko | Ne | NH | Gi | Ec | core py / node / go |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
 | R1 watch uses route pattern | e2e | e2e | e2e | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | e2e | ✅ | e2e | N/A |
-| R2 traps not shadowed | ✅ | e2e | ✅ | e2e | e2e | e2e | ✅ | ✅ | e2e | ✅ | ✅ | ✅ | ✅ | e2e | e2e | N/A |
+| R2 traps not shadowed | ✅ | ✅ | ✅ | e2e | ✅ | e2e | ✅ | ✅ | e2e | ✅ | ✅ | ✅ | ✅ | e2e | e2e | N/A |
 | R3 setup before first request | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | N/A |
 | R4 always strip | ✅ | e2e | ✅ | e2e | ✅ | ✅ | e2e | ✅ | e2e | e2e | e2e | e2e | e2e | e2e | e2e | ✅ / ✅ / ✅ |
 | R5 body parsing | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | N/A |
 | R6 stable mutation API | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | e2e | e2e | ✅ | ✅ | ✅ | N/A |
-| R7 nested routers | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | — | ✅ | ✅ | ✅ | ✅ | — | ✅¹ | ✅ | ✅ | N/A |
+| R7 nested routers | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅¹ | ✅ | ✅ | N/A |
 | R8 double-init guard | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | N/A |
 | R9 unknown framework fails loud | N/A | N/A | N/A | N/A | N/A | N/A | N/A | N/A | N/A | N/A | N/A | N/A | N/A | N/A | N/A | ✅ / ✅ / N/A² |
 | R10 traps before watches | — | — | — | — | — | — | — | — | — | — | — | — | — | — | — | N/A |
 | R11 adapter-specific context | ✅ | e2e | e2e | e2e | e2e | e2e | e2e | e2e | e2e | e2e | e2e | e2e | ✅ | ✅ | ✅ | N/A |
 | R12 emit is fire-and-forget | N/A | N/A | N/A | N/A | N/A | N/A | N/A | N/A | N/A | N/A | N/A | N/A | N/A | N/A | N/A | ✅ / ✅ / ✅ |
 | R13 O(1) lookups | — | — | — | — | — | — | — | — | — | — | — | — | — | — | — | — / — / — |
-| R14 traps are real routes | — | — | — | — | — | — | ✅ | — | — | — | — | — | — | — | — | N/A |
+| R14 traps are real routes | e2e | e2e | e2e | e2e | e2e | e2e | ✅ | e2e | e2e | e2e | e2e | e2e | e2e | e2e | e2e | N/A |
 | R15 bootstrap public, idempotent, lazy | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ / ✅ / N/A |
-| R16 async delivery; callbacks never throw | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | — | — | — | ✅ / ✅ / ✅ |
+| R16 async delivery; callbacks never throw | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ / ✅ / ✅ |
 | R17 canonical value matching | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | e2e | ✅ | e2e | ✅ | ✅ | ✅ | ✅ / ✅ / ✅ (shared fixtures) |
-| R18 multi-valued fields | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | e2e | e2e | e2e | e2e | e2e | e2e | ✅ / ✅ / ✅ (shared fixtures) |
+| R18 multi-valued fields | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ / ✅ / ✅ (shared fixtures) |
 | R19 sanitized values, event shape | e2e | e2e | e2e | e2e | e2e | e2e | e2e | e2e | e2e | e2e | e2e | e2e | e2e | e2e | e2e | ✅ / ✅ / ✅ (shared fixtures) |
 | R20 duplicate trap fails loud | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅³ | ✅ | ✅ | ✅ | N/A |
 | R21 no spoofable IP by default | e2e | e2e | e2e | e2e | e2e | e2e | e2e | e2e | e2e | e2e | e2e | e2e | ✅ | ✅ | ✅ | N/A |
@@ -42,12 +42,9 @@ Columns: Fl Flask · FA FastAPI · St Starlette · Li Litestar · Dj Django · S
 
 Ordered by risk to detection.
 
-- **R7 NestJS modules and Tornado nested routers:** no test watches a route mounted through a module or a nested `Router`.
-- **R18 duplicate-key evasion at framework level** for Hapi, Koa, NestJS, net/http, Gin and Echo: only the e2e query test sends a watched key twice; form bodies are untested there.
-- **R16 Go adapters:** panics inside callbacks are recovered in the core (tested), but no adapter-level test drives one through a real router.
-- **R2 on FastAPI and Django** (order-based routers): only e2e checks that a catch-all route does not shadow a trap.
-- **R8 concurrent first-request bootstrap in Python** (Flask, Django under threaded WSGI): only Go has a concurrency test.
-- **R14 fingerprint resistance** outside Tornado: nothing compares a trap's 405/HEAD/OPTIONS behaviour with a real route's.
 - **R22 third-party CSRF middleware** (Flask-WTF, csurf, `@fastify/csrf-protection`, crumb, koa-csrf): untested; see `docs/production.md` for how to exempt traps.
 - **R1, R6, R11** on the frameworks marked e2e: covered end to end only.
+- **R14 beyond wrong methods:** the e2e suite compares how a trap and a real GET-only route answer DELETE, PUT and OPTIONS (status and `Allow`); response bodies, trailing slashes and HEAD are not compared.
 - **R10 and R13:** correctness and performance invariants with no test; low risk.
+
+Notes: R5 multipart is now covered end to end on every framework (the Express, Koa and NestJS examples parse it on the route). R8 is tested under concurrent first requests in Go, Flask and Django; the other Python integrations bootstrap from a startup hook or their first request under the same lock.

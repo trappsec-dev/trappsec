@@ -373,3 +373,14 @@ def test_forwarded_for_is_not_trusted_by_default(api, base_url, alerts):
     api.get(f"{base_url}/deployment/config", headers=headers(ua, **{"X-Forwarded-For": spoofed, "Forwarded": f"for={spoofed}"}))
     [alert] = alerts.expect(ua)
     assert spoofed not in alert["ip"]
+
+
+@pytest.mark.parametrize("method", ["DELETE", "PUT", "OPTIONS"])
+def test_wrong_method_on_trap_looks_like_a_real_route(api, base_url, alerts, method):
+    """R14: a trap must not be told apart from a real GET-only route by how it rejects other methods."""
+    ua = unique_ua()
+    real = api.request(method, f"{base_url}/api/v2/orders", headers=headers(ua))
+    trap = api.request(method, f"{base_url}/deployment/config", headers=headers(ua))
+    allow = lambda r: sorted(m.strip().upper() for m in r.headers.get("Allow", "").split(",") if m.strip())  # noqa: E731
+    assert (trap.status_code, allow(trap)) == (real.status_code, allow(real))
+    alerts.expect_none(ua)

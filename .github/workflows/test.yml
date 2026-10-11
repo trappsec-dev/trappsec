@@ -152,7 +152,7 @@ jobs:
           npm ci
           # --legacy-peer-deps: the test-only plugins' peer ranges follow the latest majors
           npm install --no-save --no-audit --no-fund --legacy-peer-deps \
-            "express4@npm:express@4.17" "express@5.0" "fastify@4" "@fastify/multipart@8" \
+            "express4@npm:express@4.17" "express@5.0" "fastify@4" "@fastify/multipart@8" "@fastify/formbody@7" \
             "koa@2.13" "@koa/router@10" "koa-bodyparser@4" "@hapi/hapi@20" \
             "@nestjs/common@10" "@nestjs/core@10" "@nestjs/platform-express@10" "@nestjs/platform-fastify@10"
           node -e "for (const p of ['express4','express','fastify','koa','@koa/router','@hapi/hapi','@nestjs/core']) console.log(p, require(p + '/package.json').version)"

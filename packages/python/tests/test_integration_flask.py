@@ -265,3 +265,34 @@ def test_watch_on_blueprint_route():
     assert r.get_json() == {"args": {"x": "1"}, "json": {"n": 1}}
     [event] = watch_events(cap)
     assert {f["field"] for f in event["found_fields"]} == {"debug", "is_admin"}
+
+
+def test_concurrent_first_requests_bootstrap_once():
+    """R8: Flask bootstraps on the first request; under a threaded server many arrive at once."""
+    import threading
+    import urllib.error
+    import urllib.request
+    from werkzeug.serving import make_server
+
+    app = Flask(__name__)
+    sentry = Sentry(app, "svc", "test")
+    cap = Capture()
+    sentry._handlers.append(cap)
+    sentry.trap("/admin/backup")
+    srv = make_server("127.0.0.1", 0, app, threaded=True)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    codes, start = [], threading.Barrier(24)
+
+    def hit():
+        start.wait()
+        try:
+            urllib.request.urlopen("http://127.0.0.1:%d/admin/backup" % srv.server_port, timeout=10)
+        except urllib.error.HTTPError as e:
+            codes.append(e.code)
+
+    threads = [threading.Thread(target=hit) for _ in range(24)]
+    [t.start() for t in threads]
+    [t.join() for t in threads]
+    srv.shutdown()
+    assert codes == [401] * 24
+    assert len([e for e in cap.events if e["event"] == "trappsec.trap_hit"]) == 24

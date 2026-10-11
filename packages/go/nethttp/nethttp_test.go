@@ -622,3 +622,27 @@ func TestUnreachableWatchIsLogged(t *testing.T) {
 		t.Fatalf("served watches must not warn: %s", out)
 	}
 }
+
+func TestPanickingCallbacksNeverBreakRequests(t *testing.T) {
+	app := InstallSentry(http.NewServeMux(), "svc", "test")
+	app.Logger().SetOutput(&syncBuf{})
+	app.IdentifyUser(func(any) *core.AuthContext { panic("identify") })
+	app.OverrideSourceIP(func(any) string { panic("ip") })
+	app.Sentry.Trap("/admin").Methods("GET").Respond(core.ResponseConfig{Status: 200, Body: func(any) any { panic("body") }})
+	var bound map[string]any
+	app.HandleFunc("POST /w", func(w http.ResponseWriter, r *http.Request) { bound = nil; _ = json.NewDecoder(r.Body).Decode(&bound) })
+	app.Sentry.Watch("/w").Body("role", func(any) any { panic("default") }, "priv")
+
+	rec := httptest.NewRecorder()
+	app.ServeHTTP(rec, httptest.NewRequest("GET", "/admin", nil))
+	if rec.Code != 401 {
+		t.Fatalf("trap answered %d", rec.Code)
+	}
+	req := httptest.NewRequest("POST", "/w", strings.NewReader(`{"role":"user","n":1}`))
+	req.Header.Set("Content-Type", "application/json")
+	rec = httptest.NewRecorder()
+	app.ServeHTTP(rec, req)
+	if _, leaked := bound["role"]; rec.Code != 200 || leaked || bound["n"] == nil {
+		t.Fatalf("watched route: code=%d bound=%v", rec.Code, bound)
+	}
+}
