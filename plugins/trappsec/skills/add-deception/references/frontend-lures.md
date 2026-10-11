@@ -56,6 +56,8 @@ Add the decoy call beside its real siblings. Use the same helper, naming, typing
 
 Survival: class methods and object properties survive bundling even when unused. A standalone `export function` that nothing imports is removed by tree-shaking. Either give it a gated caller (B, C) or attach it to the client object.
 
+Camouflage: an uncalled method blends in where the codebase already has uncalled siblings. Several orphans read as unfinished UI. A lone orphan on a sensitive resource (billing, ownership) stands out. If yours would be the only one, give it a gated caller instead. In blind reviews, a flag-gated call drew less than half the suspicion of the same call left uncalled.
+
 ### B. Role- or permission-gated UI the backend never grants
 
 Single-page apps routinely ship admin and support screens to every user and hide them behind a client-side check. Attackers know this and look for it, which makes this the most believable lure in a SPA.
@@ -98,6 +100,8 @@ The real UI must either never send the field or send back exactly what the serve
 
 In a form the app really submits, add `<input type="hidden" name="..." value="...">` in the app's field-naming style. Every legitimate submission carries the default value, and the watch uses that default.
 
+- **Carry plausible values.** A hidden input should carry something a real form plausibly sends: display currency, locale, a form or plan version. A business value the server obviously owns (a platform fee, an order total) is suspicious, especially next to text stating the same value. Blind reviewers rated exactly that pairing as a likely honey field.
+- **Prefer displayed bait.** Bait the user can see, such as a read-only or disabled field showing the current plan, beats a hidden one. Browsers never submit disabled controls, so any submitted value is tampering.
 - Avoid names browsers autofill: email, name, address, phone, password fields.
 - Check form libraries that whitelist fields or reject unknown ones.
 
@@ -147,7 +151,8 @@ Before finishing, look at each lure the way an attacker would, and remove:
   - missing types where everything else is typed;
   - untranslated strings where everything else is translated;
   - a different error-handling pattern.
-- **Orphans:** a method in an unrelated module, or a feature with no natural footprint.
+- **Orphans:** a method in an unrelated module, a feature with no natural footprint, or the only uncalled method in a codebase that otherwise has none.
+- **Dangling references:** something nothing consumes, such as a `data-` attribute no script reads or a config key no code uses. It exists only to be found, and reviewers treat it that way.
 - **Clichés:** "internal", "debug", "do not use", "remove before prod", `/admin/secret`, `superuser`.
 - **Mismatches with the backend:** a different method, a path that answers 404, a response that doesn't fit the type the frontend declares.
 - **Anything copied from this skill's examples.**
