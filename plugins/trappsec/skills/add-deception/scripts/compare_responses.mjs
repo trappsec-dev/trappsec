@@ -154,6 +154,10 @@ async function main() {
   if (rj.ok && tj.ok) {
     bodyKind = 'json';
     shapeDiffs = diffShapes(shape(rj.value), shape(tj.value));
+    // Same data, different bytes (spacing, key order, escaping) is visible to anyone diffing raw responses.
+    if (!shapeDiffs.length && real.body !== trap.body && JSON.stringify(rj.value) === JSON.stringify(tj.value)) {
+      shapeDiffs.push('same JSON, different serialization (spacing, key order or escaping): compare the raw bodies below');
+    }
   } else if (rj.ok !== tj.ok) {
     bodyKind = 'mixed';
     shapeDiffs = [`real body is ${rj.ok ? 'JSON' : 'not JSON'}, trap body is ${tj.ok ? 'JSON' : 'not JSON'}`];
