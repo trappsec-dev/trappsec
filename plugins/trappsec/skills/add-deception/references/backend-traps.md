@@ -25,6 +25,15 @@ A decoy route is the endpoint behind a story. Pick stories that fit the app's hi
 | Tenant administration | Multi-tenant model | Org transfer, member-role changes, workspace cloning |
 | Protocol decoy | The app does NOT already use GraphQL (or similar) | A GraphQL endpoint that parses queries and answers like a real server (trappsec's GraphQL example) |
 
+**Inferred decoys need no lure.** Attackers enumerate around every resource they see:
+- other methods on it (PATCH or DELETE on items the API lists);
+- the collection behind a singular route, or the item behind a collection;
+- the previous API version.
+
+A decoy at such a path leaves nothing in the client for anyone to scrutinize. In blind reviews it was invisible, while every client-side lure drew some suspicion.
+
+Pick paths and methods that the real API plausibly lacks and that no real client calls. Answer them the way the real API answers a forbidden request on that resource. Expect method-fuzzing scanners to hit them anonymously (signals only).
+
 **Derive the path from real siblings.** Same prefix, version, pluralization, casing, ID placeholder style and action style. If real routes look like `/api/v2/workspaces/{workspaceId}/members`, a decoy looks like `/api/v2/workspaces/{workspaceId}/<sibling-resource>`, not `/admin/export`.
 
 **Avoid paths generic scanners probe** (`/admin`, `/.env`, `/debug`, `/actuator`, `/phpinfo`). They attract anonymous noise and look generic. An application-specific path is only found by someone who studied your app, which is exactly the person you want to catch.

@@ -124,7 +124,7 @@ If there is a frontend, read references/frontend-lures.md now.
 
 1. **Threat narrative.** In two or three sentences: who would attack this app, and what do they want? Examples: a B2B SaaS draws privilege escalation and cross-tenant access; a marketplace draws price and payout manipulation; a fintech app draws limit and balance tampering. Pick the 3–5 intents that matter.
 2. **Portfolio.** For a typical app, 4–8 tripwires in total:
-   - 1–3 decoy routes reached through frontend lures;
+   - 1–3 decoy routes, each reached through a frontend lure or inferred from the API's own conventions (references/backend-traps.md §1);
    - 1–3 honey fields on real write endpoints, each baited by a field in a real response or a hidden form value;
    - optionally, a version-skew decoy, a honey query parameter, or a protocol decoy (e.g. GraphQL in an app that doesn't use it);
    - at least one breadcrumb chain linking two of the above.

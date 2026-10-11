@@ -173,7 +173,14 @@ Before finishing, look at each lure the way an attacker would, and remove:
 - **Vue / Nuxt.** Composables and API service modules; route meta for role gates. Nuxt server routes are backend code.
 - **Angular.** Injectable services are classes, so unused methods survive. Route guards (`canActivate`) are the natural role gate.
 - **Svelte / SvelteKit.** Use client modules. Loaders (`+page.ts`) run on navigation, so never put a decoy call in a loader that real users trigger. `+page.server.ts` never ships.
-- **Server-rendered templates (Django, Jinja, ERB-style, Go templates, EJS).** Content inside a server-side role check (`{% if user.is_staff %}`) never reaches other users, so it is not a lure. Use what everyone receives: hidden inputs, data attributes, the app's static JavaScript, and response fields of JSON endpoints.
+- **Server-rendered templates (Django, Jinja, ERB-style, Go templates, EJS).** Content inside a server-side role check (`{% if user.is_staff %}`) never reaches other users, so it is not a lure. What everyone receives is hidden inputs, data attributes, the app's static JavaScript, and response fields of JSON endpoints.
+
+  Client-side lures are weak here. A script hook for markup no page ever renders (a submit handler for a form that never appears) is a dangling reference, and blind reviewers rated these 55–60%. So did hidden inputs that duplicate state the server already holds (the user's own shop ID, a single-currency site's currency).
+
+  Prefer, in order:
+  1. inferred decoys (backend-traps.md §1);
+  2. honey fields the real JSON already exposes (rated 5–25%);
+  3. fields the real forms already submit.
 - **Mobile apps.** Decompilers read endpoint strings out of the binary. The same patterns apply, but slow release cycles make lures harder to maintain.
 
 ## 8. Apps without a frontend, or a frontend you can't change
