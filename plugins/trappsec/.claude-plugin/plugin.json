@@ -1,0 +1,13 @@
+{
+  "name": "trappsec",
+  "version": "0.1.0",
+  "description": "Agent skills for adding trappsec deception (decoy routes, honey fields and frontend lures) to your own application.",
+  "author": {
+    "name": "trappsec-dev",
+    "url": "https://trappsec.dev"
+  },
+  "homepage": "https://trappsec.dev",
+  "repository": "https://github.com/trappsec-dev/trappsec",
+  "license": "MIT",
+  "keywords": ["security", "deception", "honeypot", "detection", "api"]
+}

@@ -1,0 +1,17 @@
+{
+  "name": "trappsec",
+  "owner": {
+    "name": "trappsec-dev",
+    "url": "https://trappsec.dev"
+  },
+  "description": "Claude Code plugins from the trappsec project.",
+  "plugins": [
+    {
+      "name": "trappsec",
+      "source": "./plugins/trappsec",
+      "description": "Agent skills for adding trappsec deception (decoy routes, honey fields and frontend lures) to your own application.",
+      "category": "security",
+      "tags": ["security", "deception", "honeypot", "detection", "api"]
+    }
+  ]
+}

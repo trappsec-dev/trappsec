@@ -37,6 +37,28 @@ trappsec can integrate directly into your existing workflows. Events are written
 
 ---
 
+### Let Your Coding Agent Do It
+
+The `add-deception` agent skill turns your coding agent into a deception engineer for your own app. It:
+
+* studies your API conventions and frontend code;
+* designs decoy routes and honey fields that match them;
+* plants lures in the frontend that look like your team wrote them;
+* verifies that every trap fires and that no real user can ever trigger one.
+
+**Claude Code:**
+
+```
+/plugin marketplace add trappsec-dev/trappsec
+/plugin install trappsec@trappsec
+```
+
+Then ask it to *add deception to this app*, or run `/trappsec:add-deception`.
+
+**Other agents** that support [Agent Skills](https://agentskills.io): copy [`plugins/trappsec/skills/add-deception`](plugins/trappsec/skills/add-deception) into your agent's skills directory.
+
+---
+
 ### Supported Frameworks
 
 <table>
