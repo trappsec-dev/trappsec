@@ -13,23 +13,27 @@ class FastAPIIntegration(StarletteIntegration):
     """
 
     def _build_trap_routes(self, traps):
-        from functools import partial
         from fastapi import Request, Response
         from fastapi.routing import APIRoute
 
-        async def endpoint(req: Request, trap):
-            try:
-                response_body, response_config = self.ts._trigger_trap_event(req, trap)
-            except Exception as e:
-                self.ts.logger.error("trappsec trap handling failed: %s", e)
-                response_body, response_config = self.ts._trap_fallback(trap)
+        # The trap is bound in a closure: any extra endpoint parameter (such as a
+        # partial's ``trap=``) would be filled by FastAPI from the query string.
+        def make_endpoint(trap):
+            async def endpoint(req: Request):
+                try:
+                    response_body, response_config = self.ts._trigger_trap_event(req, trap)
+                except Exception as e:
+                    self.ts.logger.error("trappsec trap handling failed: %s", e)
+                    response_body, response_config = self.ts._trap_fallback(trap)
 
-            return Response(response_body,
-                status_code=response_config["status_code"],
-                media_type=response_config["mime_type"])
+                return Response(response_body,
+                    status_code=response_config["status_code"],
+                    media_type=response_config["mime_type"])
+
+            return endpoint
 
         return [
-            APIRoute(trap["path"], partial(endpoint, trap=trap),
+            APIRoute(trap["path"], make_endpoint(trap),
                 methods=trap["methods"], name="trappsec_%d" % idx, include_in_schema=False)
             for idx, trap in enumerate(traps)
         ]

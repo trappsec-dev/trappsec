@@ -60,7 +60,19 @@ class ExpressIntegration {
             this.ts.identity.ip = r => r.ip || r.socket?.remoteAddress || r.connection?.remoteAddress || "0.0.0.0";
         }
 
-        this.ts.request.path = r => r.path;
+        // The full request path: req.path is relative to the router mount ('/me'
+        // inside a router mounted at '/api/v1'), and req.baseUrl is reset once the
+        // router is left, whereas req.originalUrl keeps the URL as received.
+        this.ts.request.path = r => {
+            if (typeof r.originalUrl !== 'string') return r.path;
+            const path = r.originalUrl.split(/[?#]/)[0];
+            if (path.startsWith('/')) return path;
+            try {
+                return new URL(path).pathname; // absolute-form request target
+            } catch (e) {
+                return r.path;
+            }
+        };
         this.ts.request.user_agent = r => (typeof r.get === 'function' ? r.get('User-Agent') : r.headers?.['user-agent']) || null;
         this.ts.request.method = r => r.method;
 
@@ -172,16 +184,23 @@ class ExpressIntegration {
             }
         }
 
-        const before = stack.length;
+        // Traps live in their own router, so they behave like routes of a mounted
+        // router: an OPTIONS request is answered by that router with an Allow header
+        // (unless the trap claims OPTIONS itself), never by a later app-level 404.
+        const trapRouter = this._newRouter();
         for (const decoy of traps) {
             const methods = trapMethods(decoy).map(m => m.toLowerCase());
             const handler = (req, res) => this._respondTrap(req, res, decoy);
             for (const method of TRAP_METHODS) {
-                if (methods.includes(method)) this.app[method](decoy.path, handler);
+                if (methods.includes(method)) trapRouter[method](decoy.path, handler);
             }
         }
+        for (const layer of trapRouter.stack) layer.__trappsecTrap = true;
 
-        // Express is order-based: move the freshly appended trap layers in front of the
+        const before = stack.length;
+        this.app.use(trapRouter);
+
+        // Express is order-based: move the freshly appended trap layer in front of the
         // first route layer (R2) but behind ordinary middleware such as auth and body
         // parsers (C6), so identify_user can see the user.
         const trapLayers = stack.splice(before);
@@ -190,6 +209,24 @@ class ExpressIntegration {
         let idx = stack.findIndex(l => this._containsRoute(l, seen));
         if (idx === -1) idx = stack.length;
         stack.splice(idx, 0, ...trapLayers);
+    }
+
+    // An empty router of the app router's own Express version and options. Express 4
+    // and 5 (the `router` package) both build a router as a callable function whose
+    // prototype holds the Router methods; express itself is not a dependency.
+    _newRouter() {
+        const appRouter = this._router(true);
+        function router(req, res, next) {
+            router.handle(req, res, next);
+        }
+        Object.setPrototypeOf(router, Object.getPrototypeOf(appRouter));
+        router.params = {};
+        if (Array.isArray(appRouter._params)) router._params = []; // Express 4
+        router.caseSensitive = appRouter.caseSensitive;
+        router.mergeParams = appRouter.mergeParams;
+        router.strict = appRouter.strict;
+        router.stack = [];
+        return router;
     }
 
     _respondTrap(req, res, decoy) {
@@ -243,6 +280,7 @@ class ExpressIntegration {
 
             // Sub-router: recurse with the watches that can live under this mount.
             if (isSubRouter(layer)) {
+                if (layer.__trappsecTrap) continue;
                 const inner = [];
                 for (const e of entries) {
                     const prefix = mountPrefix(layer, e.rel);

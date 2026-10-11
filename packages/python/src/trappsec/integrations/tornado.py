@@ -83,7 +83,7 @@ def _make_trap_handler(trap, methods, ts):
             self.set_status(cfg["status_code"])
             self.set_header("Content-Type", cfg["mime_type"])
             if not isinstance(body, (str, bytes)):
-                body = json.dumps(body, default=str)
+                body = json.dumps(body, default=str, separators=(",", ":"))
             self.write(body)
 
     for m in methods:

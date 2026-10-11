@@ -91,7 +91,7 @@ class SanicIntegration:
                     ts.logger.error("trappsec trap error: %s", e)
                     body, cfg = ts._trap_fallback(trap)
                 if not isinstance(body, (str, bytes)):
-                    body = json.dumps(body, default=str)
+                    body = json.dumps(body, default=str, separators=(",", ":"))
                 return HTTPResponse(body=body, status=cfg["status_code"], content_type=cfg["mime_type"])
 
             return endpoint
