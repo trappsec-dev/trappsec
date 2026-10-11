@@ -121,7 +121,9 @@ class SanicIntegration:
         warn_if_older(ts.logger, "sanic", (24, 6), "query honey fields may not be detected or stripped")
 
         if not self.ts.identity.ip:
-            self.ts.identity.ip = lambda r: r.remote_addr or "0.0.0.0"
+            # remote_addr is set only when Sanic trusts forwarded headers (PROXIES_COUNT /
+            # FORWARDED_SECRET); otherwise use the socket peer address.
+            self.ts.identity.ip = lambda r: r.remote_addr or r.ip or "0.0.0.0"
 
         self.ts.request.path = lambda r: r.path
         self.ts.request.user_agent = lambda r: r.headers.get("user-agent", "unknown")

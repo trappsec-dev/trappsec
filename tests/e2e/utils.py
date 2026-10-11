@@ -135,7 +135,8 @@ def check_event_shape(event, user_agent):
     assert (event["type"] == "alert") == (event["user"] is not None)
     assert isinstance(event["timestamp"], (int, float)) and abs(time.time() - event["timestamp"]) < 120
     assert event["user_agent"] == user_agent
-    assert isinstance(event["ip"], str) and event["ip"]
+    # The suite connects from loopback and sends no X-Real-IP, so every example must record that address.
+    assert event["ip"] in ("127.0.0.1", "::ffff:127.0.0.1", "::1"), f"ip {event['ip']!r} is not the client address"
     assert isinstance(event["method"], str) and event["method"].isupper()
     assert isinstance(event["path"], str) and event["path"].startswith("/")
     for f in event.get("found_fields") or []:

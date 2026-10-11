@@ -42,7 +42,7 @@ ts.identify_user(lambda r: {
     "user": r.headers.get("x-user-id"),
     "role": r.headers.get("x-user-role")
 })
-ts.override_source_ip(lambda r: r.headers.get("x-real-ip", r.remote_addr or "0.0.0.0"))
+ts.override_source_ip(lambda r: r.headers.get("x-real-ip", r.remote_addr or r.ip or "0.0.0.0"))
 
 
 @app.post("/auth/register")

@@ -7,6 +7,7 @@ import (
 	"io"
 	"log"
 	"math/rand"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -181,6 +182,10 @@ func main() {
 		ip := r.Header.Get("x-real-ip")
 		if ip != "" {
 			return ip
+		}
+		// RemoteAddr is "host:port"; record the host only.
+		if host, _, err := net.SplitHostPort(r.RemoteAddr); err == nil {
+			return host
 		}
 		return r.RemoteAddr
 	})
