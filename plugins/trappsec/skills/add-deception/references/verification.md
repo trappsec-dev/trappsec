@@ -74,6 +74,15 @@ Pass every distinctive string a lure depends on: the decoy path (or its static p
 - **HIGH findings.** A revealing word near a lure, or trappsec mentioned anywhere in client files. Fix them. LOW findings (the same words far from any lure, often inside libraries such as focus-trap) are counted but usually harmless.
 - **Source maps.** If maps are present, the report shows each lure's original source file and any comments next to it, as an attacker holding the maps would see them.
 
+For server-rendered apps, scan what browsers receive, not the raw templates. Template comments (`{# #}`, `{% comment %}`, `<%# %>`) never ship, while server-side role checks decide who sees what. So save the rendered pages as each kind of user (anonymous, customer, staff...) into a directory, then scan it together with the static assets:
+
+```bash
+mkdir -p /tmp/rendered
+curl -s -b "$COOKIE" "http://localhost:$PORT/checkout" > /tmp/rendered/customer_checkout.html
+# ...one file per page and user type...
+node ${CLAUDE_SKILL_DIR}/scripts/scan_bundle.mjs --dir /tmp/rendered --dir static --lure '<string>'
+```
+
 If the gate can be satisfied locally (flipping the flag in devtools, a local-only role), also exercise the gated UI by hand and confirm the decoy fires from the browser.
 
 ## 5. False-positive audit
