@@ -310,3 +310,109 @@ def test_concurrent_first_requests_bootstrap_once(env):
     srv.server_close()
     assert codes == [401] * 24
     assert len([e for e in cap.events if e["event"] == "trappsec.trap_hit"]) == 24
+
+
+def test_trap_with_path_params(env):
+    h, s, cap = env()
+    s.trap("/users/<id>/secret").methods("GET")
+    s.trap("/dump/<path:p>").methods("GET")
+    c = client(h)
+    assert c.get("/users/7/secret").status_code == 401
+    assert c.get("/dump/a/b").status_code == 401
+    assert len([e for e in cap.events if e["event"] == "trappsec.trap_hit"]) == 2
+
+
+@pytest.mark.parametrize("conflicting", [
+    lambda: __import__("django.urls", fromlist=["re_path"]).re_path(r"^legacy$", items),
+    lambda: path("legacy", items),
+    lambda: path("legacy/<int:pk>", items),
+])
+def test_trap_duplicate_detected_via_url_resolution(env, conflicting):
+    h, s, cap = env(urlpatterns=[conflicting()])
+    s.trap("/legacy" if "pk" not in str(conflicting()) else "/legacy/5")
+    with pytest.raises(RuntimeError, match="duplicates"):
+        s.bootstrap()
+
+
+def test_trap_duplicate_detected_through_include(env):
+    from django.urls import include
+
+    h, s, cap = env(urlpatterns=[path("api/", include([path("v1/<int:pk>", items)]))])
+    s.trap("/api/v1/3")
+    with pytest.raises(RuntimeError, match="duplicates"):
+        s.bootstrap()
+
+
+def test_wildcard_route_is_not_a_duplicate(env):
+    h, s, cap = env(urlpatterns=[path("<slug:slug>", items)])
+    s.trap("/admin")
+    assert client(h).get("/admin").status_code == 401
+
+
+def test_multipart_body_readable_after_post_is_parsed(env):
+    @csrf_exempt
+    def hashing(request):
+        return JsonResponse({"post": sorted(request.POST), "len": len(request.body)})
+
+    h, s, cap = env(urlpatterns=[path("up", hashing)])
+    s.watch("/up").body("secret")
+    r = client(h).post("/up", data={"secret": "1", "x": "2", "f": (io.BytesIO(b"hi"), "a.txt")})
+    assert r.status_code == 200
+    assert r.get_json()["post"] == ["x"] and r.get_json()["len"] > 0
+    assert len(watch_events(cap)) == 1
+
+
+def test_single_occurrence_scalar_for_list_default(env):
+    h, s, cap = env()
+    s.watch("/items").query("role", default=["1"]).query("mode", default="1")
+    client(h).get("/items?role=1&mode=1")
+    assert [f["field"] for f in watch_events(cap)[0]["found_fields"]] == ["role"]
+
+
+def test_asgi_handler_with_watches_and_traps(env):
+    import asyncio
+    from django.core.handlers.asgi import ASGIHandler
+
+    name = "urlconf_%s" % uuid.uuid4().hex
+    mod = types.ModuleType(name)
+    mod.urlpatterns = [path("items", items)]
+    sys.modules[name] = mod
+    ctx = override_settings(ROOT_URLCONF=name)
+    ctx.enable()
+    clear_url_caches()
+    try:
+        handler = ASGIHandler()
+        s = Sentry(handler, "svc", "test")
+        cap = Capture()
+        s._handlers.append(cap)
+        s.trap("/admin/debug")
+        s.watch("/items").query("debug")
+
+        def call(method, target, query=b""):
+            sent, msgs = [], [{"type": "http.request", "body": b"", "more_body": False}]
+
+            async def receive():
+                if msgs:
+                    return msgs.pop(0)
+                await asyncio.sleep(0.2)  # let the response finish, then disconnect
+                return {"type": "http.disconnect"}
+
+            async def send(message):
+                sent.append(message)
+
+            scope = {"type": "http", "asgi": {"version": "3.0"}, "http_version": "1.1",
+                     "method": method, "scheme": "http", "path": target, "raw_path": target.encode(),
+                     "query_string": query, "root_path": "", "headers": [(b"host", b"testserver")],
+                     "client": ("1.2.3.4", 1), "server": ("testserver", 80)}
+            asyncio.run(handler(scope, receive, send))
+            status = next(m["status"] for m in sent if m["type"] == "http.response.start")
+            body = b"".join(m.get("body", b"") for m in sent if m["type"] == "http.response.body")
+            return status, body
+
+        assert call("GET", "/admin/debug")[0] == 401
+        status, body = call("GET", "/items", b"debug=1&x=2")
+        assert status == 200 and json.loads(body)["get"] == {"x": ["2"]}
+        assert len(watch_events(cap)) == 1
+    finally:
+        ctx.disable()
+        clear_url_caches()

@@ -19,7 +19,10 @@
 // stored with c.Set by app middleware are not visible to it; headers and cookies
 // are. Install trappsec first to get full middleware context. Routes added to
 // a group created before InstallSentry never get the watch middleware either;
-// App.ServeHTTP inspects them the same way, so they are covered too.
+// App.ServeHTTP inspects them the same way, so they are covered too. Which
+// routes lack the middleware is decided once, at bootstrap, from the engine's
+// route table, so every request (including the first) is inspected in exactly
+// one place, and an app with no such routes pays no per-request routing cost.
 package trappsecgin
 
 import (
@@ -28,12 +31,14 @@ import (
 	"github.com/gin-gonic/gin"
 	core "github.com/trappsec-dev/trappsec/packages/go"
 	"github.com/trappsec-dev/trappsec/packages/go/internal/adapter"
+	"golang.org/x/net/http2"
+	"golang.org/x/net/http2/h2c"
 	"net"
 	"net/http"
 	"os"
+	"reflect"
 	"strings"
 	"sync"
-	"sync/atomic"
 )
 
 // Re-export core types as aliases so callers need only one import.
@@ -82,39 +87,8 @@ func InstallSentry(engine *gin.Engine, service, environment string) *App {
 // through (app.Run*, or app as an http.Handler). Traps and watches only become
 // active through the returned App.
 func Use(s *core.Sentry, engine *gin.Engine) *App {
-	in := &ginIntegration{ts: s, engine: engine, preInstall: map[string]bool{}}
-	for _, ri := range engine.Routes() {
-		in.preInstall[ri.Method+" "+ri.Path] = true
-	}
-
-	if s.Identity.IP == nil {
-		s.Identity.IP = defaultIP
-	}
-
-	s.Request.Path = func(req any) string {
-		if r := requestOf(req); r != nil {
-			return r.URL.Path
-		}
-		return ""
-	}
-	s.Request.UserAgent = func(req any) string {
-		if r := requestOf(req); r != nil {
-			return r.UserAgent()
-		}
-		return ""
-	}
-	s.Request.Method = func(req any) string {
-		if r := requestOf(req); r != nil {
-			return r.Method
-		}
-		return ""
-	}
-	s.Request.Context = func(req any) context.Context {
-		if r := requestOf(req); r != nil {
-			return r.Context()
-		}
-		return context.Background()
-	}
+	in := &ginIntegration{ts: s, engine: engine}
+	adapter.InstallRequestAccessors(s, requestOf)
 
 	adapter.SetBodyResolver(s, func(body any, req any) any {
 		if fn, ok := body.(func(*gin.Context) any); ok {
@@ -125,7 +99,9 @@ func Use(s *core.Sentry, engine *gin.Engine) *App {
 		return body
 	})
 
-	engine.Use(in.watchMiddleware())
+	mw := in.watchMiddleware()
+	in.marker = reflect.ValueOf(mw).Pointer()
+	engine.Use(mw)
 
 	return &App{Sentry: s, Engine: engine, integration: in}
 }
@@ -142,69 +118,30 @@ func requestOf(req any) *http.Request {
 	return nil
 }
 
-// defaultIP returns the connection's RemoteAddr host. It deliberately ignores
-// X-Forwarded-For / X-Real-IP (spoofable); use OverrideSourceIP, or c.ClientIP()
-// with engine.SetTrustedProxies, if you sit behind a trusted proxy.
-func defaultIP(req any) string {
-	r := requestOf(req)
-	if r == nil {
-		return "0.0.0.0"
-	}
-	if host, _, err := net.SplitHostPort(r.RemoteAddr); err == nil {
-		return host
-	}
-	return r.RemoteAddr
-}
-
 type ginIntegration struct {
 	ts     *core.Sentry
 	engine *gin.Engine
 
-	watchIdx   map[string]core.WatchConfig
-	trapIdx    map[string]bool // "METHOD /pattern" of every trap route
-	preInstall map[string]bool // "METHOD /pattern" registered before InstallSentry
-	shadow     *gin.Engine     // matcher over all routes, for routes the middleware cannot reach
-	// covered records "METHOD /pattern" routes whose handler chain is known to
-	// include the watch middleware. Until the middleware has been seen on a
-	// route, ServeHTTP inspects it: a route added to a group created before
-	// InstallSentry never gets the middleware and so stays inspected there.
-	covered sync.Map
-	maxBody int64
-
-	done atomic.Bool
-	mu   sync.Mutex
-	err  any
+	watchIdx map[string]core.WatchConfig
+	trapIdx  map[string]bool // "METHOD /pattern" of every trap route
+	// uncovered holds "METHOD /pattern" of every watched route whose handler
+	// chain lacks the watch middleware (registered before InstallSentry, or on
+	// a group created before it). ServeHTTP inspects exactly those.
+	uncovered map[string]bool
+	shadow    *gin.Engine // matcher over all routes; nil when uncovered is empty
+	marker    uintptr     // code pointer of the watch middleware, to recognise it in a chain
+	maxBody   adapter.MaxBody
+	once      adapter.Once
 }
 
 // Bootstrap registers trap routes and builds the watch index. It is idempotent and
 // safe for concurrent use, and runs automatically on the first request and from
 // Run*. It panics (with a clear message) if a trap duplicates an existing route;
 // later calls repeat the same panic.
-func (a *App) Bootstrap() {
-	in := a.integration
-	if in.done.Load() {
-		if in.err != nil {
-			panic(in.err)
-		}
-		return
-	}
-	in.mu.Lock()
-	defer in.mu.Unlock()
-	if in.done.Load() {
-		if in.err != nil {
-			panic(in.err)
-		}
-		return
-	}
-	defer func() {
-		if p := recover(); p != nil {
-			in.err = p
-			in.done.Store(true)
-			panic(p)
-		}
-		in.done.Store(true)
-	}()
+func (a *App) Bootstrap() { a.integration.once.Do(a.install) }
 
+func (a *App) install() {
+	in := a.integration
 	idx := make(map[string]core.WatchConfig)
 	for _, w := range in.ts.Watches() {
 		idx[w.Path] = w
@@ -238,21 +175,64 @@ func (a *App) Bootstrap() {
 	}
 	in.trapIdx = trapIdx
 
-	if len(idx) > 0 {
-		in.shadow = in.buildShadow()
-	}
 	in.watchIdx = idx
 
-	routes := map[string]bool{}
-	for _, ri := range a.Engine.Routes() {
-		routes[ri.Path] = true
+	routes := a.Engine.Routes()
+	paths := make([]string, 0, len(routes))
+	for _, ri := range routes {
+		paths = append(paths, ri.Path)
 	}
-	for path := range idx {
-		if !routes[path] {
-			in.ts.Logger().Printf("trappsec: watch %s matches no registered route and will never fire "+
-				"(watch paths are full route patterns, including group prefixes, e.g. /api/users/:id)", path)
+	adapter.WarnUnmatchedWatches(in.ts, idx, paths)
+
+	// Decide, once, which watched routes the middleware cannot reach.
+	chains, known := in.scanChains(len(routes))
+	in.uncovered = map[string]bool{}
+	for _, ri := range routes {
+		key := ri.Method + " " + ri.Path
+		if _, ok := idx[ri.Path]; ok && !(known && chains[key]) {
+			in.uncovered[key] = true
 		}
 	}
+	if len(in.uncovered) > 0 {
+		in.shadow = in.buildShadow(routes)
+	}
+}
+
+// scanChains reports, for every route, whether its handler chain contains the
+// watch middleware. gin exposes only a route's last handler publicly, so this
+// reads the engine's route trees by reflection. known is false (and the caller
+// falls back to inspecting every watched route in ServeHTTP) if gin's internal
+// layout is not what this code expects.
+func (in *ginIntegration) scanChains(wantRoutes int) (chains map[string]bool, known bool) {
+	defer func() {
+		if recover() != nil {
+			chains, known = nil, false
+		}
+	}()
+	trees := reflect.ValueOf(in.engine).Elem().FieldByName("trees")
+	chains = map[string]bool{}
+	var walk func(method string, n reflect.Value)
+	walk = func(method string, n reflect.Value) {
+		n = n.Elem()
+		if h := n.FieldByName("handlers"); h.Len() > 0 {
+			has := false
+			for i := 0; i < h.Len(); i++ {
+				if h.Index(i).Pointer() == in.marker {
+					has = true
+				}
+			}
+			chains[method+" "+n.FieldByName("fullPath").String()] = has
+		}
+		ch := n.FieldByName("children")
+		for i := 0; i < ch.Len(); i++ {
+			walk(method, ch.Index(i))
+		}
+	}
+	for i := 0; i < trees.Len(); i++ {
+		t := trees.Index(i)
+		walk(t.FieldByName("method").String(), t.FieldByName("root"))
+	}
+	return chains, len(chains) == wantRoutes
 }
 
 // IsTrap reports whether the request targets a trap. Use it to let traps
@@ -281,16 +261,16 @@ func (a *App) IsTrap(c *gin.Context) bool {
 
 // SetMaxBodyBytes sets the largest request body that watch inspection buffers
 // (default 1 MiB). Larger bodies pass through intact but uninspected.
-func (a *App) SetMaxBodyBytes(n int64) { atomic.StoreInt64(&a.integration.maxBody, n) }
+func (a *App) SetMaxBodyBytes(n int64) { a.integration.maxBody.Set(n) }
 
 const patternHeader = "X-Trappsec-Pattern"
 
-var shadowMu sync.Mutex
-
 // buildShadow mirrors the engine's route table into a handler-less engine so the
 // matched route pattern can be resolved with gin's own matching rules before the
-// real engine dispatches.
-func (in *ginIntegration) buildShadow() *gin.Engine {
+// real engine dispatches. In gin debug mode the mirrored routes are echoed to the
+// log a second time: silencing that would mean swapping gin's global
+// DebugPrintRouteFunc, which races with other goroutines registering routes.
+func (in *ginIntegration) buildShadow(routes gin.RoutesInfo) *gin.Engine {
 	sh := gin.New()
 	e := in.engine
 	sh.RedirectTrailingSlash = e.RedirectTrailingSlash
@@ -299,23 +279,21 @@ func (in *ginIntegration) buildShadow() *gin.Engine {
 	sh.UseRawPath = e.UseRawPath
 	sh.UnescapePathValues = e.UnescapePathValues
 	sh.RemoveExtraSlash = e.RemoveExtraSlash
-	h := func(c *gin.Context) { c.Writer.Header().Set(patternHeader, c.FullPath()) }
-
-	shadowMu.Lock()
-	prev := gin.DebugPrintRouteFunc
-	gin.DebugPrintRouteFunc = func(string, string, string, int) {}
-	defer func() { gin.DebugPrintRouteFunc = prev; shadowMu.Unlock() }()
-	for _, ri := range e.Routes() {
-		sh.Handle(ri.Method, ri.Path, h)
+	for _, ri := range routes {
+		pattern := []string{ri.Path} // allocated once, so a match allocates nothing
+		sh.Handle(ri.Method, ri.Path, func(c *gin.Context) { c.Writer.Header()[patternHeader] = pattern })
 	}
 	return sh
 }
 
+// probeWriter receives the shadow engine's answer: the matched pattern in a header.
 type probeWriter struct{ h http.Header }
 
 func (p *probeWriter) Header() http.Header         { return p.h }
 func (p *probeWriter) Write(b []byte) (int, error) { return len(b), nil }
 func (p *probeWriter) WriteHeader(int)             {}
+
+var probePool = sync.Pool{New: func() any { return &probeWriter{h: http.Header{}} }}
 
 // ginTrapHandler returns a Gin handler for a trap route.
 func ginTrapHandler(ts *core.Sentry, trap core.TrapConfig) gin.HandlerFunc {
@@ -334,14 +312,16 @@ func (a *App) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	a.Bootstrap()
 	in := a.integration
 	if in.shadow != nil {
-		pw := &probeWriter{h: http.Header{}}
+		pw := probePool.Get().(*probeWriter)
 		in.shadow.ServeHTTP(pw, r)
-		if pat := pw.h.Get(patternHeader); pat != "" {
-			key := r.Method + " " + pat
-			if watch, ok := in.watchIdx[pat]; ok && (in.preInstall[key] || !in.isCovered(key)) {
+		pat := pw.h.Get(patternHeader)
+		clear(pw.h)
+		probePool.Put(pw)
+		if pat != "" {
+			if watch, ok := in.watchIdx[pat]; ok && in.uncovered[r.Method+" "+pat] {
 				c := gin.CreateTestContextOnly(&probeWriter{h: http.Header{}}, in.engine)
 				c.Request = r
-				adapter.InspectWatch(in.ts, r, c, watch, atomic.LoadInt64(&in.maxBody))
+				adapter.InspectWatch(in.ts, r, c, watch, in.maxBody.Get())
 				r = r.WithContext(context.WithValue(r.Context(), inspectedKey{}, true))
 			}
 		}
@@ -349,9 +329,15 @@ func (a *App) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	a.Engine.ServeHTTP(w, r)
 }
 
-func (in *ginIntegration) isCovered(key string) bool {
-	_, ok := in.covered.Load(key)
-	return ok
+// Handler returns the http.Handler to serve: the App itself, wrapped for
+// HTTP/2 cleartext when the engine's UseH2C is set (as gin's own Handler does).
+// Unlike the promoted Engine.Handler it never returns the bare engine, which
+// would bypass trappsec.
+func (a *App) Handler() http.Handler {
+	if !a.Engine.UseH2C {
+		return a
+	}
+	return h2c.NewHandler(a, &http2.Server{})
 }
 
 func resolveAddr(addr []string) string {
@@ -370,13 +356,13 @@ func resolveAddr(addr []string) string {
 // Run calls Bootstrap then starts the HTTP server (serving through the App).
 func (a *App) Run(addr ...string) error {
 	a.Bootstrap()
-	return http.ListenAndServe(resolveAddr(addr), a)
+	return http.ListenAndServe(resolveAddr(addr), a.Handler())
 }
 
 // RunTLS calls Bootstrap then starts an HTTPS server.
 func (a *App) RunTLS(addr, certFile, keyFile string) error {
 	a.Bootstrap()
-	return http.ListenAndServeTLS(addr, certFile, keyFile, a)
+	return http.ListenAndServeTLS(addr, certFile, keyFile, a.Handler())
 }
 
 // RunUnix calls Bootstrap then starts a Unix socket server.
@@ -389,7 +375,7 @@ func (a *App) RunUnix(file string) error {
 	}
 	defer l.Close()
 	defer os.Remove(file)
-	return http.Serve(l, a)
+	return http.Serve(l, a.Handler())
 }
 
 // RunFd calls Bootstrap then starts a server using a file descriptor.
@@ -401,32 +387,28 @@ func (a *App) RunFd(fd int) error {
 		return err
 	}
 	defer l.Close()
-	return http.Serve(l, a)
+	return http.Serve(l, a.Handler())
 }
 
 // RunListener calls Bootstrap then starts a server using a custom net.Listener.
 func (a *App) RunListener(listener net.Listener) error {
 	a.Bootstrap()
-	return http.Serve(listener, a)
+	return http.Serve(listener, a.Handler())
 }
 
 // watchMiddleware inspects requests for honey fields on watched routes registered
 // after InstallSentry. It runs after route matching so c.FullPath() carries the
-// route pattern (e.g. /users/:id) rather than the raw URL. Routes registered
-// before InstallSentry are handled by App.ServeHTTP instead.
+// route pattern (e.g. /users/:id) rather than the raw URL. Routes whose chain
+// lacks it (see ginIntegration.uncovered) are handled by App.ServeHTTP instead.
 func (in *ginIntegration) watchMiddleware() gin.HandlerFunc {
 	return func(c *gin.Context) {
-		if in.done.Load() && in.watchIdx != nil {
+		if in.once.Done() && in.watchIdx != nil {
 			path := c.FullPath()
 			if path == "" {
 				path = c.Request.URL.Path
 			}
-			key := c.Request.Method + " " + path
-			if watch, ok := in.watchIdx[path]; ok && !in.preInstall[key] {
-				in.covered.Store(key, true) // the middleware reaches this route from now on
-				if c.Request.Context().Value(inspectedKey{}) == nil {
-					adapter.InspectWatch(in.ts, c.Request, c, watch, atomic.LoadInt64(&in.maxBody))
-				}
+			if watch, ok := in.watchIdx[path]; ok && c.Request.Context().Value(inspectedKey{}) == nil {
+				adapter.InspectWatch(in.ts, c.Request, c, watch, in.maxBody.Get())
 			}
 		}
 		c.Next()

@@ -22,7 +22,7 @@ export interface TrapConfig {
 }
 
 export interface FieldRule {
-    default: any;
+    default: any | typeof NO_DEFAULT;
     intent: string | null;
 }
 
@@ -43,7 +43,7 @@ export interface FieldOptions {
 export class TrapBuilder {
     constructor(ts: any, path: string);
     methods(...args: string[]): this;
-    intent(intent: string): this;
+    intent(intent: string | null): this;
     respond(config?: ResponseConfig): this;
     if_unauthenticated(config?: ResponseConfig): this;
     build(): TrapConfig;
@@ -109,9 +109,16 @@ export interface IdentityResult {
     role?: string | null;
 }
 
+export interface Logger {
+    warn(...args: any[]): void;
+    error(...args: any[]): void;
+    info(...args: any[]): void;
+    log(...args: any[]): void;
+}
+
 export interface IdentityContext {
     ip: ((req: any) => string | null) | null;
-    auth: ((req: any) => IdentityResult | null) | null;
+    auth: ((req: any) => IdentityResult | null | undefined) | null;
 }
 
 export class Sentry {
@@ -121,6 +128,12 @@ export class Sentry {
         authenticated: ResolvedResponse;
         unauthenticated: ResolvedResponse;
     };
+
+    /** Receives warnings and errors; defaults to `console`. */
+    logger: Logger;
+    readonly service: string;
+    readonly environment: string;
+    readonly hostname: string;
 
     identity: IdentityContext;
     request: RequestContext;
@@ -141,7 +154,8 @@ export class Sentry {
     add_webhook(url: string, options?: WebhookOptions): this;
     add_otel(): this;
     add_slack(url: string, options?: { alerts_only?: boolean }): this;
-    identify_user(callback: (req: any) => IdentityResult | null): this;
+    /** Must be synchronous: a returned promise is ignored (treated as unauthenticated). */
+    identify_user(callback: (req: any) => IdentityResult | null | undefined): this;
     override_source_ip(callback: (req: any) => string | null): this;
     /** Emit a trappsec.rule_hit event. Never throws. */
     trigger(req: any, reason: string, options?: TriggerOptions): void;

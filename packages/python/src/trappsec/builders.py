@@ -25,6 +25,7 @@ class TrapBuilder:
 
     def methods(self, *args):
         self._methods = list(args)
+        self.ts._trap_index = None  # is_trap rebuilds its index
         return self
 
     def intent(self, intent: str):
@@ -96,6 +97,6 @@ class WatchBuilder:
     def build(self):
         return {
             "path": self.path,
-            "query_fields": self._query,
-            "body_fields": self._body
+            "query_fields": {k: dict(v) for k, v in self._query.items()},
+            "body_fields": {k: dict(v) for k, v in self._body.items()}
         }

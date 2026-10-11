@@ -29,86 +29,12 @@ Design notes
 import json
 import re
 import threading
-from urllib.parse import parse_qsl, urlencode
+from functools import lru_cache
 
-from . import _jsonbody
+from . import _formbody, _jsonbody
 from ._version import warn_if_older
 
 _PARAM_RE = re.compile(r"<([^:>]+):[^>]+>")
-_NAME_RE = re.compile(r';\s*name=(?:"([^"]*)"|([^;\s]*))', re.I)
-_FILENAME_RE = re.compile(r";\s*filename\*?=", re.I)
-
-
-def _media_type(content_type):
-    return (content_type or "").split(";")[0].strip().lower()
-
-
-def _group_pairs(pairs):
-    """[(k, v), ...] -> {k: scalar | [v, v, ...]} (lists only for repeated keys)."""
-    out = {}
-    for k, v in pairs:
-        if k in out:
-            if isinstance(out[k], list):
-                out[k].append(v)
-            else:
-                out[k] = [out[k], v]
-        else:
-            out[k] = v
-    return out
-
-
-def _multipart_boundary(content_type):
-    for param in (content_type or "").split(";")[1:]:
-        param = param.strip()
-        if param.lower().startswith("boundary="):
-            return param.split("=", 1)[1].strip().strip('"')
-    return None
-
-
-def _multipart_parts(body, boundary):
-    """Split a multipart body into (preamble, parts, tail); raw bytes are kept so
-    unrelated parts can be re-emitted byte-for-byte."""
-    delim = b"--" + boundary.encode("utf-8")
-    chunks = body.split(delim)
-    preamble, tail, parts = chunks[0], b"", []
-    for seg in chunks[1:]:
-        if seg.startswith(b"--"):
-            tail = seg
-            break
-        head, sep, rest = seg.partition(b"\r\n\r\n")
-        name, is_file = None, False
-        for line in head.split(b"\r\n"):
-            text = line.decode("latin1")
-            if text.lower().startswith("content-disposition"):
-                m = _NAME_RE.search(text)
-                if m:
-                    name = m.group(1) if m.group(1) is not None else m.group(2)
-                is_file = bool(_FILENAME_RE.search(text))
-        value = rest[:-2] if rest.endswith(b"\r\n") else rest
-        parts.append({"name": name, "is_file": is_file, "raw": seg, "value": value.decode("utf-8", "replace")})
-    return preamble, parts, tail or b"--\r\n"
-
-
-def _rebuild_multipart(preamble, parts, tail, boundary, drop):
-    delim = b"--" + boundary.encode("utf-8")
-    kept = [p["raw"] for p in parts if p["is_file"] or p["name"] not in drop]
-    return preamble + b"".join(delim + raw for raw in kept) + delim + tail
-
-
-def _detect_json(ts, obj, rules, req):
-    """Top-level object -> inspect; array -> inspect every object element; else skip."""
-    found, touched = [], False
-    if isinstance(obj, dict):
-        obj, mod, touched = ts._detect_honey_fields(obj, rules, req)
-        found.extend(mod or [])
-    elif isinstance(obj, list):
-        for i, el in enumerate(obj):
-            if isinstance(el, dict):
-                el, mod, t = ts._detect_honey_fields(el, rules, req)
-                obj[i] = el
-                found.extend(mod or [])
-                touched = touched or t
-    return obj, found, touched
 
 
 class SanicIntegration:
@@ -163,7 +89,7 @@ class SanicIntegration:
                     body, cfg = ts._trigger_trap_event(request, trap)
                 except Exception as e:  # C1: serve the plain decoy
                     ts.logger.error("trappsec trap error: %s", e)
-                    body, cfg = self._fallback_response()
+                    body, cfg = ts._trap_fallback(trap)
                 if not isinstance(body, (str, bytes)):
                     body = json.dumps(body, default=str)
                 return HTTPResponse(body=body, status=cfg["status_code"], content_type=cfg["mime_type"])
@@ -186,21 +112,12 @@ class SanicIntegration:
                     ) from e
                 raise
 
-    def _fallback_response(self):
-        cfg = dict(self.ts.default_responses.get("unauthenticated") or {})
-        cfg.setdefault("status_code", 401)
-        cfg.setdefault("mime_type", "application/json")
-        body = cfg.get("response_body", {})
-        if callable(body):
-            body = {}
-        if not isinstance(body, (str, bytes)):
-            body = json.dumps(body, default=str)
-        return body, cfg
-
     def setup_watches(self):
         self.watch_map = {self._normalize_route_pattern(w["path"]): w for w in self.ts.watches}
 
-    def _normalize_route_pattern(self, path):
+    @staticmethod
+    @lru_cache(maxsize=1024)
+    def _normalize_route_pattern(path):
         normalized = _PARAM_RE.sub(r"<\1>", str(path))
         if not normalized.startswith("/"):
             normalized = f"/{normalized}"
@@ -213,7 +130,7 @@ class SanicIntegration:
         route = getattr(request, "route", None)
         if route is None:
             return None  # 404: no route, nothing to watch (R1)
-        for attr in ("uri", "path", "pattern"):
+        for attr in ("uri", "path"):
             value = getattr(route, attr, None)
             if value:
                 watch = self.watch_map.get(self._normalize_route_pattern(value))
@@ -268,19 +185,18 @@ class SanicIntegration:
         qs = request.query_string
         if not qs:
             return []
-        pairs = parse_qsl(qs, keep_blank_values=True)
-        data, found, touched = self.ts._detect_honey_fields(_group_pairs(pairs), rules, request, source="query")
-        if touched:
-            new_qs = urlencode([(k, v) for k, v in pairs if k in data])
+        found, new_qs = _formbody.inspect_urlencoded(
+            self.ts, qs.encode("utf-8"), rules, request, source="query")
+        if new_qs is not None:
             self._set_query(request, new_qs)
-        return found or []
+        return found
 
     def _set_query(self, request, new_qs):
         from httptools import parse_url
 
         raw = request.raw_url
         path = raw.split(b"?", 1)[0]
-        new_raw = path + (b"?" + new_qs.encode("utf-8") if new_qs else b"")
+        new_raw = path + (b"?" + new_qs if new_qs else b"")
         request._parsed_url = parse_url(new_raw)  # private slot, see module docstring
         request.raw_url = new_raw
         # Drop derived caches so args / query_args / query_string are all rebuilt
@@ -293,7 +209,7 @@ class SanicIntegration:
         if not body:
             return []
         ctype = request.headers.get("content-type", "")
-        media = _media_type(ctype)
+        media = _jsonbody.media_type(ctype)
         found = []
 
         if media not in _jsonbody.FORM_MEDIA:
@@ -307,7 +223,7 @@ class SanicIntegration:
                 obj = _jsonbody.sniff_json(body)
                 if obj is None:
                     return []
-            obj, found, touched = _detect_json(self.ts, obj, rules, request)
+            obj, found, touched = self.ts._detect_honey_fields(obj, rules, request)
             if touched:
                 self._set_body(request, _jsonbody.serialize(obj))
                 ct = _jsonbody.fix_charset(ctype)
@@ -317,23 +233,13 @@ class SanicIntegration:
                     except Exception:
                         pass
                 request.parsed_json = None  # re-parsed lazily from the stripped body
-        elif media == "application/x-www-form-urlencoded":
-            pairs = parse_qsl(body.decode("utf-8", "replace"), keep_blank_values=True)
-            data, found, touched = self.ts._detect_honey_fields(_group_pairs(pairs), rules, request)
-            if touched:
-                self._set_body(request, urlencode([(k, v) for k, v in pairs if k in data]).encode("utf-8"))
-                request.parsed_form = None
-                request.parsed_files = None
-        elif media == "multipart/form-data":
-            boundary = _multipart_boundary(ctype)
-            if not boundary:
-                return []
-            preamble, parts, tail = _multipart_parts(body, boundary)
-            pairs = [(p["name"], p["value"]) for p in parts if p["name"] and not p["is_file"]]
-            data, found, touched = self.ts._detect_honey_fields(_group_pairs(pairs), rules, request)
-            if touched:
-                drop = {k for k, _ in pairs if k not in data}
-                self._set_body(request, _rebuild_multipart(preamble, parts, tail, boundary, drop))
+        else:
+            if media == "application/x-www-form-urlencoded":
+                found, new_body = _formbody.inspect_urlencoded(self.ts, body, rules, request)
+            else:
+                found, new_body = _formbody.inspect_multipart(self.ts, body, ctype, rules, request)
+            if new_body is not None:
+                self._set_body(request, new_body)
                 request.parsed_form = None
                 request.parsed_files = None
         return found or []

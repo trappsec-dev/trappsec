@@ -32,87 +32,38 @@ Design notes
 import json
 import re
 import threading
-from urllib.parse import parse_qsl, urlencode
 
-from . import _jsonbody
+from . import _formbody, _jsonbody
 
-_NAME_RE = re.compile(r';\s*name=(?:"([^"]*)"|([^;\s]*))', re.I)
-_FILENAME_RE = re.compile(r";\s*filename\*?=", re.I)
-
-
-def _media_type(content_type):
-    return (content_type or "").split(";")[0].strip().lower()
+class TrapConflictError(RuntimeError):
+    """A trap path+method exactly duplicates an existing application route."""
 
 
-def _group_pairs(pairs):
-    """[(k, v), ...] -> {k: scalar | [v, v, ...]} (lists only for repeated keys)."""
-    out = {}
-    for k, v in pairs:
-        if k in out:
-            if isinstance(out[k], list):
-                out[k].append(v)
-            else:
-                out[k] = [out[k], v]
-        else:
-            out[k] = v
-    return out
+_SEGMENT_PARAM_RES = (
+    re.compile(r"^:\w+$"),          # :id
+    re.compile(r"^\{[^}]*\}$"),     # {id}, {id:int}
+    re.compile(r"^<[^>]*>$"),        # <id>, <int:id>
+)
+_CATCH_ALL_RES = (
+    re.compile(r"^\*\w*$"),                  # *rest
+    re.compile(r"^\{[^}:]*(\.\.\.|:path)\}$"),  # {rest...}, {rest:path}
+    re.compile(r"^<path:[^>]*>$"),           # <path:rest>
+)
 
 
-def _multipart_boundary(content_type):
-    for param in (content_type or "").split(";")[1:]:
-        param = param.strip()
-        if param.lower().startswith("boundary="):
-            return param.split("=", 1)[1].strip().strip('"')
-    return None
+def _trap_pattern(path):
+    """Translate a trap path template into the regex Tornado's ``PathMatches`` expects:
+    parameter segments become a ``[^/]+`` group, a catch-all last segment ``.+``."""
+    segments = path.split("/")
+    for i, seg in enumerate(segments):
+        if i == len(segments) - 1 and any(r.match(seg) for r in _CATCH_ALL_RES):
+            segments[i] = "(.+)"
+        elif any(r.match(seg) for r in _SEGMENT_PARAM_RES):
+            segments[i] = "([^/]+)"
+    return "/".join(segments)
 
 
-def _multipart_parts(body, boundary):
-    """Split a multipart body into (preamble, parts, tail); raw bytes are kept so
-    unrelated parts can be re-emitted byte-for-byte."""
-    delim = b"--" + boundary.encode("utf-8")
-    chunks = body.split(delim)
-    preamble, tail, parts = chunks[0], b"", []
-    for seg in chunks[1:]:
-        if seg.startswith(b"--"):
-            tail = seg
-            break
-        head, sep, rest = seg.partition(b"\r\n\r\n")
-        name, is_file = None, False
-        for line in head.split(b"\r\n"):
-            text = line.decode("latin1")
-            if text.lower().startswith("content-disposition"):
-                m = _NAME_RE.search(text)
-                if m:
-                    name = m.group(1) if m.group(1) is not None else m.group(2)
-                is_file = bool(_FILENAME_RE.search(text))
-        value = rest[:-2] if rest.endswith(b"\r\n") else rest
-        parts.append({"name": name, "is_file": is_file, "raw": seg, "value": value.decode("utf-8", "replace")})
-    return preamble, parts, tail or b"--\r\n"
-
-
-def _rebuild_multipart(preamble, parts, tail, boundary, drop):
-    delim = b"--" + boundary.encode("utf-8")
-    kept = [p["raw"] for p in parts if p["is_file"] or p["name"] not in drop]
-    return preamble + b"".join(delim + raw for raw in kept) + delim + tail
-
-
-def _detect_json(ts, obj, rules, req):
-    """Top-level object -> inspect; array -> inspect every object element; else skip."""
-    found, touched = [], False
-    if isinstance(obj, dict):
-        obj, mod, touched = ts._detect_honey_fields(obj, rules, req)
-        found.extend(mod or [])
-    elif isinstance(obj, list):
-        for i, el in enumerate(obj):
-            if isinstance(el, dict):
-                el, mod, t = ts._detect_honey_fields(el, rules, req)
-                obj[i] = el
-                found.extend(mod or [])
-                touched = touched or t
-    return obj, found, touched
-
-
-def _make_trap_handler(trap, methods, ts, fallback):
+def _make_trap_handler(trap, methods, ts):
     """Factory that captures trap/methods/ts by value, avoiding the loop-variable closure bug."""
     import tornado.web
 
@@ -128,7 +79,7 @@ def _make_trap_handler(trap, methods, ts, fallback):
                 body, cfg = ts._trigger_trap_event(self.request, trap)
             except Exception as e:  # C1: serve the plain decoy
                 ts.logger.error("trappsec trap error: %s", e)
-                body, cfg = fallback()
+                body, cfg = ts._trap_fallback(trap)
             self.set_status(cfg["status_code"])
             self.set_header("Content-Type", cfg["mime_type"])
             if not isinstance(body, (str, bytes)):
@@ -149,12 +100,11 @@ class TornadoIntegration:
         self._class_rules = {}  # handler class -> [(matcher, watch), ...]
         self._lock = threading.RLock()
         self._bootstrapped = False
-        self._bootstrap_error = None
 
         if not self.ts.identity.ip:
             self.ts.identity.ip = lambda r: getattr(r, "remote_ip", None) or "0.0.0.0"
 
-        self.ts.request.path = lambda r: getattr(r, "path", getattr(r, "uri", "").split("?")[0])
+        self.ts.request.path = lambda r: r.path
         self.ts.request.user_agent = lambda r: r.headers.get("User-Agent", "unknown")
         self.ts.request.method = lambda r: getattr(r, "method", None)
 
@@ -163,17 +113,22 @@ class TornadoIntegration:
 
     # ------------------------------------------------------------------ setup
     def bootstrap(self):
-        """Install traps and watches. Public, idempotent and thread-safe."""
+        """Install traps and watches. Public, idempotent and thread-safe.
+
+        A trap conflict raises ``TrapConflictError`` on every call (nothing is installed
+        and the app is never left half-set-up); any other trap failure is logged and
+        watches are still set up."""
         with self._lock:
-            if not self._bootstrapped:
-                self._bootstrapped = True  # never half-install twice
-                try:
-                    self.inject_traps()
-                    self.setup_watches()
-                except Exception as e:
-                    self._bootstrap_error = e
-            if self._bootstrap_error is not None:
-                raise self._bootstrap_error
+            if self._bootstrapped:
+                return
+            try:
+                self.inject_traps()  # R10: traps before watches
+            except TrapConflictError:
+                raise
+            except Exception as e:
+                self.ts.logger.error("trappsec: trap installation failed: %s", e)
+            self.setup_watches()
+            self._bootstrapped = True
 
     def _leaf_rules(self, router=None, _seen=None):
         """Yield (handler_class, matcher) for every class-targeted rule, recursing into sub-routers."""
@@ -222,7 +177,8 @@ class TornadoIntegration:
         rules = []
         for idx, trap in enumerate(traps):
             methods = frozenset(m.upper() for m in trap["methods"])
-            probe = PathMatches(trap["path"])
+            pattern = _trap_pattern(trap["path"])
+            probe = PathMatches(pattern)
             restricted = False
             for cls, matcher in existing:
                 regex = getattr(matcher, "regex", None)
@@ -230,14 +186,14 @@ class TornadoIntegration:
                     continue
                 overlap = methods & self._handled_methods(cls)
                 if overlap:
-                    raise RuntimeError(
+                    raise TrapConflictError(
                         f"trappsec: trap {sorted(overlap)} {trap['path']} duplicates an existing "
                         f"application route ({cls.__name__}); refusing to shadow or replace it"
                     )
                 restricted = True
-            handler_cls = _make_trap_handler(trap, methods, self.ts, self._fallback_response)
+            handler_cls = _make_trap_handler(trap, methods, self.ts)
             handler_cls.__name__ = f"TrappsecTrapHandler{idx}"
-            matcher = MethodPathMatches(trap["path"], methods) if restricted else PathMatches(trap["path"])
+            matcher = MethodPathMatches(pattern, methods) if restricted else PathMatches(pattern)
             rules.append(Rule(matcher, handler_cls))
 
         # R2: Tornado checks host rules before the wildcard router that holds the
@@ -249,15 +205,6 @@ class TornadoIntegration:
         for r in new:
             self.app.default_router.rules.remove(r)
         self.app.default_router.rules[0:0] = new
-
-    def _fallback_response(self):
-        cfg = dict(self.ts.default_responses.get("unauthenticated") or {})
-        cfg.setdefault("status_code", 401)
-        cfg.setdefault("mime_type", "application/json")
-        body = cfg.get("response_body", {})
-        if callable(body):
-            body = {}
-        return body, cfg
 
     def setup_watches(self):
         self.watch_map = {w["path"]: w for w in self.ts.watches}
@@ -291,10 +238,7 @@ class TornadoIntegration:
 
         def find_handler(request, **kwargs):
             if not self._bootstrapped:
-                try:
-                    self.bootstrap()
-                except Exception as e:  # C1: the host app keeps serving
-                    self.ts.logger.error("trappsec: bootstrap failed: %s", e)
+                self.bootstrap()  # a trap conflict fails loud on every request
             delegate = original(request, **kwargs)
             if self._class_rules:
                 try:
@@ -358,16 +302,16 @@ class TornadoIntegration:
     def _inspect_query(self, request, rules):
         from tornado.escape import parse_qs_bytes
 
-        pairs = parse_qsl(request.query, keep_blank_values=True)
-        data, found, touched = self.ts._detect_honey_fields(_group_pairs(pairs), rules, request, source="query")
-        if touched:
-            new_qs = urlencode([(k, v) for k, v in pairs if k in data])
-            request.query = new_qs
-            request.uri = request.path + ("?" + new_qs if new_qs else "")
+        # Tornado decodes the query as latin-1, so this round-trips the original bytes.
+        found, new_qs = _formbody.inspect_urlencoded(
+            self.ts, request.query.encode("latin-1", "replace"), rules, request, source="query")
+        if new_qs is not None:
+            request.query = new_qs.decode("latin-1")
+            request.uri = request.path + ("?" + request.query if new_qs else "")
             request.query_arguments.clear()
-            request.query_arguments.update(parse_qs_bytes(new_qs, keep_blank_values=True))
+            request.query_arguments.update(parse_qs_bytes(request.query, keep_blank_values=True))
             self._rebuild_arguments(request)
-        return found or []
+        return found
 
     @staticmethod
     def _rebuild_arguments(request):
@@ -382,7 +326,7 @@ class TornadoIntegration:
     def _inspect_body(self, request, rules):
         body = request.body
         ctype = request.headers.get("Content-Type", "")
-        media = _media_type(ctype)
+        media = _jsonbody.media_type(ctype)
         found = []
 
         if media not in _jsonbody.FORM_MEDIA:
@@ -396,27 +340,19 @@ class TornadoIntegration:
                 obj = _jsonbody.sniff_json(body)
                 if obj is None:
                     return []
-            obj, found, touched = _detect_json(self.ts, obj, rules, request)
+            obj, found, touched = self.ts._detect_honey_fields(obj, rules, request)
             if touched:
                 self._set_body(request, _jsonbody.serialize(obj))
                 ct = _jsonbody.fix_charset(ctype)
                 if ct is not None:
                     request.headers["Content-Type"] = ct
-        elif media == "application/x-www-form-urlencoded":
-            pairs = parse_qsl(body.decode("utf-8", "replace"), keep_blank_values=True)
-            data, found, touched = self.ts._detect_honey_fields(_group_pairs(pairs), rules, request)
-            if touched:
-                self._set_body(request, urlencode([(k, v) for k, v in pairs if k in data]).encode("utf-8"))
-        elif media == "multipart/form-data":
-            boundary = _multipart_boundary(ctype)
-            if not boundary:
-                return []
-            preamble, parts, tail = _multipart_parts(body, boundary)
-            pairs = [(p["name"], p["value"]) for p in parts if p["name"] and not p["is_file"]]
-            data, found, touched = self.ts._detect_honey_fields(_group_pairs(pairs), rules, request)
-            if touched:
-                drop = {k for k, _ in pairs if k not in data}
-                self._set_body(request, _rebuild_multipart(preamble, parts, tail, boundary, drop))
+        else:
+            if media == "application/x-www-form-urlencoded":
+                found, new_body = _formbody.inspect_urlencoded(self.ts, body, rules, request)
+            else:
+                found, new_body = _formbody.inspect_multipart(self.ts, body, ctype, rules, request)
+            if new_body is not None:
+                self._set_body(request, new_body)
         return found or []
 
     def _set_body(self, request, new_body):

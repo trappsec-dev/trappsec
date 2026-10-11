@@ -244,3 +244,62 @@ def test_catch_all_route_does_not_shadow_trap(routes_first):
         assert c.get("/admin/backup").status_code == 401
         assert c.get("/other").json() == {"catchall": "other"}
     assert len([e for e in cap.events if e["event"] == "trappsec.trap_hit"]) == 1
+
+
+def test_watch_and_trap_match_path_params_converters_and_trailing_slash():
+    app = FastAPI()
+
+    @app.get("/u/{uid:int}")
+    def user(uid: int, k: Optional[str] = None):
+        return {"k": k}
+
+    @app.get("/f/{p:path}")
+    def files(p: str, k: Optional[str] = None):
+        return {"k": k}
+
+    router = APIRouter(prefix="/v1")
+
+    @router.get("/t/")
+    def slash(k: Optional[str] = None):
+        return {"k": k}
+
+    app.include_router(router)
+    sentry = Sentry(app, "svc", "test")
+    cap = Capture()
+    sentry._handlers.append(cap)
+    sentry.watch("/u/{uid}").query("debug")
+    sentry.watch("/f/{p}").query("debug")
+    sentry.watch("/v1/t").query("debug")
+    c = TestClient(app)
+    assert c.get("/u/5?debug=1&k=a").json() == {"k": "a"}
+    assert c.get("/f/a/b?debug=1&k=a").json() == {"k": "a"}
+    assert c.get("/v1/t/?debug=1&k=a").json() == {"k": "a"}
+    assert len(watch_events(cap)) == 3
+
+
+def test_trap_conflicts_with_path_param_route():
+    app = FastAPI()
+
+    @app.get("/u/{uid:int}")
+    def user(uid: int):
+        return {}
+
+    sentry = Sentry(app, "svc", "test")
+    sentry.trap("/u/{uid}").methods("GET")
+    with pytest.raises(RuntimeError, match="duplicates"):
+        sentry.bootstrap()
+
+
+def test_failing_trap_event_answers_with_the_traps_own_unauthenticated_response(monkeypatch):
+    from starlette.applications import Starlette
+    for app in (FastAPI(), Starlette()):
+        ts = Sentry(app, "svc", "test")
+        ts.trap("/decoy").methods("GET").if_unauthenticated(status=403, body={"no": 1})
+
+        def boom(*_a, **_k):
+            raise RuntimeError("emit failed")
+
+        monkeypatch.setattr(ts, "_trigger_trap_event", boom)
+        with TestClient(app) as client:
+            r = client.get("/decoy")
+        assert (r.status_code, r.json()) == (403, {"no": 1}), type(app).__name__

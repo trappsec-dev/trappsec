@@ -1,11 +1,17 @@
 import io
 import threading
+from urllib.parse import urlencode
 
 from . import _jsonbody
 
 
 class TrapConflictError(RuntimeError):
     """A trap path+method exactly duplicates an existing application route."""
+
+
+def _scalar_dict(multidict):
+    """MultiDict -> {k: scalar | [v, ...]} (lists only for repeated keys)."""
+    return {k: (v[0] if len(v) == 1 else v) for k, v in multidict.to_dict(flat=False).items()}
 
 
 class FlaskIntegration:
@@ -57,19 +63,23 @@ class FlaskIntegration:
         for decoy in traps:
             self._check_conflicts(decoy)
 
-        for idx, decoy in enumerate(traps):
-            def endpoint(d=decoy):
+        def make_endpoint(d):
+            # Path arguments (<id>, <path:p>) are accepted and ignored.
+            def endpoint(*_args, **_kwargs):
                 try:
                     response_body, response_config = self.ts._trigger_trap_event(request, d)
                 except Exception as e:
                     self.ts.logger.error("trappsec trap handling failed: %s", e)
-                    response_body, response_config = self._fallback(d)
+                    response_body, response_config = self.ts._trap_fallback(d)
 
                 return Response(
                     response_body,
                     status=response_config["status_code"],
                     mimetype=response_config["mime_type"])
+            return endpoint
 
+        for idx, decoy in enumerate(traps):
+            endpoint = make_endpoint(decoy)
             endpoint.__name__ = "trappsec_%d" % idx
             self.app.add_url_rule(decoy["path"], endpoint.__name__, endpoint, methods=decoy["methods"])
             self._trap_views.append(endpoint)
@@ -84,17 +94,6 @@ class FlaskIntegration:
         for view in self._trap_views:
             csrf.exempt(view)
         self._csrf_exempted.add(id(csrf))
-
-    @staticmethod
-    def _fallback(trap):
-        import json
-        cfg = trap["response.unauthenticated"]
-        body = cfg.get("response_body")
-        if callable(body):
-            body = {}
-        if not isinstance(body, (str, bytes)):
-            body = json.dumps(body, default=str)
-        return body, cfg
 
     # ----------------------------------------------------------------- watches
 
@@ -129,11 +128,15 @@ class FlaskIntegration:
         found_fields = []
 
         if query_fields and request.args:
-            q_dict = request.args.to_dict(flat=False)
+            q_dict = _scalar_dict(request.args)
             q_dict, mod, touched = self.ts._detect_honey_fields(q_dict, query_fields, request, source="query")
             found_fields.extend(mod)
             if touched:
                 request.args = ImmutableMultiDict(q_dict)
+                # Keep query_string / full_path / url consistent with the stripped args.
+                qs = urlencode(q_dict, doseq=True)
+                request.environ["QUERY_STRING"] = qs
+                request.query_string = qs.encode("latin-1")
 
         if body_fields:
             media = _jsonbody.media_type(request.content_type)
@@ -154,14 +157,14 @@ class FlaskIntegration:
                         self._replace_raw_body(request, data)
 
             if request.form:
-                form = request.form.to_dict(flat=False)
+                form = _scalar_dict(request.form)
                 form, mod, touched = self.ts._detect_honey_fields(form, body_fields, request, source="body")
                 found_fields.extend(mod)
                 if touched:
                     request.form = ImmutableMultiDict(form)
 
             if request.files:
-                files = request.files.to_dict(flat=False)
+                files = _scalar_dict(request.files)
                 files, mod, touched = self.ts._detect_honey_fields(files, body_fields, request, source="body")
                 found_fields.extend(mod)
                 if touched:

@@ -21,12 +21,10 @@ import (
 	"github.com/labstack/echo/v4"
 	core "github.com/trappsec-dev/trappsec/packages/go"
 	"github.com/trappsec-dev/trappsec/packages/go/internal/adapter"
+	"golang.org/x/net/http2"
 	"log"
-	"net"
 	"net/http"
 	"strings"
-	"sync"
-	"sync/atomic"
 )
 
 // Re-export core types as aliases so callers need only one import.
@@ -90,34 +88,7 @@ func InstallSentry(e *echo.Echo, service, environment string) *App {
 func Use(s *core.Sentry, e *echo.Echo) *App {
 	in := &echoIntegration{ts: s}
 
-	if s.Identity.IP == nil {
-		s.Identity.IP = defaultIP
-	}
-
-	s.Request.Path = func(req any) string {
-		if r := requestOf(req); r != nil {
-			return r.URL.Path
-		}
-		return ""
-	}
-	s.Request.UserAgent = func(req any) string {
-		if r := requestOf(req); r != nil {
-			return r.UserAgent()
-		}
-		return ""
-	}
-	s.Request.Method = func(req any) string {
-		if r := requestOf(req); r != nil {
-			return r.Method
-		}
-		return ""
-	}
-	s.Request.Context = func(req any) context.Context {
-		if r := requestOf(req); r != nil {
-			return r.Context()
-		}
-		return context.Background()
-	}
+	adapter.InstallRequestAccessors(s, requestOf)
 
 	adapter.SetBodyResolver(s, func(body any, req any) any {
 		if fn, ok := body.(func(echo.Context) any); ok {
@@ -143,29 +114,12 @@ func requestOf(req any) *http.Request {
 	return nil
 }
 
-// defaultIP returns the connection's RemoteAddr host. It deliberately ignores
-// X-Forwarded-For / X-Real-IP (spoofable; echo's RealIP trusts them by default).
-// Use OverrideSourceIP, e.g. with c.RealIP() plus e.IPExtractor, behind a trusted proxy.
-func defaultIP(req any) string {
-	r := requestOf(req)
-	if r == nil {
-		return "0.0.0.0"
-	}
-	if host, _, err := net.SplitHostPort(r.RemoteAddr); err == nil {
-		return host
-	}
-	return r.RemoteAddr
-}
-
 type echoIntegration struct {
 	ts       *core.Sentry
 	watchIdx map[string]core.WatchConfig
 	trapIdx  map[string]bool // "METHOD path" of every trap route
-	maxBody  int64
-
-	done atomic.Bool
-	mu   sync.Mutex
-	err  any
+	maxBody  adapter.MaxBody
+	once     adapter.Once
 }
 
 // Bootstrap registers trap routes and the watch middleware and builds the watch
@@ -173,31 +127,10 @@ type echoIntegration struct {
 // the first request and from Start*. It panics with a clear message if a trap
 // duplicates an existing route (instead of silently replacing it); later calls
 // repeat the same panic.
-func (a *App) Bootstrap() {
-	in := a.integration
-	if in.done.Load() {
-		if in.err != nil {
-			panic(in.err)
-		}
-		return
-	}
-	in.mu.Lock()
-	defer in.mu.Unlock()
-	if in.done.Load() {
-		if in.err != nil {
-			panic(in.err)
-		}
-		return
-	}
-	defer func() {
-		if p := recover(); p != nil {
-			in.err = p
-			in.done.Store(true)
-			panic(p)
-		}
-		in.done.Store(true)
-	}()
+func (a *App) Bootstrap() { a.integration.once.Do(a.install) }
 
+func (a *App) install() {
+	in := a.integration
 	idx := make(map[string]core.WatchConfig)
 	for _, w := range in.ts.Watches() {
 		idx[w.Path] = w
@@ -223,17 +156,15 @@ func (a *App) Bootstrap() {
 	}
 	in.watchIdx = idx
 	in.trapIdx = traps
-	routes := map[string]bool{}
+	paths := make([]string, 0, len(a.Echo.Routes()))
 	for _, ri := range a.Echo.Routes() {
-		routes[ri.Path] = true
+		paths = append(paths, ri.Path)
 	}
-	for path := range idx {
-		if !routes[path] {
-			in.ts.Logger().Printf("trappsec: watch %s matches no registered route and will never fire "+
-				"(watch paths are full route patterns, including group prefixes, e.g. /api/users/:id)", path)
-		}
-	}
+	adapter.WarnUnmatchedWatches(in.ts, idx, paths)
 	a.Echo.Use(in.watchMiddleware())
+	if len(idx) > 0 {
+		a.Echo.Pre(in.preMiddleware())
+	}
 }
 
 // IsTrap reports whether the request matched a trap route. Use it as the
@@ -258,7 +189,7 @@ func (a *App) IsTrap(c echo.Context) bool {
 
 // SetMaxBodyBytes sets the largest request body that watch inspection buffers
 // (default 1 MiB). Larger bodies pass through intact but uninspected.
-func (a *App) SetMaxBodyBytes(n int64) { atomic.StoreInt64(&a.integration.maxBody, n) }
+func (a *App) SetMaxBodyBytes(n int64) { a.integration.maxBody.Set(n) }
 
 // echoTrapHandler returns an Echo handler for a trap route.
 func echoTrapHandler(ts *core.Sentry, trap core.TrapConfig) echo.HandlerFunc {
@@ -278,6 +209,14 @@ func (a *App) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 func (a *App) Start(address string) error {
 	a.Bootstrap()
 	return a.Echo.Start(address)
+}
+
+// StartH2CServer calls Bootstrap then starts an HTTP/2 cleartext server. It
+// shadows Echo's promoted method, which would serve the bare Echo instance and
+// bypass trappsec.
+func (a *App) StartH2CServer(address string, h2s *http2.Server) error {
+	a.Bootstrap()
+	return a.Echo.StartH2CServer(address, h2s)
 }
 
 // StartTLS calls Bootstrap then starts an HTTPS server.
@@ -305,9 +244,32 @@ func (in *echoIntegration) watchMiddleware() echo.MiddlewareFunc {
 	return func(next echo.HandlerFunc) echo.HandlerFunc {
 		return func(c echo.Context) error {
 			if watch, ok := in.watchIdx[c.Path()]; ok {
-				adapter.InspectWatch(in.ts, c.Request(), c, watch, atomic.LoadInt64(&in.maxBody))
+				c.Set(inspectedMarker, true)
+				adapter.InspectWatch(in.ts, c.Request(), c, watch, in.maxBody.Get())
 			}
 			return next(c)
+		}
+	}
+}
+
+const inspectedMarker = "trappsec.inspected"
+
+// preMiddleware catches requests that an earlier middleware (auth, rate
+// limit, CSRF) rejected before the watch middleware ran. Echo has no
+// pre-routing route lookup short of a second match, and inspecting before
+// the Use chain would hide values that middleware stores with c.Set from
+// IdentifyUser, so the request is inspected after the chain returns instead:
+// by then routing has resolved c.Path() and the context carries whatever the
+// middleware stored. The response of such a request is already decided, so
+// there is nothing left to strip.
+func (in *echoIntegration) preMiddleware() echo.MiddlewareFunc {
+	return func(next echo.HandlerFunc) echo.HandlerFunc {
+		return func(c echo.Context) error {
+			err := next(c)
+			if watch, ok := in.watchIdx[c.Path()]; ok && c.Get(inspectedMarker) == nil {
+				adapter.InspectWatch(in.ts, c.Request(), c, watch, in.maxBody.Get())
+			}
+			return err
 		}
 	}
 }

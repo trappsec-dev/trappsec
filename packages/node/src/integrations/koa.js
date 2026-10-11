@@ -1,8 +1,8 @@
 'use strict';
 
 const {
-    normalizePath, isObject, buildWatchMap, hasFields, replaceInPlace, detect,
-    resolveTrap, emitWatch, warnOnce, BODY_METHODS, bodyLooksUnparsed
+    normalizePath, hasFields, buildWatchMap, trapMethods, inspectQuery, inspectBody,
+    finishPending, resolveTrap, emitWatch, bodyLooksUnparsed
 } = require('./_common');
 
 // Watch paths are the FULL registered pattern, including any router prefix
@@ -17,6 +17,8 @@ const {
 //  * traps: a dedicated router registered immediately before the first application
 //    router, i.e. after ordinary middleware (auth, body parsers) and before any
 //    application route, so traps are real routes that cannot be shadowed.
+// Only routers registered directly (app.use(router.routes())) are visible: a router
+// wrapped in koa-compose or koa-mount hides itself inside a closure.
 const PENDING = Symbol('trappsec.pendingWatch');
 
 class KoaIntegration {
@@ -55,7 +57,6 @@ class KoaIntegration {
             }
             return next();
         };
-        front.__trappsecFront = true;
         app.middleware.unshift(front);
     }
 
@@ -95,7 +96,7 @@ class KoaIntegration {
 
         // Fail loud on exact duplicates of real application routes.
         for (const decoy of traps) {
-            const methods = decoy.methods.map((m) => String(m).toUpperCase());
+            const methods = trapMethods(decoy);
             for (const router of routers) {
                 for (const layer of router.stack) {
                     if (!layer.methods || layer.methods.length === 0 || typeof layer.path !== 'string') continue;
@@ -113,7 +114,7 @@ class KoaIntegration {
         if (Router) {
             const trapRouter = new Router();
             for (const decoy of traps) {
-                const methods = [...new Set(decoy.methods.map((m) => String(m).toUpperCase()))];
+                const methods = trapMethods(decoy);
                 trapRouter.register(decoy.path, methods, [async (ctx) => this._respondTrap(ctx, decoy)]);
             }
             mw = trapRouter.routes();
@@ -139,8 +140,10 @@ class KoaIntegration {
             // Without a router, middleware and handlers are indistinguishable. Putting
             // traps first keeps them from being shadowed by catch-all handlers; the
             // trade-off is that identify_user only sees state set before trappsec.
-            this.ts.logger.warn('Trappsec: no @koa/router found; traps are installed ahead of all middleware, ' +
-                'so identify_user cannot see state set by your auth middleware. Use @koa/router for full support.');
+            this.ts.logger.warn('Trappsec: no @koa/router instance found directly in app.middleware (routers wrapped in ' +
+                'koa-compose or koa-mount are not seen); traps are installed ahead of all middleware, so identify_user ' +
+                'cannot see state set by your auth middleware. Register the router with app.use(router.routes()) ' +
+                'or install trappsec on the mounted app instead.');
             idx = 0;
         }
         mws.splice(idx, 0, mw);
@@ -162,8 +165,9 @@ class KoaIntegration {
         const watchMap = buildWatchMap(this.ts);
         const routers = this._routers();
         if (routers.length === 0) {
-            this.ts.logger.warn('Trappsec: no @koa/router instance found in app.middleware; watches cannot be installed. ' +
-                'Register your router (app.use(router.routes())) before the app starts.');
+            this.ts.logger.warn('Trappsec: no @koa/router instance found directly in app.middleware; watches cannot be installed. ' +
+                'Routers wrapped in koa-compose or koa-mount are not seen: register the router with ' +
+                'app.use(router.routes()) before the app starts, or install trappsec on the mounted app instead.');
             return;
         }
 
@@ -201,17 +205,8 @@ class KoaIntegration {
         try {
             const found = [];
 
-            if (hasFields(watch.query_fields)) {
-                const query = ctx.query;
-                if (isObject(query)) {
-                    const { found: f, data, touched } = detect(this.ts, query, watch.query_fields, ctx, 'query');
-                    found.push(...f);
-                    if (touched) {
-                        // Public setter: also rewrites ctx.querystring / ctx.url consistently.
-                        ctx.query = data;
-                    }
-                }
-            }
+            // Public setter: also rewrites ctx.querystring / ctx.url consistently.
+            found.push(...inspectQuery(this.ts, ctx, ctx.query, watch, (data) => { ctx.query = data; }));
 
             if (hasFields(watch.body_fields)) {
                 if (bodyLooksUnparsed(ctx.request.body, ctx.headers, ctx.request.rawBody !== undefined)) {
@@ -224,39 +219,26 @@ class KoaIntegration {
                     }
                     return;
                 }
-                found.push(...this._inspectBody(ctx, watch));
+                found.push(...inspectBody(this.ts, ctx, ctx.request.body, watch));
             }
 
             emitWatch(this.ts, ctx, found, 'Koa');
         } catch (e) {
             this.ts.logger.error('Trappsec error in Koa watch handler: ', e);
         }
-    }
-
-    _inspectBody(ctx, watch) {
-        const body = ctx.request.body;
-        if (!isObject(body)) return [];
-        const { found, data, touched } = detect(this.ts, body, watch.body_fields, ctx, 'body');
-        if (touched) replaceInPlace(body, data);
-        return found;
     }
 
     _finishInspection(ctx, responseEnded = false) {
         const pending = ctx[PENDING];
         delete ctx[PENDING];
-        try {
-            const found = pending.found;
-            if (ctx.request.body !== undefined) {
-                found.push(...this._inspectBody(ctx, pending.watch));
-            } else if (!responseEnded && BODY_METHODS.has(String(ctx.method).toUpperCase())) {
-                warnOnce(this.ts, this._warned, 'body:' + pending.watch.path,
-                    `Trappsec: body watches on ${pending.watch.path} cannot run because ctx.request.body is undefined. ` +
-                    'Register a body parser (e.g. koa-bodyparser) before your router or on the route.');
-            }
-            emitWatch(this.ts, ctx, found, 'Koa');
-        } catch (e) {
-            this.ts.logger.error('Trappsec error in Koa watch handler: ', e);
-        }
+        finishPending(this.ts, this._warned, ctx, pending, {
+            label: 'Koa',
+            body: ctx.request.body,
+            method: ctx.method,
+            responseEnded,
+            warning: `Trappsec: body watches on ${pending.watch.path} cannot run because ctx.request.body is undefined. ` +
+                'Register a body parser (e.g. koa-bodyparser) before your router or on the route.'
+        });
     }
 }
 

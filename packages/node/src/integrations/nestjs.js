@@ -21,11 +21,11 @@ class NestIntegration {
 
         const httpAdapter = app.getHttpAdapter();
         const instance = httpAdapter.getInstance ? httpAdapter.getInstance() : httpAdapter.instance;
-        this._adapterType = this._resolveAdapterType(httpAdapter, instance);
+        const adapterType = this._resolveAdapterType(httpAdapter, instance);
 
-        if (this._adapterType === 'fastify') {
+        if (adapterType === 'fastify') {
             this._delegate = new FastifyIntegration(ts, instance, { hookListen: false });
-        } else if (this._adapterType === 'express') {
+        } else if (adapterType === 'express') {
             this._delegate = new ExpressIntegration(ts, instance, { hookListen: false, finishAtHandler: false });
             this._installBodyPipe(app);
         } else {
@@ -63,7 +63,7 @@ class NestIntegration {
                     const watch = req[INSPECTED];
                     const fields = watch && watch.body_fields;
                     if (!fields) return value;
-                    const isHoney = (k) => Object.prototype.hasOwnProperty.call(fields, k);
+                    const isHoney = (k) => Object.hasOwn(fields, k);
                     if (typeof metadata.data === 'string' && metadata.data) {
                         return isHoney(metadata.data) ? undefined : value;
                     }
@@ -90,14 +90,6 @@ class NestIntegration {
     // Public and idempotent.
     bootstrap() {
         this._delegate.bootstrap();
-    }
-
-    inject_traps(...args) {
-        return this._delegate.inject_traps(...args);
-    }
-
-    setup_watches(...args) {
-        return this._delegate.setup_watches(...args);
     }
 }
 

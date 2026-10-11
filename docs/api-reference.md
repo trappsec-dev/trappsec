@@ -348,7 +348,9 @@ watch.Query("debug", trappsec.Default("false"), trappsec.Intent("Recon"))
 **Matching semantics** (identical for `query` and `body`):
 
 *   Values are compared with canonical matching: `1` equals `1.0`, `true` equals `"true"`, `5` equals `"5"`. Strings compare exactly. See [Event Reference](/events/#value-matching).
-*   Multi-valued fields (`?debug=a&debug=b`): a single value is compared as a scalar; with several values it is a violation unless **every** value equals the default. All occurrences are stripped before your handler runs.
+*   Multi-valued fields (`?debug=a&debug=b`): a field sent once is compared as a scalar in every framework; with several values it is a violation unless **every** value equals the default. All occurrences are stripped before your handler runs.
+*   Values nested more than 32 levels deep never match a default (so they always alert) and are recorded with the too-deep part replaced by `"<nested>"`.
+*   Calling `watch(path)` twice for the same path merges the fields; a later rule for the same field wins.
 *   List and object defaults (`default=[]`, `default={}`) are compared element by element and key by key with the same rules, so a request that sends exactly the default is not an alert.
 *   Every occurrence of a watched key is removed from the request your handler sees, so a honey field can never influence real logic.
 *   Go matches JSON keys case-insensitively (as `encoding/json` does); Python and Node are case-sensitive.
@@ -677,7 +679,7 @@ ts.Trigger(c, "Velocity limit exceeded",
 
 ## `is_trap` / `IsTrap`
 
-Returns whether a request targets a trap (method and path). Use it to let traps through middleware that would otherwise reject them before they can answer, typically CSRF protection: a POST trap that answers 403 is disabled and easy to fingerprint. Trap path segments written as `:id`, `{id}`, `<id>` (and `*rest` in Go) match any single segment. It never raises.
+Returns whether a request targets a trap (method and path). Use it to let traps through middleware that would otherwise reject them before they can answer, typically CSRF protection: a POST trap that answers 403 is disabled and easy to fingerprint. Trap path segments written as `:id`, `{id}`, `<id>` or `<int:id>` match any single segment; a last segment written `*rest`, `{rest...}`, `{rest:path}` or `<path:rest>` matches one or more remaining segments. The rules are shared by all three SDKs (`tests/conformance/is_trap.json`). It never raises, and it is a cached lookup, cheap enough to run on every request.
 
 <div class="lang-content" data-lang="python" markdown="1">
 
@@ -826,7 +828,7 @@ Webhook and Slack delivery is asynchronous. Events go to a bounded in-memory que
 
 ## Callback safety
 
-Every callback you provide (`identify_user`, `override_source_ip`, callable defaults, dynamic response bodies, webhook `template`) runs in a try/catch. On failure trappsec logs the error and falls back: identity becomes "no user", the IP falls back to the default extractor, a failing callable default is treated as "no default" (presence is a violation), a failing dynamic body becomes `{}`, and a failing webhook template drops that event for that handler (the raw event is never sent instead).
+Every callback you provide (`identify_user`, `override_source_ip`, callable defaults, dynamic response bodies, webhook `template`) must be synchronous and runs in a try/catch. A callback that returns a promise or coroutine is treated as failed: trappsec logs once that it must be synchronous (and, in Node, catches the promise so a rejection can never crash the process). On failure trappsec logs the error and falls back: identity becomes "no user", the IP falls back to the default extractor, a failing callable default is treated as "no default" (presence is a violation), a failing dynamic body becomes `{}`, and a failing webhook template drops that event for that handler (the raw event is never sent instead).
 
 ## Go request body limit
 

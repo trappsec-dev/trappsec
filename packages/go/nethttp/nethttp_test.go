@@ -796,3 +796,34 @@ func TestAppIsTrapUsesTheMatchedRoute(t *testing.T) {
 		t.Fatal("IsTrap(GET) on a POST-only trap")
 	}
 }
+
+// A request the mux answers with a redirect never reaches the route, so it is
+// not inspected and its query reaches the Location header untouched.
+func TestRedirectedRequestsAreNotInspected(t *testing.T) {
+	sn := &seen{}
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /w", sn.handler)
+	mux.HandleFunc("GET /dir/", sn.handler)
+	app := InstallSentry(mux, "svc", "test")
+	logs := &syncBuf{}
+	app.Logger().SetOutput(logs)
+	app.Watch("/w").Query("secret", core.NoDefault, "recon")
+	app.Watch("/dir/").Query("secret", core.NoDefault, "recon")
+
+	for _, target := range []string{"/a/../w?secret=1", "//w?secret=1", "/dir?secret=1"} {
+		rec := do(t, app, "GET", target, "", nil)
+		if rec.Code < 300 || rec.Code > 399 {
+			t.Fatalf("%s: expected redirect, got %d", target, rec.Code)
+		}
+		if loc := rec.Header().Get("Location"); !strings.Contains(loc, "secret=1") {
+			t.Fatalf("%s: query stripped before redirect: %q", target, loc)
+		}
+	}
+	if n := logs.count("trappsec.watch_hit"); n != 0 {
+		t.Fatalf("redirected requests inspected: %d watch_hit events", n)
+	}
+	if rec := do(t, app, "GET", "/w?secret=1", "", nil); rec.Code != 200 {
+		t.Fatalf("direct request: %d", rec.Code)
+	}
+	logs.waitEvent(t, "trappsec.watch_hit")
+}

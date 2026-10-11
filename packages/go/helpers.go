@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"math"
 	"mime"
 	"mime/multipart"
 	"net/http"
@@ -17,25 +16,6 @@ import (
 // DefaultMaxBodyBytes is the default limit on request bodies that watch
 // inspection will buffer. Larger bodies are passed through uninspected.
 const DefaultMaxBodyBytes int64 = 1 << 20
-
-// ParseMultipartFields parses the multipart form from r and returns the text
-// (non-file) fields as a map[string]any.
-//
-
-// RebuildMultipartBody rewrites r.Body as a multipart message holding only the
-// text keys present in sanitized plus the original file parts (with their
-// original part headers). Temp files created by ParseMultipartForm are removed.
-//
-
-// methodAllowed reports whether method is in the allowed list (case-insensitive).
-func methodAllowed(method string, allowed []string) bool {
-	for _, m := range allowed {
-		if strings.EqualFold(method, m) {
-			return true
-		}
-	}
-	return false
-}
 
 // queryToMap converts url.Values to a map[string]any suitable for detectHoneyFields.
 func queryToMap(vals url.Values) map[string]any {
@@ -52,37 +32,6 @@ func queryToMap(vals url.Values) map[string]any {
 		}
 	}
 	return out
-}
-
-// mapToQuery encodes a map[string]any back to a URL query string.
-func mapToQuery(data map[string]any) string {
-	vals := url.Values{}
-	for k, v := range data {
-		switch vv := v.(type) {
-		case []any:
-			for _, i := range vv {
-				vals.Add(k, toString(i))
-			}
-		case []string:
-			for _, i := range vv {
-				vals.Add(k, i)
-			}
-		default:
-			vals.Set(k, toString(vv))
-		}
-	}
-	return vals.Encode()
-}
-
-// readBody reads r.Body fully and restores it so downstream handlers can re-read
-// it. On a read error it returns nil and restores the body so the downstream
-// handler sees the same bytes followed by the same error.
-func readBody(r *http.Request) []byte {
-	data, ok := readBodyLimit(r, math.MaxInt64-1)
-	if !ok {
-		return nil
-	}
-	return data
 }
 
 // readBodyLimit reads at most limit bytes of r.Body. When the whole body was
@@ -131,15 +80,6 @@ func resetBody(r *http.Request, data []byte) {
 	}
 }
 
-// detect wraps Sentry.detectHoneyFields so adapters have one call site.
-func detect(s *Sentry, data map[string]any, rules map[string]WatchFieldRule, reqObj any, source string) (map[string]any, []FoundField, bool) {
-	sanitized, f, touched := s.detectHoneyFields(data, rules, reqObj, source)
-	for i := range f {
-		f[i].Type = source
-	}
-	return sanitized, f, touched
-}
-
 // inspectWatch applies a watch to the request: it detects and strips honey
 // fields from the query string and body (JSON, +json, form, multipart, or a
 // body that merely looks like JSON) and emits a watch event when violations are
@@ -160,7 +100,7 @@ func inspectWatch(s *Sentry, r *http.Request, reqObj any, watch WatchConfig, max
 	if len(watch.QueryFields) > 0 {
 		vals := r.URL.Query()
 		if len(vals) > 0 {
-			sanitized, f, touched := detect(s, queryToMap(vals), watch.QueryFields, reqObj, "query")
+			sanitized, f, touched := s.detectHoneyFields(queryToMap(vals), watch.QueryFields, reqObj, "query")
 			found = append(found, f...)
 			if touched {
 				pruneValues(vals, sanitized)
@@ -239,7 +179,7 @@ func inspectBody(s *Sentry, r *http.Request, reqObj any, rules map[string]WatchF
 		if len(vals) == 0 {
 			return nil
 		}
-		sanitized, f, touched := detect(s, queryToMap(vals), rules, reqObj, "body")
+		sanitized, f, touched := s.detectHoneyFields(queryToMap(vals), rules, reqObj, "body")
 		if touched {
 			pruneValues(vals, sanitized)
 			resetBody(r, []byte(vals.Encode()))
@@ -287,20 +227,9 @@ func inspectJSON(s *Sentry, r *http.Request, reqObj any, rules map[string]WatchF
 	var found []FoundField
 	touchedAny := false
 	for _, v := range values {
-		switch t := v.(type) {
-		case map[string]any:
-			_, f, touched := detect(s, t, rules, reqObj, "body")
-			found = append(found, f...)
-			touchedAny = touchedAny || touched
-		case []any:
-			for _, el := range t {
-				if m, ok := el.(map[string]any); ok {
-					_, f, touched := detect(s, m, rules, reqObj, "body")
-					found = append(found, f...)
-					touchedAny = touchedAny || touched
-				}
-			}
-		}
+		_, f, touched := s.detectHoneyFieldsAny(v, rules, reqObj, "body")
+		found = append(found, f...)
+		touchedAny = touchedAny || touched
 	}
 	if touchedAny {
 		var out bytes.Buffer
@@ -364,7 +293,7 @@ func inspectMultipart(s *Sentry, r *http.Request, reqObj any, rules map[string]W
 	if len(vals) == 0 {
 		return nil
 	}
-	sanitized, f, touched := detect(s, queryToMap(vals), rules, reqObj, "body")
+	sanitized, f, touched := s.detectHoneyFields(queryToMap(vals), rules, reqObj, "body")
 	if !touched {
 		return f
 	}
@@ -395,27 +324,4 @@ func inspectMultipart(s *Sentry, r *http.Request, reqObj any, rules map[string]W
 	}
 	r.MultipartForm, r.PostForm, r.Form = nil, nil, nil
 	return f
-}
-
-func toString(v any) string {
-	switch t := v.(type) {
-	case string:
-		return t
-	case int:
-		return fmt.Sprintf("%d", t)
-	case int64:
-		return fmt.Sprintf("%d", t)
-	case json.Number:
-		return t.String()
-	case float64:
-		return fmt.Sprintf("%v", t)
-	case bool:
-		if t {
-			return "true"
-		}
-		return "false"
-	default:
-		b, _ := json.Marshal(v)
-		return string(b)
-	}
 }

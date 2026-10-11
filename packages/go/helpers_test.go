@@ -222,25 +222,14 @@ func TestReadBodyLimitRestoresStream(t *testing.T) {
 	}
 }
 
-func TestQueryMapRoundTripAndMethodAllowed(t *testing.T) {
-	vals := url.Values{"a": {"1"}, "b": {"x", "y"}}
-	m := queryToMap(vals)
+func TestQueryToMap(t *testing.T) {
+	m := queryToMap(url.Values{"a": {"1"}, "b": {"x", "y"}})
 	if m["a"] != "1" {
 		t.Fatalf("single value should be a scalar: %#v", m["a"])
 	}
-	back, _ := url.ParseQuery(mapToQuery(m))
-	if !equalValues(back, vals) {
-		t.Fatalf("round trip = %v", back)
+	if l, ok := m["b"].([]any); !ok || len(l) != 2 {
+		t.Fatalf("repeated value should be a list: %#v", m["b"])
 	}
-	if !methodAllowed("post", []string{"GET", "POST"}) || methodAllowed("DELETE", []string{"GET"}) {
-		t.Fatal("methodAllowed is case-insensitive membership")
-	}
-}
-
-func equalValues(a, b url.Values) bool {
-	ja, _ := json.Marshal(a)
-	jb, _ := json.Marshal(b)
-	return bytes.Equal(ja, jb)
 }
 
 func TestInspectWatchDuplicateKeysDetectedAndStripped(t *testing.T) {

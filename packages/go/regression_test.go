@@ -396,13 +396,13 @@ func TestPanicInDefaultCallbackTreatedAsNoDefaultAndStillStrips(t *testing.T) {
 }
 
 func TestTrapBodyStringSentRawRegardlessOfMime(t *testing.T) {
-	if got := string(normalizePayload("application/json", "plain")); got != "plain" {
+	if got := string(normalizePayload("plain")); got != "plain" {
 		t.Fatalf("got %q", got)
 	}
-	if got := string(normalizePayload("text/html", map[string]any{"a": 1})); got != `{"a":1}` {
+	if got := string(normalizePayload(map[string]any{"a": 1})); got != `{"a":1}` {
 		t.Fatalf("got %q", got)
 	}
-	if got := string(normalizePayload("application/json", make(chan int))); got != "{}" {
+	if got := string(normalizePayload(make(chan int))); got != "{}" {
 		t.Fatalf("unmarshalable body should degrade to {}, got %q", got)
 	}
 }
@@ -910,5 +910,76 @@ func TestIsTrapMatchesMethodAndPathAndNeverPanics(t *testing.T) {
 	s.Request.Path = func(any) string { panic("boom") }
 	if s.IsTrap(r{"GET", "/admin/backup"}) {
 		t.Fatal("a panicking extractor must yield false")
+	}
+}
+
+func TestWatchesMergeSamePath(t *testing.T) {
+	s := NewSentry("svc", "t")
+	s.Watch("/p").Body("a", Default(1), Intent("first")).Query("q")
+	s.Watch("/other").Body("z")
+	s.Watch("/p").Body("a", Default(2), Intent("second")).Body("b")
+	ws := s.Watches()
+	if len(ws) != 2 || ws[0].Path != "/p" || ws[1].Path != "/other" {
+		t.Fatalf("watches = %+v", ws)
+	}
+	p := ws[0]
+	if len(p.BodyFields) != 2 || len(p.QueryFields) != 1 {
+		t.Fatalf("fields not unioned: %+v", p)
+	}
+	if r := p.BodyFields["a"]; r.Default != 2 || r.Intent != "second" {
+		t.Fatalf("later rule must win: %+v", r)
+	}
+}
+
+func TestNoDefaultIsASentinel(t *testing.T) {
+	if !isNoDefault(NoDefault) {
+		t.Fatal("NoDefault must be the sentinel")
+	}
+	if isNoDefault(struct{}{}) {
+		t.Fatal("an arbitrary struct{} is a real default, not NoDefault")
+	}
+}
+
+func TestWebhookNegativeHeartbeatIgnored(t *testing.T) {
+	lg, buf := quietLogger()
+	h, err := NewWebhookHandler("http://127.0.0.1:1", &WebhookOptions{HeartbeatInterval: -5, Logger: lg})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if h.hbDone != nil {
+		t.Fatal("no heartbeat goroutine for a negative interval")
+	}
+	if !strings.Contains(buf.String(), "HeartbeatInterval") {
+		t.Fatalf("expected a log line, got %q", buf.String())
+	}
+	ctx, cancel := ctxT(5 * time.Second)
+	defer cancel()
+	_ = h.Close(ctx)
+}
+
+func TestSafeValueDepthTypedMap(t *testing.T) {
+	var v any = 1
+	for i := 0; i < 40; i++ {
+		v = map[string][]any{"k": {v}}
+	}
+	got, _ := SafeValue(v).(string)
+	// 16 maps and 16 lists fill the 32 allowed levels; the 33rd is clipped.
+	want := strings.Repeat(`{"k":[`, 16) + `"<nested>"` + strings.Repeat(`]}`, 16)
+	if got != want {
+		t.Fatalf("got %q, want %q", got, want)
+	}
+}
+
+func TestIsTrapCatchAllNested(t *testing.T) {
+	s := NewSentry("svc", "t")
+	s.Trap("/files/*path").Methods("GET")
+	var method, path string
+	s.Request.Method = func(any) string { return method }
+	s.Request.Path = func(any) string { return path }
+	for p, want := range map[string]bool{"/files/a": true, "/files/a/b/c": true, "/files": false, "/files/a//b": false, "/other/a": false} {
+		method, path = "get", p
+		if got := s.IsTrap(nil); got != want {
+			t.Errorf("IsTrap(%q) = %v, want %v", p, got, want)
+		}
 	}
 }

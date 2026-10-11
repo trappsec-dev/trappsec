@@ -31,26 +31,68 @@ const MAX_IN_FLIGHT = 100;
 const MAX_RETRIES = 2;
 const WARN_INTERVAL_MS = 60000;
 
+const MAX_SERIALIZE_DEPTH = 1000;
+const MAX_TIMER_MS = 2 ** 31 - 1;
+
+// Orders strings by code point (as Python and Go do). Plain `<` compares UTF-16
+// units, which puts astral characters before U+E000..U+FFFF.
+const unitRank = (c) => (c >= 0xE000 ? c - 0x800 : c >= 0xD800 ? c + 0x2000 : c);
+function byCodePoint(a, b) {
+    const n = Math.min(a.length, b.length);
+    for (let i = 0; i < n; i++) {
+        const x = a.charCodeAt(i), y = b.charCodeAt(i);
+        if (x !== y) return unitRank(x) - unitRank(y);
+    }
+    return a.length - b.length;
+}
+
+// One JSON value as text, or undefined when JSON.stringify would omit it.
+// `ancestors` holds only the containers on the current path, so a shared
+// (non-cyclic) reference serializes normally and only a real cycle is cut.
+function serialize(v, key, ancestors, sortKeys, depth) {
+    if (v !== null && typeof v === 'object' && typeof v.toJSON === 'function') v = v.toJSON(key);
+    switch (typeof v) {
+        case 'bigint': return JSON.stringify(String(v));
+        case 'string': return JSON.stringify(v);
+        case 'boolean': return v ? 'true' : 'false';
+        case 'number': return Number.isFinite(v) ? String(v) : 'null';
+        case 'object': break;
+        default: return undefined; // undefined, function, symbol
+    }
+    if (v === null) return 'null';
+    if (v instanceof Number || v instanceof String || v instanceof Boolean) return serialize(v.valueOf(), key, ancestors, sortKeys, depth);
+    if (ancestors.has(v)) return '"[Circular]"';
+    if (depth >= MAX_SERIALIZE_DEPTH) return '"[Too deep]"';
+    ancestors.add(v);
+    try {
+        const parts = [];
+        if (Array.isArray(v)) {
+            for (let i = 0; i < v.length; i++) {
+                const e = serialize(v[i], String(i), ancestors, sortKeys, depth + 1);
+                parts.push(e === undefined ? 'null' : e);
+            }
+            return '[' + parts.join(',') + ']';
+        }
+        const keys = Object.keys(v);
+        if (sortKeys) keys.sort(byCodePoint);
+        for (const k of keys) {
+            const e = serialize(v[k], k, ancestors, sortKeys, depth + 1);
+            if (e !== undefined) parts.push(JSON.stringify(k) + ':' + e);
+        }
+        return '{' + parts.join(',') + '}';
+    } finally {
+        ancestors.delete(v);
+    }
+}
+
 /**
  * JSON.stringify that never throws (bigint, cycles, getters that throw).
- * With sortKeys, plain-object keys are emitted in sorted order at every level.
+ * With sortKeys, object keys are emitted in code point order at every level
+ * (integer-like keys included, as in Python and Go).
  */
 function safeStringify(value, { sortKeys = false } = {}) {
     try {
-        const seen = new WeakSet();
-        const out = JSON.stringify(value, (k, v) => {
-            if (typeof v === 'bigint') return String(v);
-            if (v !== null && typeof v === 'object') {
-                if (seen.has(v)) return "[Circular]";
-                seen.add(v);
-                if (sortKeys && !Array.isArray(v) && typeof v.toJSON !== 'function') {
-                    const sorted = {};
-                    for (const key of Object.keys(v).sort()) sorted[key] = v[key];
-                    return sorted;
-                }
-            }
-            return v;
-        });
+        const out = serialize(value, '', new Set(), sortKeys, 0);
         return out === undefined ? "null" : out;
     } catch (e) {
         try {
@@ -59,6 +101,25 @@ function safeStringify(value, { sortKeys = false } = {}) {
             return "{}";
         }
     }
+}
+
+/**
+ * Callbacks must be synchronous. When one returned a promise, swallow its
+ * rejection (an unhandled one would crash the process), warn once per `kind`
+ * (tracked in the `warned` Set) and return true so the caller uses its fallback.
+ */
+function isAsyncResult(result, logger, kind, warned) {
+    if (result === null || (typeof result !== 'object' && typeof result !== 'function') || typeof result.then !== 'function') {
+        return false;
+    }
+    try {
+        result.then(undefined, (e) => logger.error(`trappsec: async ${kind} callback rejected:`, e));
+    } catch (e) { /* a broken thenable must not matter */ }
+    if (!warned.has(kind)) {
+        warned.add(kind);
+        logger.error(`trappsec: the ${kind} callback must be synchronous; it returned a promise, which is ignored`);
+    }
+    return true;
 }
 
 class LogHandler {
@@ -74,12 +135,12 @@ class LogHandler {
 class WebhookHandler {
     constructor(url, { secret = null, headers = null, service = null, environment = null, heartbeat_interval = null, template = null, alerts_only = true } = {}) {
         this.url = url;
+        this.logger = console; // Default logger
         this.secret = secret;
         this.service = service;
         this.environment = environment;
         this.template = template;
         this.alerts_only = alerts_only;
-        this.logger = console; // Default logger
 
         this.headers = { "Content-Type": "application/json" };
         if (headers) {
@@ -91,10 +152,26 @@ class WebhookHandler {
         this._closed = false;
         this._lastWarn = 0;
         this._timer = null;
+        this._warnedAsync = new Set();
 
-        if (heartbeat_interval) {
-            this._timer = setInterval(() => this._heartbeat(), heartbeat_interval * 1000);
-            if (typeof this._timer.unref === 'function') this._timer.unref();
+        // A bad URL would otherwise fail (and be retried) on every event.
+        try {
+            new URL(url);
+        } catch (e) {
+            this.logger.error(`trappsec webhook: invalid URL ${JSON.stringify(url)}; events will be dropped`);
+            this._closed = true;
+            return;
+        }
+
+        if (heartbeat_interval !== null && heartbeat_interval !== undefined) {
+            if (typeof heartbeat_interval === 'number' && Number.isFinite(heartbeat_interval) && heartbeat_interval > 0) {
+                // setInterval treats anything above 2^31-1 ms as 1 ms.
+                const ms = Math.min(heartbeat_interval * 1000, MAX_TIMER_MS);
+                this._timer = setInterval(() => this._heartbeat(), ms);
+                if (typeof this._timer.unref === 'function') this._timer.unref();
+            } else {
+                this.logger.warn("trappsec webhook heartbeat_interval must be a positive number of seconds; heartbeat disabled");
+            }
         }
     }
 
@@ -106,6 +183,7 @@ class WebhookHandler {
         if (this.template) {
             try {
                 event = this.template(event);
+                if (isAsyncResult(event, this.logger, "webhook template", this._warnedAsync)) return;
             } catch (e) {
                 this.logger.error("Failed to apply webhook template, dropping event:", e);
                 return;
@@ -319,7 +397,7 @@ function buildSlackPayload(event, { service = null, environment = null } = {}) {
         }
     }
 
-    const details = compactLines([]);
+    const details = [];
     if (intent) details.push(kvLine("Intent", esc(truncate(stringify(intent), 120))));
     if (reason) details.push(kvLine("Reason", esc(truncate(stringify(reason), 120))));
     if (details.length > 0) {
@@ -425,4 +503,4 @@ class OTELHandler {
     }
 }
 
-module.exports = { LogHandler, WebhookHandler, SlackHandler, OTELHandler, safeStringify, otelValue, esc };
+module.exports = { LogHandler, WebhookHandler, SlackHandler, OTELHandler, safeStringify, isAsyncResult, otelValue, esc };

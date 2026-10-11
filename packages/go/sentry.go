@@ -23,7 +23,16 @@ const (
 	defaultCloseT = 5 * time.Second
 )
 
-var NoDefault = struct{}{}
+// maxDepth is how many nested containers values_match compares and SafeValue
+// keeps (a top-level list or object is depth 1), so a hostile request body
+// cannot exhaust the stack.
+const maxDepth = 32
+
+type noDefault struct{}
+
+// NoDefault, as a field's Default, means "any presence is a violation". It is
+// a sentinel: only this value counts, no other struct{}.
+var NoDefault any = noDefault{}
 
 type AuthContext struct {
 	User string
@@ -141,6 +150,10 @@ type Sentry struct {
 	service     string
 	environment string
 
+	// Identity and Request are assigned by adapters and by the application
+	// during setup. Assign the fields directly only before the Sentry serves
+	// requests; they are read under mu, and IdentifyUser, which writes under
+	// it, is the one setter that is safe to call while serving.
 	Identity IdentityContext
 	Request  RequestContext
 
@@ -423,25 +436,27 @@ func (s *Sentry) Traps() []TrapConfig {
 // Request extractors the adapter installed). Use it to skip middleware that
 // would otherwise reject a trap before it can answer, such as CSRF protection
 // (R22): a trap that answers 403 is both disabled and easy to fingerprint.
-// Path segments written as :id, {id}, <id> or *rest match any segment.
-// It never panics.
+// Path segments written as :id, {id}, <id>, <int:id> or *rest match one
+// segment; a last segment written *rest, {rest...}, {rest:path} or <path:rest>
+// matches one or more remaining segments. It never panics.
 func (s *Sentry) IsTrap(req any) (is bool) {
 	defer func() {
 		if recover() != nil {
 			is = false
 		}
 	}()
-	method := strings.ToUpper(s.Request.Method(req))
-	path := cleanTrapPath(s.Request.Path(req))
+	r := s.requestFuncs()
+	method := strings.ToUpper(r.Method(req))
+	path := cleanTrapPath(r.Path(req))
 	if method == "" || path == "" {
 		return false
 	}
 	idx := s.trapIndex()
-	if idx.exact[method+" "+path] {
+	if idx.exact[path][method] {
 		return true
 	}
 	for _, p := range idx.patterns {
-		if p.methods[method] && trapPathMatches(p.path, path) {
+		if p.methods[method] && p.matches(path) {
 			return true
 		}
 	}
@@ -451,13 +466,20 @@ func (s *Sentry) IsTrap(req any) (is bool) {
 // trapIndex is what IsTrap looks up: literal trap paths in a map, and only the
 // traps with parameter segments in a list to match.
 type trapIndex struct {
-	exact    map[string]bool // "METHOD /path"
+	exact    map[string]map[string]bool // path -> method set
 	patterns []trapPattern
 }
 
 type trapPattern struct {
 	methods map[string]bool
-	path    string
+	segs    []trapSeg
+}
+
+// trapSeg is one cleaned pattern segment (the leading "/" is dropped).
+type trapSeg struct {
+	lit      string
+	param    bool // matches one non-empty segment
+	catchAll bool // last segment only: matches one or more segments
 }
 
 // trapIndex returns the index for the current traps, rebuilding it only when
@@ -470,19 +492,22 @@ func (s *Sentry) trapIndex() *trapIndex {
 		s.mu.RUnlock()
 		return idx
 	}
-	idx = &trapIndex{exact: map[string]bool{}}
+	idx = &trapIndex{exact: map[string]map[string]bool{}}
 	for _, b := range s.traps {
 		path := cleanTrapPath(patternPathOnly(b.path))
-		if isParamPath(path) {
-			p := trapPattern{methods: map[string]bool{}, path: b.path}
-			for _, m := range b.methods {
-				p.methods[strings.ToUpper(m)] = true
-			}
-			idx.patterns = append(idx.patterns, p)
+		methods := make(map[string]bool, len(b.methods))
+		for _, m := range b.methods {
+			methods[strings.ToUpper(m)] = true
+		}
+		if segs, ok := parseTrapSegs(path); ok {
+			idx.patterns = append(idx.patterns, trapPattern{methods: methods, segs: segs})
 			continue
 		}
-		for _, m := range b.methods {
-			idx.exact[strings.ToUpper(m)+" "+path] = true
+		if idx.exact[path] == nil {
+			idx.exact[path] = map[string]bool{}
+		}
+		for m := range methods {
+			idx.exact[path][m] = true
 		}
 	}
 	s.mu.RUnlock()
@@ -494,15 +519,54 @@ func (s *Sentry) trapIndex() *trapIndex {
 	return idx
 }
 
-func isParamPath(path string) bool {
-	for _, seg := range strings.Split(path, "/") {
-		if strings.HasPrefix(seg, ":") || strings.HasPrefix(seg, "*") ||
-			(strings.HasPrefix(seg, "{") && strings.HasSuffix(seg, "}")) ||
-			(strings.HasPrefix(seg, "<") && strings.HasSuffix(seg, ">")) {
-			return true
+// parseTrapSegs splits a cleaned pattern path into segments. ok is false when
+// no segment is a parameter, i.e. the path is a literal.
+func parseTrapSegs(path string) (segs []trapSeg, ok bool) {
+	parts := strings.Split(strings.TrimPrefix(path, "/"), "/")
+	segs = make([]trapSeg, len(parts))
+	for i, seg := range parts {
+		switch {
+		case strings.HasPrefix(seg, ":"), strings.HasPrefix(seg, "*"),
+			strings.HasPrefix(seg, "{") && strings.HasSuffix(seg, "}"),
+			strings.HasPrefix(seg, "<") && strings.HasSuffix(seg, ">"):
+			segs[i].param = true
+			segs[i].catchAll = i == len(parts)-1 &&
+				(strings.HasPrefix(seg, "*") || strings.HasSuffix(seg, "...}") ||
+					strings.HasSuffix(seg, ":path}") || strings.HasPrefix(seg, "<path:"))
+			ok = true
+		default:
+			segs[i].lit = seg
 		}
 	}
-	return false
+	return segs, ok
+}
+
+// matches reports whether the cleaned request path fits the pattern. It walks
+// the path in place, without splitting it.
+func (p trapPattern) matches(path string) bool {
+	rest, more := strings.TrimPrefix(path, "/"), true
+	for _, seg := range p.segs {
+		if !more {
+			return false
+		}
+		if seg.catchAll {
+			return rest != "" && rest[0] != '/' && !strings.Contains(rest, "//")
+		}
+		part := rest
+		if i := strings.IndexByte(rest, '/'); i >= 0 {
+			part, rest = rest[:i], rest[i+1:]
+		} else {
+			more = false
+		}
+		if seg.param {
+			if part == "" {
+				return false
+			}
+		} else if part != seg.lit {
+			return false
+		}
+	}
+	return !more
 }
 
 func cleanTrapPath(p string) string {
@@ -521,26 +585,6 @@ func cleanTrapPath(p string) string {
 	return "/"
 }
 
-func trapPathMatches(pattern, path string) bool {
-	want := cleanTrapPath(patternPathOnly(pattern))
-	a, b := strings.Split(want, "/"), strings.Split(path, "/")
-	if len(a) != len(b) {
-		return false
-	}
-	for i, seg := range a {
-		if seg == b[i] {
-			continue
-		}
-		param := strings.HasPrefix(seg, ":") || strings.HasPrefix(seg, "*") ||
-			(strings.HasPrefix(seg, "{") && strings.HasSuffix(seg, "}")) ||
-			(strings.HasPrefix(seg, "<") && strings.HasSuffix(seg, ">"))
-		if !param || b[i] == "" {
-			return false
-		}
-	}
-	return true
-}
-
 // patternPathOnly drops a net/http "METHOD [HOST]" prefix from a pattern.
 func patternPathOnly(p string) string {
 	if i := strings.IndexByte(p, '/'); i > 0 {
@@ -549,13 +593,28 @@ func patternPathOnly(p string) string {
 	return p
 }
 
+// Watches returns the watch configurations, one per path: builders for the
+// same path are merged (union of fields, a later rule for the same field wins).
 func (s *Sentry) Watches() []WatchConfig {
 	s.mu.RLock()
 	builders := append([]*WatchBuilder(nil), s.watches...)
 	s.mu.RUnlock()
 	out := make([]WatchConfig, 0, len(builders))
+	at := map[string]int{}
 	for _, w := range builders {
-		out = append(out, w.Build())
+		cfg := w.Build()
+		i, seen := at[cfg.Path]
+		if !seen {
+			at[cfg.Path] = len(out)
+			out = append(out, cfg)
+			continue
+		}
+		for k, v := range cfg.QueryFields {
+			out[i].QueryFields[k] = v
+		}
+		for k, v := range cfg.BodyFields {
+			out[i].BodyFields[k] = v
+		}
 	}
 	return out
 }
@@ -654,7 +713,7 @@ func (s *Sentry) triggerTrapEvent(req any, trap TrapConfig) (payload []byte, cfg
 	s.emit(ctx, s.getContext(req))
 
 	bodyVal := s.resolveDynamicBody(cfg.Body, req)
-	payload = normalizePayload(cfg.MIMEType, bodyVal)
+	payload = normalizePayload(bodyVal)
 	return payload, cfg
 }
 
@@ -749,8 +808,7 @@ func (s *Sentry) detectHoneyFields(data map[string]any, rules map[string]WatchFi
 func (s *Sentry) detectHoneyFieldsAny(data any, rules map[string]WatchFieldRule, requestObj any, source ...string) (any, []FoundField, bool) {
 	switch v := data.(type) {
 	case map[string]any:
-		m, f, t := s.detectHoneyFields(v, rules, requestObj, source...)
-		return m, f, t
+		return s.detectHoneyFields(v, rules, requestObj, source...)
 	case []any:
 		var all []FoundField
 		touched := false
@@ -834,7 +892,7 @@ func (s *Sentry) callDefault(fn func(any) any, req any) (out any) {
 }
 
 func isNoDefault(v any) bool {
-	_, ok := v.(struct{})
+	_, ok := v.(noDefault)
 	return ok
 }
 
@@ -968,8 +1026,14 @@ func esNumber(f float64) string {
 	return sign + text
 }
 
-// valuesMatch implements C3 values_match(actual, expected).
+// valuesMatch implements C3 values_match(actual, expected). Values nested
+// deeper than maxDepth containers never match.
 func valuesMatch(actual, expected any) bool {
+	return valuesMatchAt(actual, expected, 0)
+}
+
+// valuesMatchAt compares with depth containers already entered.
+func valuesMatchAt(actual, expected any, depth int) bool {
 	if actual == nil || expected == nil {
 		return actual == nil && expected == nil
 	}
@@ -998,11 +1062,11 @@ func valuesMatch(actual, expected any) bool {
 	switch av := actual.(type) {
 	case []any:
 		if ev, ok := expected.([]any); ok {
-			if len(av) != len(ev) {
+			if depth >= maxDepth || len(av) != len(ev) {
 				return false
 			}
 			for i := range av {
-				if !valuesMatch(av[i], ev[i]) {
+				if !valuesMatchAt(av[i], ev[i], depth+1) {
 					return false
 				}
 			}
@@ -1010,12 +1074,12 @@ func valuesMatch(actual, expected any) bool {
 		}
 	case map[string]any:
 		if ev, ok := expected.(map[string]any); ok {
-			if len(av) != len(ev) {
+			if depth >= maxDepth || len(av) != len(ev) {
 				return false
 			}
 			for k, v := range av {
 				e, ok := ev[k]
-				if !ok || !valuesMatch(v, e) {
+				if !ok || !valuesMatchAt(v, e, depth+1) {
 					return false
 				}
 			}
@@ -1029,8 +1093,14 @@ func valuesMatch(actual, expected any) bool {
 // SafeValue sanitizes a value for inclusion in an event (C3 safe_value):
 // nil/bool/numbers pass through; strings are truncated to 1024 chars (plus
 // "..."); lists keep their first 20 elements, each sanitized; maps become a
-// JSON string truncated to 1024; anything else becomes "<TypeName>".
+// JSON string truncated to 1024; anything else becomes "<TypeName>". A list or
+// map nested deeper than maxDepth containers is replaced by "<nested>".
 func SafeValue(v any) any {
+	return safeValueAt(v, 0)
+}
+
+// safeValueAt is SafeValue with depth containers already entered.
+func safeValueAt(v any, depth int) any {
 	if v == nil {
 		return nil
 	}
@@ -1048,18 +1118,25 @@ func SafeValue(v any) any {
 	rv := reflect.ValueOf(v)
 	switch rv.Kind() {
 	case reflect.Slice, reflect.Array:
+		if depth >= maxDepth {
+			return nestedMarker
+		}
 		n := rv.Len()
 		if n > maxListItems {
 			n = maxListItems
 		}
 		out := make([]any, 0, n)
 		for i := 0; i < n; i++ {
-			out = append(out, SafeValue(rv.Index(i).Interface()))
+			out = append(out, safeValueAt(rv.Index(i).Interface(), depth+1))
 		}
 		return out
 	case reflect.Map:
 		// Same text as Python and Node: compact, sorted keys, no HTML escaping.
-		b, err := marshalJSON(v)
+		if depth >= maxDepth {
+			return nestedMarker
+		}
+		clipped := clipDepth(rv, depth)
+		b, err := marshalJSON(clipped)
 		if err != nil {
 			return truncEllipsis(fmt.Sprintf("%v", v))
 		}
@@ -1070,6 +1147,52 @@ func SafeValue(v any) any {
 		t = t.Elem()
 	}
 	return "<" + t.Name() + ">"
+}
+
+const nestedMarker = "<nested>"
+
+// clipDepth returns v (a map) with every list or map nested deeper than
+// maxDepth replaced by nestedMarker, ready to marshal. depth is the number of
+// containers enclosing v. Other values are returned as they are.
+func clipDepth(rv reflect.Value, depth int) any {
+	for rv.Kind() == reflect.Interface && !rv.IsNil() {
+		rv = rv.Elem()
+	}
+	switch rv.Kind() {
+	case reflect.Slice, reflect.Array:
+		if (rv.Kind() == reflect.Slice && rv.IsNil()) || rv.Type().Elem().Kind() == reflect.Uint8 {
+			return rv.Interface() // null / []byte: marshalled as they are
+		}
+		if depth >= maxDepth {
+			return nestedMarker
+		}
+		out := make([]any, rv.Len())
+		for i := range out {
+			out[i] = clipDepth(rv.Index(i), depth+1)
+		}
+		return out
+	case reflect.Map:
+		if rv.IsNil() {
+			return rv.Interface()
+		}
+		if depth >= maxDepth {
+			return nestedMarker
+		}
+		anyType := reflect.TypeOf((*any)(nil)).Elem()
+		out := reflect.MakeMapWithSize(reflect.MapOf(rv.Type().Key(), anyType), rv.Len())
+		for it := rv.MapRange(); it.Next(); {
+			val := reflect.Zero(anyType) // SetMapIndex(zero Value) would delete the key
+			if c := clipDepth(it.Value(), depth+1); c != nil {
+				val = reflect.ValueOf(c)
+			}
+			out.SetMapIndex(it.Key(), val)
+		}
+		return out.Interface()
+	}
+	if !rv.IsValid() || !rv.CanInterface() {
+		return nil
+	}
+	return rv.Interface()
 }
 
 func truncEllipsis(s string) string {
@@ -1122,10 +1245,15 @@ func (s *Sentry) getIdentity(req any) extractedIdentity {
 	return id
 }
 
-func (s *Sentry) getRequest(req any) extractedRequest {
+// requestFuncs returns the Request extractors as set now.
+func (s *Sentry) requestFuncs() RequestContext {
 	s.mu.RLock()
-	r := s.Request
-	s.mu.RUnlock()
+	defer s.mu.RUnlock()
+	return s.Request
+}
+
+func (s *Sentry) getRequest(req any) extractedRequest {
+	r := s.requestFuncs()
 	out := extractedRequest{}
 	call := func(name string, fn func(any) string, dst *string) {
 		if fn == nil {
@@ -1141,9 +1269,7 @@ func (s *Sentry) getRequest(req any) extractedRequest {
 
 func (s *Sentry) getContext(req any) (ctx context.Context) {
 	ctx = context.Background()
-	s.mu.RLock()
-	fn := s.Request.Context
-	s.mu.RUnlock()
+	fn := s.requestFuncs().Context
 	if fn == nil {
 		return ctx
 	}
@@ -1170,7 +1296,6 @@ func (s *Sentry) emit(ctx TriggerContext, reqCtx context.Context) {
 	s.mu.RUnlock()
 
 	for _, h := range handlers {
-		h := h
 		s.guard("event handler", func() {
 			if ch, ok := h.(contextEventHandler); ok {
 				if err := ch.EmitWithContext(reqCtx, ctx); err != nil {
@@ -1234,7 +1359,7 @@ func deepCopyValue(v any) any {
 
 // normalizePayload encodes a trap response body: []byte and string bodies are
 // sent raw regardless of MIME type; everything else is JSON-encoded.
-func normalizePayload(_ string, body any) []byte {
+func normalizePayload(body any) []byte {
 	if body == nil {
 		body = map[string]any{}
 	}

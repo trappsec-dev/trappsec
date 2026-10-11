@@ -240,3 +240,22 @@ test("koa: an app-level bodyparser's empty placeholder does not hide a route-lev
     assert.deepEqual(r.json, { name: 'a' });
     assert.equal(events.length, 1);
 });
+
+test('koa: a router wrapped in koa-compose is not seen; the warning says so and what to do', async (t) => {
+    const compose = require('koa-compose');
+    const app = new Koa();
+    const { sentry, events } = makeSentry(app);
+    sentry.watch('/w').query('debug');
+    sentry.trap('/t');
+    const router = new Router();
+    router.get('/w', (ctx) => { ctx.body = ctx.query; });
+    app.use(compose([router.routes()]));
+    const { server, close } = await serve(app.callback());
+    t.after(close);
+    await request(server, { path: '/w?debug=1' });
+    assert.equal(events.length, 0);
+    const warns = sentry.logger.logs.warn.join('\n');
+    assert.match(warns, /koa-compose or koa-mount are not seen/);
+    assert.match(warns, /app\.use\(router\.routes\(\)\)|install trappsec on the mounted app/);
+    assert.doesNotMatch(warns, /no @koa\/router instance found in app\.middleware;/);
+});
