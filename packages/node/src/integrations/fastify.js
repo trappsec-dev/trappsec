@@ -5,6 +5,8 @@ const {
     resolveTrap, emitWatch
 } = require('./_common');
 
+const PENDING = Symbol('trappsec.pendingWatch');
+
 // Traps and the watch hook are installed by a non-encapsulated plugin that is
 // registered when Sentry is constructed. Fastify loads it at ready() time (before
 // listen(), inject() or ready() resolve), after synchronous configuration code ran
@@ -107,6 +109,18 @@ class FastifyIntegration {
             }
             done();
         });
+
+        // A body parsed by a preValidation hook registered after Sentry (e.g.
+        // @fastify/multipart with attachFieldsToBody) is not there yet above: finish
+        // right before the handler, or report what was seen if the request ends first.
+        instance.addHook('preHandler', (req, _reply, done) => {
+            if (req[PENDING]) this._finishInspection(req);
+            done();
+        });
+        instance.addHook('onResponse', (req, _reply, done) => {
+            if (req[PENDING]) this._finishInspection(req, true);
+            done();
+        });
     }
 
     _inspect(req, watch) {
@@ -118,13 +132,34 @@ class FastifyIntegration {
             if (touched) replaceInPlace(req.query, data); // in place: req.query may be getter-only
         }
 
-        if (hasFields(watch.body_fields) && isObject(req.body)) {
-            const { found: f, data, touched } = detect(this.ts, req.body, watch.body_fields, req, 'body');
-            found.push(...f);
-            if (touched) replaceInPlace(req.body, data);
+        if (hasFields(watch.body_fields)) {
+            if (req.body === undefined || req.body === null) {
+                req[PENDING] = { watch, found };
+                return;
+            }
+            found.push(...this._inspectBody(req, watch));
         }
 
         emitWatch(this.ts, req, found, 'Fastify');
+    }
+
+    _inspectBody(req, watch) {
+        if (!isObject(req.body)) return [];
+        const { found, data, touched } = detect(this.ts, req.body, watch.body_fields, req, 'body');
+        if (touched) replaceInPlace(req.body, data);
+        return found;
+    }
+
+    _finishInspection(req, responseEnded = false) {
+        const pending = req[PENDING];
+        req[PENDING] = undefined;
+        try {
+            const found = pending.found;
+            if (!responseEnded) found.push(...this._inspectBody(req, pending.watch));
+            emitWatch(this.ts, req, found, 'Fastify');
+        } catch (e) {
+            this.ts.logger.error("Trappsec error in Fastify watch handler: ", e);
+        }
     }
 }
 

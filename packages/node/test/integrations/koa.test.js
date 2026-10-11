@@ -188,3 +188,55 @@ test('koa: without a router, traps are not shadowed by a catch-all and methods a
     assert.equal(events.length, 1);
     assert.equal(events[0].event, 'trappsec.trap_hit');
 });
+
+test('koa: route-level body parsers cannot hide honey fields (@koa/multer, koa-bodyparser)', async (t) => {
+    const multer = require('@koa/multer');
+    const { multipart } = require('./helpers');
+    const app = new Koa();
+    const { sentry, events } = makeSentry(app);
+    sentry.watch('/form').body('is_admin');
+    sentry.watch('/json').query('debug').body('is_admin');
+    sentry.watch('/admin').query('debug').body('is_admin');
+    const router = new Router();
+    router.post('/form', multer().none(), (ctx) => { ctx.body = ctx.request.body; });
+    router.post('/json', bodyParser(), (ctx) => { ctx.body = { body: ctx.request.body, query: ctx.query }; });
+    router.post('/admin', (ctx) => { ctx.status = 403; ctx.body = { error: 'no' }; }, bodyParser(), (ctx) => { ctx.body = 'unreachable'; });
+    app.use(router.routes());
+    const { server, close } = await serve(app.callback());
+    t.after(close);
+
+    const mp = multipart({ is_admin: 'true', name: 'a' });
+    let r = await request(server, { method: 'POST', path: '/form', headers: mp.headers, body: mp.body });
+    assert.deepEqual(r.json, { name: 'a' });
+    assert.equal(events.length, 1);
+
+    r = await request(server, { method: 'POST', path: '/json?debug=1&x=1', body: { is_admin: true, n: 1 } });
+    assert.deepEqual(r.json, { body: { n: 1 }, query: { x: '1' } });
+    assert.equal(events.length, 2);
+    assert.deepEqual(events[1].found_fields.map((f) => f.field).sort(), ['debug', 'is_admin']);
+
+    // a route middleware that answers first: what was seen is still reported once
+    r = await request(server, { method: 'POST', path: '/admin?debug=1', body: { is_admin: true } });
+    assert.equal(r.status, 403);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    assert.equal(events.length, 3);
+    assert.deepEqual(events[2].found_fields.map((f) => f.field), ['debug']);
+});
+
+test("koa: an app-level bodyparser's empty placeholder does not hide a route-level multipart body", async (t) => {
+    const multer = require('@koa/multer');
+    const { multipart } = require('./helpers');
+    const app = new Koa();
+    app.use(bodyParser());
+    const { sentry, events } = makeSentry(app);
+    sentry.watch('/form').body('is_admin');
+    const router = new Router();
+    router.post('/form', multer().none(), (ctx) => { ctx.body = ctx.request.body; });
+    app.use(router.routes());
+    const { server, close } = await serve(app.callback());
+    t.after(close);
+    const mp = multipart({ is_admin: 'true', name: 'a' });
+    const r = await request(server, { method: 'POST', path: '/form', headers: mp.headers, body: mp.body });
+    assert.deepEqual(r.json, { name: 'a' });
+    assert.equal(events.length, 1);
+});

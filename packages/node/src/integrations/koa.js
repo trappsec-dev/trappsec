@@ -2,7 +2,7 @@
 
 const {
     normalizePath, isObject, buildWatchMap, hasFields, replaceInPlace, detect,
-    resolveTrap, emitWatch, warnOnce, BODY_METHODS
+    resolveTrap, emitWatch, warnOnce, BODY_METHODS, bodyLooksUnparsed
 } = require('./_common');
 
 // Watch paths are the FULL registered pattern, including any router prefix
@@ -17,6 +17,8 @@ const {
 //  * traps: a dedicated router registered immediately before the first application
 //    router, i.e. after ordinary middleware (auth, body parsers) and before any
 //    application route, so traps are real routes that cannot be shadowed.
+const PENDING = Symbol('trappsec.pendingWatch');
+
 class KoaIntegration {
     constructor(ts, app) {
         this.ts = ts;
@@ -181,7 +183,16 @@ class KoaIntegration {
                     return next();
                 };
                 wrapper.__trappsecWatch = true;
-                layer.stack = [wrapper, ...clean];
+                // Route-level middleware (e.g. router.post('/x', multer().none(), handler)
+                // or a route-level body parser) fills ctx.request.body only after the
+                // layer is entered: body inspection deferred at entry finishes here,
+                // right before the route's own handler.
+                const finisher = async function trappsecWatchFinish(ctx, next) {
+                    if (ctx[PENDING]) integration._finishInspection(ctx);
+                    return next();
+                };
+                finisher.__trappsecWatch = true;
+                layer.stack = [wrapper, ...clean.slice(0, -1), finisher, ...clean.slice(-1)];
             }
         }
     }
@@ -203,20 +214,45 @@ class KoaIntegration {
             }
 
             if (hasFields(watch.body_fields)) {
-                const body = ctx.request.body;
-                if (body === undefined) {
-                    if (BODY_METHODS.has(String(ctx.method).toUpperCase())) {
-                        warnOnce(this.ts, this._warned, 'body:' + watch.path,
-                            `Trappsec: body watches on ${watch.path} cannot run because ctx.request.body is undefined. ` +
-                            'Register a body parser (e.g. koa-bodyparser) before your router.');
+                if (bodyLooksUnparsed(ctx.request.body, ctx.headers, ctx.request.rawBody !== undefined)) {
+                    // Not parsed yet: finish before the handler, or when the response
+                    // ends if a route middleware answers first.
+                    ctx[PENDING] = { watch, found };
+                    const res = ctx.res;
+                    if (res && typeof res.once === 'function') {
+                        res.once('close', () => { if (ctx[PENDING]) this._finishInspection(ctx, true); });
                     }
-                } else if (isObject(body)) {
-                    const { found: f, data, touched } = detect(this.ts, body, watch.body_fields, ctx, 'body');
-                    found.push(...f);
-                    if (touched) replaceInPlace(body, data);
+                    return;
                 }
+                found.push(...this._inspectBody(ctx, watch));
             }
 
+            emitWatch(this.ts, ctx, found, 'Koa');
+        } catch (e) {
+            this.ts.logger.error('Trappsec error in Koa watch handler: ', e);
+        }
+    }
+
+    _inspectBody(ctx, watch) {
+        const body = ctx.request.body;
+        if (!isObject(body)) return [];
+        const { found, data, touched } = detect(this.ts, body, watch.body_fields, ctx, 'body');
+        if (touched) replaceInPlace(body, data);
+        return found;
+    }
+
+    _finishInspection(ctx, responseEnded = false) {
+        const pending = ctx[PENDING];
+        delete ctx[PENDING];
+        try {
+            const found = pending.found;
+            if (ctx.request.body !== undefined) {
+                found.push(...this._inspectBody(ctx, pending.watch));
+            } else if (!responseEnded && BODY_METHODS.has(String(ctx.method).toUpperCase())) {
+                warnOnce(this.ts, this._warned, 'body:' + pending.watch.path,
+                    `Trappsec: body watches on ${pending.watch.path} cannot run because ctx.request.body is undefined. ` +
+                    'Register a body parser (e.g. koa-bodyparser) before your router or on the route.');
+            }
             emitWatch(this.ts, ctx, found, 'Koa');
         } catch (e) {
             this.ts.logger.error('Trappsec error in Koa watch handler: ', e);

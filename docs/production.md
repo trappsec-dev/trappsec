@@ -89,8 +89,10 @@ _ = ts.Close(ctx)
 
 Watches on request bodies need a parsed body.
 
-*   **Express / Koa:** register `express.json()` / `express.urlencoded()` (or `koa-bodyparser`) *before* installing Sentry or declaring watches. Traps are inserted before the first route layer and after ordinary middleware, so your auth and body-parser middleware run first and `identify_user` can see `req.user`.
-*   **Fastify, Hapi, NestJS:** the framework parses bodies before the trappsec hook runs.
+*   **Express / Koa:** app-level parsers (`express.json()`, `express.urlencoded()`, `koa-bodyparser`) and route-level ones (`app.post('/x', multer().none(), handler)`, `router.post('/x', bodyParser(), handler)`) both work. When a watched route is entered before its body is parsed, body inspection finishes right before the route's own handler, after route-level middleware has run; if a route middleware answers first, what was already found is still reported. Traps are inserted before the first route layer and after ordinary middleware, so your auth and body-parser middleware run first and `identify_user` can see `req.user`.
+*   **Fastify:** bodies parsed by a content-type parser or by a `preValidation` hook (e.g. `@fastify/multipart` with `attachFieldsToBody`) are inspected, whether that plugin is registered before or after Sentry.
+*   **NestJS:** JSON and form bodies are parsed by the platform; multipart bodies parsed by `FileInterceptor` / `AnyFilesInterceptor` are inspected from a global pipe that runs after all interceptors, so honey fields are stripped before the controller receives `@Body()` (a single `@Body('field')` that is a honey field receives `undefined`). A handler that reads `req.body` through `@Req()` without any `@Body()` parameter still gets the event, but the field is not stripped.
+*   **Hapi:** the framework parses bodies before the trappsec hook runs.
 *   **Python / Go:** the integration reads and restores the body itself.
 
 ## Startup and test clients

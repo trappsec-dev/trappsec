@@ -108,3 +108,24 @@ test('fastify: a trap duplicating a real route fails loud (R20)', async () => {
     app.get('/real', async () => 'real');
     await assert.rejects(app.ready(), /already declared/);
 });
+
+test('fastify: @fastify/multipart registered after Sentry cannot hide honey fields', async () => {
+    const { multipart } = require('./helpers');
+    for (const attachFieldsToBody of ['keyValues', true]) {
+        const app = Fastify();
+        const { sentry, events } = makeSentry(app);
+        app.register(require('@fastify/multipart'), { attachFieldsToBody });
+        sentry.watch('/form').query('debug').body('is_admin');
+        app.post('/form', async (req) => {
+            const out = {};
+            for (const [k, v] of Object.entries(req.body || {})) out[k] = (v && typeof v === 'object' && 'value' in v) ? v.value : v;
+            return out;
+        });
+        const mp = multipart({ is_admin: 'true', name: 'a' });
+        const r = await app.inject({ method: 'POST', url: '/form?debug=1', headers: mp.headers, payload: mp.body });
+        assert.deepEqual(r.json(), { name: 'a' }, `attachFieldsToBody=${attachFieldsToBody}`);
+        assert.equal(events.length, 1);
+        assert.deepEqual(events[0].found_fields.map((f) => f.field).sort(), ['debug', 'is_admin']);
+        await app.close();
+    }
+});

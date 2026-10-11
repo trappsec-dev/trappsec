@@ -127,6 +127,21 @@ function resolveTrap(ts, decoy, req, label) {
     }
 }
 
+/**
+ * True when the request has a body that no parser has produced yet. App-level
+ * parsers leave a placeholder for content types they skip (body-parser 1.x sets
+ * req.body = {}; koa-bodyparser ctx.request.body = {}), and a route-level parser
+ * (multer, a route-level json()) fills it in later. `parsed` is the parser's own
+ * "I parsed this" mark (req._body for body-parser, ctx.request.rawBody for Koa).
+ */
+function bodyLooksUnparsed(body, headers, parsed) {
+    if (body === undefined || body === null) return true;
+    if (parsed) return false;
+    if (!isObject(body) || Array.isArray(body) || Object.keys(body).length > 0) return false;
+    const h = headers || {};
+    return Number(h['content-length']) > 0 || h['transfer-encoding'] !== undefined;
+}
+
 function emitWatch(ts, req, found, label) {
     if (found.length === 0) return;
     try {
@@ -147,6 +162,7 @@ function warnOnce(ts, seen, key, message) {
 const BODY_METHODS = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
 
 module.exports = {
+    bodyLooksUnparsed,
     hasOwn,
     normalizePath,
     isObject,

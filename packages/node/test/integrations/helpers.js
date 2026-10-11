@@ -61,4 +61,15 @@ function serve(listener) {
     });
 }
 
-module.exports = { makeSentry, request, serve, quietLogger };
+// Builds a multipart/form-data body of text fields: {body, headers} for request().
+function multipart(fields) {
+    const boundary = '----trappsec' + Math.random().toString(16).slice(2);
+    let body = '';
+    for (const [k, v] of Object.entries(fields)) {
+        body += `--${boundary}\r\nContent-Disposition: form-data; name="${k}"\r\n\r\n${v}\r\n`;
+    }
+    body += `--${boundary}--\r\n`;
+    return { body, headers: { 'content-type': `multipart/form-data; boundary=${boundary}` } };
+}
+
+module.exports = { makeSentry, request, serve, quietLogger, multipart };
