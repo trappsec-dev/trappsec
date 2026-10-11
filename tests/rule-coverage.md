@@ -45,7 +45,7 @@ Ordered by risk to detection.
 
 - **R22 third-party CSRF middleware:** Flask-WTF is exempted automatically and tested; for the rest (csurf, csrf-csrf, `@fastify/csrf-protection`, crumb, koa-csrf, starlette-csrf, gorilla/csrf) the `is_trap` / `IsTrap` skip hook is tested with stand-in middleware (Express, Starlette, net/http), not with each library.
 - **R1, R6, R11** on the frameworks marked e2e: covered end to end only.
-- **R14 beyond wrong methods:** the e2e suite compares how a trap and a real GET-only route answer DELETE, PUT and OPTIONS (status and `Allow`); response bodies, trailing slashes and HEAD are not compared.
+- **R14 response bodies and headers:** the e2e suite compares a trap with a real route for wrong methods (status and `Allow`), trailing slashes and HEAD; error bodies and other headers are compared only in Tornado's unit test.
 - **R10 and R13:** correctness and performance invariants with no test; low risk.
 
 Notes: R5 multipart is now covered end to end on every framework (the Express, Koa and NestJS examples parse it on the route). R8 is tested under concurrent first requests in Go, Flask and Django; the other Python integrations bootstrap from a startup hook or their first request under the same lock.

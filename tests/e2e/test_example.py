@@ -384,3 +384,30 @@ def test_wrong_method_on_trap_looks_like_a_real_route(api, base_url, alerts, met
     allow = lambda r: sorted(m.strip().upper() for m in r.headers.get("Allow", "").split(",") if m.strip())  # noqa: E731
     assert (trap.status_code, allow(trap)) == (real.status_code, allow(real))
     alerts.expect_none(ua)
+
+
+def test_trailing_slash_on_trap_looks_like_a_real_route(api, base_url, alerts):
+    """R14: a trailing slash is handled the same way (redirect, 404, or same answer) on a trap and a real route."""
+    ua = unique_ua()
+
+    def outcome(path):
+        plain = api.get(f"{base_url}{path}", headers=headers(ua, **ALICE), allow_redirects=False)
+        slash = api.get(f"{base_url}{path}/", headers=headers(ua, **ALICE), allow_redirects=False)
+        if slash.is_redirect:
+            return "redirect"
+        return "same" if slash.status_code == plain.status_code else slash.status_code
+
+    # /api/v2/profile has no child routes (unlike /api/v2/orders/{id}), so its slash variant is the same route
+    assert outcome("/deployment/config") == outcome("/api/v2/profile")
+
+
+def test_head_on_trap_looks_like_a_real_route(api, base_url, alerts):
+    """R14: HEAD relates to GET the same way on a trap as on a real route."""
+    ua = unique_ua()
+
+    def head_like_get(path):
+        get = api.get(f"{base_url}{path}", headers=headers(ua, **ALICE))
+        head = api.head(f"{base_url}{path}", headers=headers(ua, **ALICE))
+        return head.status_code == get.status_code
+
+    assert head_like_get("/deployment/config") == head_like_get("/api/v2/profile")
