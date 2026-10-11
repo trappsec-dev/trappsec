@@ -646,3 +646,30 @@ func TestPanickingCallbacksNeverBreakRequests(t *testing.T) {
 		t.Fatalf("watched route: code=%d bound=%v", rec.Code, bound)
 	}
 }
+
+func TestIsTrapLetsCSRFMiddlewareSkipTraps(t *testing.T) {
+	app := InstallSentry(http.NewServeMux(), "svc", "test")
+	logs := &syncBuf{}
+	app.Logger().SetOutput(logs)
+	app.Sentry.Trap("/admin/backup").Methods("POST")
+	app.HandleFunc("POST /real", func(w http.ResponseWriter, r *http.Request) {})
+	// stand-in for gorilla/csrf: reject POSTs without a token unless IsTrap says skip
+	h := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == "POST" && r.Header.Get("X-CSRF-Token") == "" && !app.Sentry.IsTrap(r) {
+			http.Error(w, "csrf", http.StatusForbidden)
+			return
+		}
+		app.ServeHTTP(w, r)
+	})
+	do := func(path string) int {
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, httptest.NewRequest("POST", path, nil))
+		return rec.Code
+	}
+	if real, trap := do("/real"), do("/admin/backup"); real != 403 || trap != 401 {
+		t.Fatalf("real=%d trap=%d", real, trap)
+	}
+	if logs.count("trappsec.trap_hit") != 1 {
+		t.Fatal("trap event missing")
+	}
+}

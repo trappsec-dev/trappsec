@@ -641,6 +641,47 @@ ts.Trigger(c, "Velocity limit exceeded", "fraud_attempt", map[string]any{"amount
 
 `trigger` never raises into your handler; failures are logged.
 
+## `is_trap` / `IsTrap`
+
+Returns whether a request targets a trap (method and path). Use it to let traps through middleware that would otherwise reject them before they can answer, typically CSRF protection: a POST trap that answers 403 is disabled and easy to fingerprint. Trap path segments written as `:id`, `{id}`, `<id>` (and `*rest` in Go) match any single segment. It never raises.
+
+<div class="lang-content" data-lang="python" markdown="1">
+
+```python
+# e.g. inside a CSRF middleware's dispatch
+if request.method == "POST" and not ts.is_trap(request):
+    verify_csrf_token(request)
+```
+
+Flask-WTF's `CSRFProtect`, Django's CSRF middleware, Litestar's `CSRFConfig` and Tornado's `xsrf_cookies` exempt traps automatically.
+
+</div>
+<div class="lang-content" data-lang="node" markdown="1">
+
+```javascript
+// register at app level, so req.path is the full path
+app.use((req, res, next) => (ts.is_trap(req) ? next() : csrfProtection(req, res, next)));
+```
+
+</div>
+<div class="lang-content" data-lang="go" markdown="1">
+
+```go
+// gorilla/csrf
+next := protect(app)
+http.ListenAndServe(":8000", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+    if app.Sentry.IsTrap(r) {
+        r = csrf.UnsafeSkipCheck(r)
+    }
+    next.ServeHTTP(w, r)
+}))
+
+// Echo: the adapter's App.IsTrap fits middleware.CSRFConfig.Skipper
+e.Use(middleware.CSRFWithConfig(middleware.CSRFConfig{Skipper: app.IsTrap}))
+```
+
+</div>
+
 ## `bootstrap` / `Bootstrap`
 
 Installs traps and watches. It is public, idempotent, and safe to call repeatedly or concurrently. You normally do not need it: the startup hook (lifespan / `listen` / `Run` / `Start`) calls it, and the first request calls it lazily where the framework allows (test clients, `http.Server{Handler: app}`, `supertest`, `fastify.inject`). Call it explicitly after finishing your configuration if you use a custom server or want traps installed before the first request.

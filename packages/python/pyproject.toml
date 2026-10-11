@@ -46,6 +46,7 @@ test = [
     "requests",
     "opentelemetry-sdk",
     "flask",
+    "flask-wtf",
     "fastapi",
     "httpx",
     "python-multipart",

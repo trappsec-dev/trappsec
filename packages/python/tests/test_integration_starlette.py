@@ -231,3 +231,29 @@ def test_non_json_unknown_body_passes_through_untouched():
     r = TestClient(app, raise_server_exceptions=False).post(
         "/raw", content=b"\x00\x01binary", headers={"content-type": "application/octet-stream"})
     assert r.status_code == 500 and watch_events(cap) == []
+
+
+def test_is_trap_lets_a_global_csrf_middleware_skip_traps():
+    """R22: third-party CSRF middleware runs before routing; is_trap() is the skip hook."""
+    from starlette.middleware.base import BaseHTTPMiddleware
+    from starlette.responses import PlainTextResponse
+
+    async def real(request):
+        return PlainTextResponse("ok")
+
+    app = Starlette(routes=[Route("/real", real, methods=["POST"])])
+    sentry = Sentry(app, "svc", "test")
+    cap = Capture()
+    sentry._handlers.append(cap)
+    sentry.trap("/admin/backup").methods("POST")
+
+    async def csrf(request, call_next):  # stand-in for starlette-csrf & co.
+        if request.method == "POST" and not sentry.is_trap(request) and "x-csrf-token" not in request.headers:
+            return PlainTextResponse("csrf", status_code=403)
+        return await call_next(request)
+
+    app.add_middleware(BaseHTTPMiddleware, dispatch=csrf)
+    with TestClient(app) as c:
+        assert c.post("/real").status_code == 403
+        assert c.post("/admin/backup").status_code == 401
+    assert len([e for e in cap.events if e["event"] == "trappsec.trap_hit"]) == 1

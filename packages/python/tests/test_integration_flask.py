@@ -296,3 +296,28 @@ def test_concurrent_first_requests_bootstrap_once():
     srv.shutdown()
     assert codes == [401] * 24
     assert len([e for e in cap.events if e["event"] == "trappsec.trap_hit"]) == 24
+
+
+@pytest.mark.parametrize("csrf_first", [True, False])
+def test_traps_answer_under_flask_wtf_csrf(csrf_first):
+    """R22: Flask-WTF's CSRFProtect must not turn a POST trap into a silent 400."""
+    csrf_mod = pytest.importorskip("flask_wtf.csrf")
+    app = Flask(__name__)
+    app.secret_key = "s"
+
+    @app.post("/real")
+    def real():
+        return "ok"
+
+    if csrf_first:
+        csrf_mod.CSRFProtect(app)
+    sentry = Sentry(app, "svc", "test")
+    cap = Capture()
+    sentry._handlers.append(cap)
+    sentry.trap("/admin/backup").methods("POST")
+    if not csrf_first:
+        csrf_mod.CSRFProtect(app)
+    c = app.test_client()
+    assert c.post("/real").status_code == 400  # CSRF still protects real routes
+    assert c.post("/admin/backup").status_code == 401
+    assert len([e for e in cap.events if e["event"] == "trappsec.trap_hit"]) == 1

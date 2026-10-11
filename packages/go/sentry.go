@@ -376,6 +376,77 @@ func (s *Sentry) Traps() []TrapConfig {
 	return out
 }
 
+// IsTrap reports whether req targets a trap (method and path, read with the
+// Request extractors the adapter installed). Use it to skip middleware that
+// would otherwise reject a trap before it can answer, such as CSRF protection
+// (R22): a trap that answers 403 is both disabled and easy to fingerprint.
+// Path segments written as :id, {id}, <id> or *rest match any segment.
+// It never panics.
+func (s *Sentry) IsTrap(req any) (is bool) {
+	defer func() {
+		if recover() != nil {
+			is = false
+		}
+	}()
+	method := strings.ToUpper(s.Request.Method(req))
+	path := cleanTrapPath(s.Request.Path(req))
+	if method == "" || path == "" {
+		return false
+	}
+	for _, t := range s.Traps() {
+		for _, m := range t.Methods {
+			if strings.EqualFold(m, method) && trapPathMatches(t.Path, path) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func cleanTrapPath(p string) string {
+	if i := strings.IndexAny(p, "?#"); i >= 0 {
+		p = p[:i]
+	}
+	if p == "" {
+		return ""
+	}
+	if !strings.HasPrefix(p, "/") {
+		p = "/" + p
+	}
+	if t := strings.TrimRight(p, "/"); t != "" {
+		return t
+	}
+	return "/"
+}
+
+func trapPathMatches(pattern, path string) bool {
+	want := cleanTrapPath(patternPathOnly(pattern))
+	a, b := strings.Split(want, "/"), strings.Split(path, "/")
+	if len(a) != len(b) {
+		return false
+	}
+	for i, seg := range a {
+		if seg == b[i] {
+			continue
+		}
+		param := strings.HasPrefix(seg, ":") || strings.HasPrefix(seg, "*") ||
+			(strings.HasPrefix(seg, "{") && strings.HasSuffix(seg, "}")) ||
+			(strings.HasPrefix(seg, "<") && strings.HasSuffix(seg, ">"))
+		if !param || b[i] == "" {
+			return false
+		}
+	}
+	return true
+}
+
+// patternPathOnly drops a net/http "METHOD [HOST]" prefix from a pattern.
+func patternPathOnly(p string) string {
+	if i := strings.IndexByte(p, '/'); i > 0 {
+		return p[i:]
+	}
+	return p
+}
+
 func (s *Sentry) Watches() []WatchConfig {
 	s.mu.RLock()
 	builders := append([]*WatchBuilder(nil), s.watches...)

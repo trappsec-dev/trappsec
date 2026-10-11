@@ -29,7 +29,7 @@ Columns: Fl Flask · FA FastAPI · St Starlette · Li Litestar · Dj Django · S
 | R19 sanitized values, event shape | e2e | e2e | e2e | e2e | e2e | e2e | e2e | e2e | e2e | e2e | e2e | e2e | e2e | e2e | e2e | ✅ / ✅ / ✅ (shared fixtures) |
 | R20 duplicate trap fails loud | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅³ | ✅ | ✅ | ✅ | N/A |
 | R21 no spoofable IP by default | e2e | e2e | e2e | e2e | e2e | e2e | e2e | e2e | e2e | e2e | e2e | e2e | ✅ | ✅ | ✅ | N/A |
-| R22 traps exempt from CSRF | N/A⁴ | N/A⁴ | N/A⁴ | ✅ | ✅ | N/A⁴ | ✅ | N/A⁴ | N/A⁴ | N/A⁴ | N/A⁴ | N/A⁴ | N/A⁴ | N/A⁴ | ✅⁵ | N/A |
+| R22 traps exempt from CSRF | ✅ | N/A⁴ | ✅⁶ | ✅ | ✅ | N/A⁴ | ✅ | ✅⁶ | N/A⁴ | N/A⁴ | N/A⁴ | N/A⁴ | ✅⁶ | N/A⁴ | ✅⁵ | N/A |
 | R23 trap responses | e2e | e2e | e2e | ✅ | e2e | e2e | e2e | ✅ | ✅ | e2e | e2e | ✅ | ✅ | ✅ | ✅ | ✅ / ✅ / ✅ |
 
 1. A sub-mux mounted with `Handle("/prefix/", sub)` is opaque to the adapter: a watch on a route inside it cannot fire. Bootstrap logs a warning naming the mount pattern to watch instead (`TestUnreachableWatchIsLogged`). Gin and Echo log the same warning for any watch that matches no route.
@@ -37,12 +37,13 @@ Columns: Fl Flask · FA FastAPI · St Starlette · Li Litestar · Dj Django · S
 3. NestJS R20 is tested on the Express adapter only.
 4. No built-in CSRF middleware; third-party ones are listed under gaps.
 5. Echo's CSRF middleware runs before routing, so it cannot be bypassed automatically: `App.IsTrap` is provided as its `Skipper`, and the test shows both outcomes.
+6. Third-party CSRF middleware: the `is_trap` / `IsTrap` skip hook is tested with a stand-in middleware.
 
 ## Open gaps
 
 Ordered by risk to detection.
 
-- **R22 third-party CSRF middleware** (Flask-WTF, csurf, `@fastify/csrf-protection`, crumb, koa-csrf): untested; see `docs/production.md` for how to exempt traps.
+- **R22 third-party CSRF middleware:** Flask-WTF is exempted automatically and tested; for the rest (csurf, csrf-csrf, `@fastify/csrf-protection`, crumb, koa-csrf, starlette-csrf, gorilla/csrf) the `is_trap` / `IsTrap` skip hook is tested with stand-in middleware (Express, Starlette, net/http), not with each library.
 - **R1, R6, R11** on the frameworks marked e2e: covered end to end only.
 - **R14 beyond wrong methods:** the e2e suite compares how a trap and a real GET-only route answer DELETE, PUT and OPTIONS (status and `Allow`); response bodies, trailing slashes and HEAD are not compared.
 - **R10 and R13:** correctness and performance invariants with no test; low risk.

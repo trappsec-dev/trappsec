@@ -61,6 +61,22 @@ function values_match(actual, expected) {
     return false;
 }
 
+function trapPath(p) {
+    if (typeof p !== 'string' || !p) return null;
+    let out = p.split('?')[0].split('#')[0];
+    if (!out.startsWith('/')) out = '/' + out;
+    return out.length > 1 ? out.replace(/\/+$/, '') : out;
+}
+
+function trapPathMatches(pattern, path) {
+    const want = trapPath(pattern);
+    if (!want) return false;
+    const a = want.split('/');
+    const b = path.split('/');
+    if (a.length !== b.length) return false;
+    return a.every((seg, i) => seg === b[i] || (b[i] !== '' && /^(:\w+\??|\{[^}]*\}|<[^>]*>)$/.test(seg)));
+}
+
 class Sentry {
     constructor(app, service, environment) {
         this.logger = console;
@@ -170,6 +186,26 @@ class Sentry {
                 this.logger.error("error closing handler:", e);
             }
         }));
+    }
+
+    /**
+     * True when the request targets a trap (method and path). Use it to skip
+     * middleware that would otherwise reject a trap before it can answer, such as
+     * CSRF protection (R22): a trap that answers 403 is both disabled and easy to
+     * fingerprint. `:id`, `{id}` and `<id>` segments match any single segment.
+     * Install such a wrapper at app level so the request path is the full path.
+     * Never throws.
+     */
+    is_trap(req) {
+        try {
+            const method = String(this.requestContext.method(req) || '').toUpperCase();
+            const path = trapPath(this.requestContext.path(req));
+            if (!method || !path) return false;
+            return this.traps.some((t) => (t.methods || []).some((m) => String(m).toUpperCase() === method)
+                && trapPathMatches(t.path, path));
+        } catch (e) {
+            return false;
+        }
     }
 
     /** Emit a custom trappsec.rule_hit event. Never throws. */

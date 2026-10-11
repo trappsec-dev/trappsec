@@ -129,6 +129,8 @@ export class Sentry {
     override_source_ip(callback: (req: any) => string | null): this;
     /** Emit a trappsec.rule_hit event. Never throws. */
     trigger(req: any, reason: string, intent?: string | null, metadata?: Record<string, any> | null): void;
+    /** True when the request targets a trap; use to skip CSRF or similar middleware for traps. */
+    is_trap(req: any): boolean;
     /** Idempotent: install traps and watches. */
     bootstrap(): void;
     /** Stop heartbeats and flush in-flight webhook/Slack deliveries (default timeout 5000 ms). */

@@ -880,3 +880,35 @@ func TestSentryCloseStopsAllWebhookAndSlackHandlers(t *testing.T) {
 		t.Fatalf("second close: %v", err)
 	}
 }
+
+func TestIsTrapMatchesMethodAndPathAndNeverPanics(t *testing.T) {
+	s := NewSentry("svc", "t")
+	s.Trap("/admin/backup").Methods("GET", "POST")
+	s.Trap("/api/v1/users/:id").Methods("DELETE")
+	s.Trap("/files/{name}").Methods("GET")
+	type r struct{ m, p string }
+	s.Request.Method = func(req any) string { return req.(r).m }
+	s.Request.Path = func(req any) string { return req.(r).p }
+	cases := []struct {
+		req  r
+		want bool
+	}{
+		{r{"POST", "/admin/backup"}, true},
+		{r{"post", "/admin/backup/?x=1"}, true},
+		{r{"PUT", "/admin/backup"}, false},
+		{r{"DELETE", "/api/v1/users/7"}, true},
+		{r{"DELETE", "/api/v1/users/7/x"}, false},
+		{r{"DELETE", "/api/v1/users/"}, false},
+		{r{"GET", "/files/a.txt"}, true},
+		{r{"GET", "/other"}, false},
+	}
+	for _, c := range cases {
+		if got := s.IsTrap(c.req); got != c.want {
+			t.Errorf("IsTrap(%v) = %v, want %v", c.req, got, c.want)
+		}
+	}
+	s.Request.Path = func(any) string { panic("boom") }
+	if s.IsTrap(r{"GET", "/admin/backup"}) {
+		t.Fatal("a panicking extractor must yield false")
+	}
+}

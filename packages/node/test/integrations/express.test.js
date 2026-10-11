@@ -283,3 +283,19 @@ for (const [label, pkg] of [['express4', 'express4'], ['express5', 'express']]) 
         assert.equal(events.length, 2);
     });
 }
+
+test('express: is_trap lets a global CSRF middleware skip traps (R22)', async (t) => {
+    const express = require('express');
+    const app = express();
+    const { sentry, events } = makeSentry(app);
+    // stand-in for csurf / csrf-csrf: rejects state-changing requests without a token
+    const csrf = (req, res, next) => (req.method === 'POST' && !req.headers['x-csrf-token'] ? res.status(403).end() : next());
+    app.use((req, res, next) => (sentry.is_trap(req) ? next() : csrf(req, res, next)));
+    sentry.trap('/admin/backup').methods('POST');
+    app.post('/real', (req, res) => res.send('ok'));
+    const server = await new Promise((r) => { const s = app.listen(0, '127.0.0.1', () => r(s)); });
+    t.after(() => server.close());
+    assert.equal((await request(server, { method: 'POST', path: '/real' })).status, 403);
+    assert.equal((await request(server, { method: 'POST', path: '/admin/backup' })).status, 401);
+    assert.equal(events.length, 1);
+});

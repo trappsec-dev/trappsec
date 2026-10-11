@@ -283,3 +283,22 @@ def test_unknown_framework_fails_loud(app):
     """R9: an unsupported app must raise, never run silently unprotected."""
     with pytest.raises(Exception, match="trappsec error: unknown framework"):
         Sentry(app, "svc", "test")
+
+
+def test_is_trap_matches_method_and_path_and_never_raises():
+    ts = make_sentry()
+    ts.trap("/admin/backup").methods("GET", "POST")
+    ts.trap("/api/v1/users/<int:uid>").methods("DELETE")
+    ts.trap("/files/{name}").methods("GET")
+    req = lambda m, p: (m, p)  # noqa: E731
+    ts.request.method = lambda r: r[0]
+    ts.request.path = lambda r: r[1]
+    assert ts.is_trap(req("POST", "/admin/backup"))
+    assert ts.is_trap(req("post", "/admin/backup/?x=1"))
+    assert not ts.is_trap(req("PUT", "/admin/backup"))
+    assert ts.is_trap(req("DELETE", "/api/v1/users/7"))
+    assert not ts.is_trap(req("DELETE", "/api/v1/users/7/x"))
+    assert ts.is_trap(req("GET", "/files/a.txt"))
+    assert not ts.is_trap(req("GET", "/other"))
+    ts.request.path = lambda r: 1 / 0
+    assert ts.is_trap(req("GET", "/admin/backup")) is False

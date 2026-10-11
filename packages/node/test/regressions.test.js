@@ -375,3 +375,19 @@ test("a handler that throws does not affect the request or other handlers (R12)"
   assert.equal(seen.length, 1);
   assert.equal(errors.length, 1);
 });
+
+test("is_trap matches method and path, with parameter segments; never throws", () => {
+  const ts = harness();
+  ts._traps = [new TrapBuilder(ts, "/admin/backup").methods("GET", "POST"), new TrapBuilder(ts, "/api/v1/users/:id").methods("DELETE")];
+  const req = (method, path) => ({ method, path });
+  ts.requestContext = { path: (r) => r.path, method: (r) => r.method, userAgent: () => null };
+  assert.equal(ts.is_trap(req("POST", "/admin/backup")), true);
+  assert.equal(ts.is_trap(req("post", "/admin/backup/?x=1")), true);
+  assert.equal(ts.is_trap(req("PUT", "/admin/backup")), false);
+  assert.equal(ts.is_trap(req("DELETE", "/api/v1/users/7")), true);
+  assert.equal(ts.is_trap(req("DELETE", "/api/v1/users/7/x")), false);
+  assert.equal(ts.is_trap(req("DELETE", "/api/v1/users/")), false);
+  assert.equal(ts.is_trap(req("GET", "/other")), false);
+  ts.requestContext.path = () => { throw new Error("boom"); };
+  assert.equal(ts.is_trap(req("GET", "/admin/backup")), false);
+});

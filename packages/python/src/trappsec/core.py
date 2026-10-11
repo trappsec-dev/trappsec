@@ -2,6 +2,7 @@ import time
 import json
 import decimal
 import math
+import re
 import typing
 import socket
 import logging
@@ -85,6 +86,26 @@ def values_match(actual, expected) -> bool:
     except Exception:
         return False
     return False
+
+
+_PARAM_SEGMENT = re.compile(r"^(:\w+\??|\{[^}]*\}|<[^>]*>)$")
+
+
+def _trap_path(p):
+    if not isinstance(p, str) or not p:
+        return None
+    p = p.split("?", 1)[0].split("#", 1)[0]
+    if not p.startswith("/"):
+        p = "/" + p
+    return p.rstrip("/") or "/"
+
+
+def _trap_path_matches(pattern, path) -> bool:
+    want = _trap_path(pattern)
+    if not want:
+        return False
+    a, b = want.split("/"), path.split("/")
+    return len(a) == len(b) and all(x == y or (y and _PARAM_SEGMENT.match(x)) for x, y in zip(a, b))
 
 
 def safe_value(v):
@@ -296,6 +317,26 @@ class Sentry:
             event["user"] = identity_ctx["user"]
             event["role"] = identity_ctx["role"]
         return event
+
+    def is_trap(self, request) -> bool:
+        """True when the request targets a trap (method and path).
+
+        Use it to skip middleware that would otherwise reject a trap before it can
+        answer, such as CSRF protection (R22): a trap that answers 403 is both
+        disabled and easy to fingerprint. ``:id``, ``{id}`` and ``<id>`` segments
+        match any single segment. Never raises.
+        """
+        try:
+            method = str(self.request.method(request) or "").upper()
+            path = _trap_path(self.request.path(request))
+            if not method or not path:
+                return False
+            return any(
+                method in {str(m).upper() for m in (t.get("methods") or [])} and _trap_path_matches(t.get("path"), path)
+                for t in self.traps
+            )
+        except Exception:
+            return False
 
     def trigger(self, req, reason: str, intent: str = None, metadata: dict = None):
         trigger_ctx = self._base_event("trappsec.rule_hit", req)
