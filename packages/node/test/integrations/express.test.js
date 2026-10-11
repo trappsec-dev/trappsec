@@ -77,6 +77,63 @@ for (const [label, pkg] of [['express4', 'express4'], ['express5', 'express']]) 
         assert.equal(events.length, 4);
     });
 
+    test(`${label}: OPTIONS on a trap is answered like a real route, not by a 404 catch-all`, async (t) => {
+        const app = express();
+        const { sentry, events } = makeSentry(app);
+        sentry.trap('/api/v1/admin').methods('GET', 'POST');
+        const api = express.Router();
+        api.get('/me', (req, res) => res.send('me'));
+        api.post('/me', (req, res) => res.send('me'));
+        app.use('/api/v1', api);
+        app.use((req, res) => res.status(404).send('nf'));
+        const { server, close } = await serve(app);
+        t.after(close);
+
+        const real = await request(server, { method: 'OPTIONS', path: '/api/v1/me' });
+        const trap = await request(server, { method: 'OPTIONS', path: '/api/v1/admin' });
+        assert.equal(real.status, 200);
+        assert.equal(trap.status, real.status);
+        assert.equal(trap.headers.allow, real.headers.allow);
+        assert.equal(trap.headers['content-type'], real.headers['content-type']);
+        assert.equal(trap.text, real.text);
+        assert.equal(events.length, 0);
+        assert.equal((await request(server, { path: '/api/v1/admin' })).status, 401);
+        assert.equal((await request(server, { path: '/nope' })).status, 404);
+    });
+
+    test(`${label}: OPTIONS on a trap matches real app-level routes behind a 404 catch-all`, async (t) => {
+        const app = express();
+        const { sentry, events } = makeSentry(app);
+        sentry.trap('/api/v1/admin').methods('GET');
+        app.get('/api/v1/me', (req, res) => res.send('me'));
+        app.use((req, res) => res.status(404).send('nf'));
+        const { server, close } = await serve(app);
+        t.after(close);
+
+        const real = await request(server, { method: 'OPTIONS', path: '/api/v1/me' });
+        const trap = await request(server, { method: 'OPTIONS', path: '/api/v1/admin' });
+        assert.equal(real.status, 404);
+        assert.equal(trap.status, real.status);
+        assert.equal(trap.headers.allow, real.headers.allow);
+        assert.equal(trap.text, real.text);
+        assert.equal(events.length, 0);
+    });
+
+    test(`${label}: watch_hit path on a mounted router is the full request path`, async (t) => {
+        const app = express();
+        const { sentry, events } = makeSentry(app);
+        sentry.watch('/api/v1/me').query('debug');
+        const api = express.Router();
+        api.get('/me', (req, res) => res.json(req.query));
+        app.use('/api/v1', api);
+        const { server, close } = await serve(app);
+        t.after(close);
+
+        await request(server, { path: '/api/v1/me?debug=1' });
+        assert.equal(events.length, 1);
+        assert.equal(events[0].path, '/api/v1/me');
+    });
+
     test(`${label}: traps run after middleware so identify_user sees req.user (authenticated response)`, async (t) => {
         const app = express();
         app.use((req, res, next) => { if (req.headers['x-user']) req.user = { name: req.headers['x-user'], role: 'staff' }; next(); });

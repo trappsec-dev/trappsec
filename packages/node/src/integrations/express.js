@@ -60,7 +60,19 @@ class ExpressIntegration {
             this.ts.identity.ip = r => r.ip || r.socket?.remoteAddress || r.connection?.remoteAddress || "0.0.0.0";
         }
 
-        this.ts.request.path = r => r.path;
+        // The full request path: req.path is relative to the router mount ('/me'
+        // inside a router mounted at '/api/v1'), and req.baseUrl is reset once the
+        // router is left, whereas req.originalUrl keeps the URL as received.
+        this.ts.request.path = r => {
+            if (typeof r.originalUrl !== 'string') return r.path;
+            const path = r.originalUrl.split(/[?#]/)[0];
+            if (path.startsWith('/')) return path;
+            try {
+                return new URL(path).pathname; // absolute-form request target
+            } catch (e) {
+                return r.path;
+            }
+        };
         this.ts.request.user_agent = r => (typeof r.get === 'function' ? r.get('User-Agent') : r.headers?.['user-agent']) || null;
         this.ts.request.method = r => r.method;
 
@@ -172,24 +184,54 @@ class ExpressIntegration {
             }
         }
 
+        // Express is order-based: trap layers go in front of the first layer holding a
+        // route (R2) but behind ordinary middleware such as auth and body parsers (C6),
+        // so identify_user can see the user.
+        const seen = new Set();
+        let idx = stack.findIndex(l => this._containsRoute(l, seen));
+        if (idx === -1) idx = stack.length;
+
+        // Traps answer OPTIONS like the app's real routes (R14). Routes on the app
+        // router fall through to the app's later handlers (a 404 catch-all, or the
+        // router's own OPTIONS response); routes in a mounted router are answered by
+        // that router with an Allow header. So when real routes live in a mounted
+        // router, traps get their own router too.
+        const nested = idx < stack.length && !stack[idx].route && isSubRouter(stack[idx]);
+        const target = nested ? this._newRouter() : this.app;
         const before = stack.length;
         for (const decoy of traps) {
             const methods = trapMethods(decoy).map(m => m.toLowerCase());
             const handler = (req, res) => this._respondTrap(req, res, decoy);
             for (const method of TRAP_METHODS) {
-                if (methods.includes(method)) this.app[method](decoy.path, handler);
+                if (methods.includes(method)) target[method](decoy.path, handler);
             }
         }
 
-        // Express is order-based: move the freshly appended trap layers in front of the
-        // first route layer (R2) but behind ordinary middleware such as auth and body
-        // parsers (C6), so identify_user can see the user.
+        if (nested) {
+            for (const layer of target.stack) layer.__trappsecTrap = true;
+            this.app.use(target);
+        }
         const trapLayers = stack.splice(before);
         for (const layer of trapLayers) layer.__trappsecTrap = true;
-        const seen = new Set();
-        let idx = stack.findIndex(l => this._containsRoute(l, seen));
-        if (idx === -1) idx = stack.length;
         stack.splice(idx, 0, ...trapLayers);
+    }
+
+    // An empty router of the app router's own Express version and options. Express 4
+    // and 5 (the `router` package) both build a router as a callable function whose
+    // prototype holds the Router methods; express itself is not a dependency.
+    _newRouter() {
+        const appRouter = this._router(true);
+        function router(req, res, next) {
+            router.handle(req, res, next);
+        }
+        Object.setPrototypeOf(router, Object.getPrototypeOf(appRouter));
+        router.params = {};
+        if (Array.isArray(appRouter._params)) router._params = []; // Express 4
+        router.caseSensitive = appRouter.caseSensitive;
+        router.mergeParams = appRouter.mergeParams;
+        router.strict = appRouter.strict;
+        router.stack = [];
+        return router;
     }
 
     _respondTrap(req, res, decoy) {
@@ -243,6 +285,7 @@ class ExpressIntegration {
 
             // Sub-router: recurse with the watches that can live under this mount.
             if (isSubRouter(layer)) {
+                if (layer.__trappsecTrap) continue;
                 const inner = [];
                 for (const e of entries) {
                     const prefix = mountPrefix(layer, e.rel);
