@@ -184,30 +184,35 @@ class ExpressIntegration {
             }
         }
 
-        // Traps live in their own router, so they behave like routes of a mounted
-        // router: an OPTIONS request is answered by that router with an Allow header
-        // (unless the trap claims OPTIONS itself), never by a later app-level 404.
-        const trapRouter = this._newRouter();
+        // Express is order-based: trap layers go in front of the first layer holding a
+        // route (R2) but behind ordinary middleware such as auth and body parsers (C6),
+        // so identify_user can see the user.
+        const seen = new Set();
+        let idx = stack.findIndex(l => this._containsRoute(l, seen));
+        if (idx === -1) idx = stack.length;
+
+        // Traps answer OPTIONS like the app's real routes (R14). Routes on the app
+        // router fall through to the app's later handlers (a 404 catch-all, or the
+        // router's own OPTIONS response); routes in a mounted router are answered by
+        // that router with an Allow header. So when real routes live in a mounted
+        // router, traps get their own router too.
+        const nested = idx < stack.length && !stack[idx].route && isSubRouter(stack[idx]);
+        const target = nested ? this._newRouter() : this.app;
+        const before = stack.length;
         for (const decoy of traps) {
             const methods = trapMethods(decoy).map(m => m.toLowerCase());
             const handler = (req, res) => this._respondTrap(req, res, decoy);
             for (const method of TRAP_METHODS) {
-                if (methods.includes(method)) trapRouter[method](decoy.path, handler);
+                if (methods.includes(method)) target[method](decoy.path, handler);
             }
         }
-        for (const layer of trapRouter.stack) layer.__trappsecTrap = true;
 
-        const before = stack.length;
-        this.app.use(trapRouter);
-
-        // Express is order-based: move the freshly appended trap layer in front of the
-        // first route layer (R2) but behind ordinary middleware such as auth and body
-        // parsers (C6), so identify_user can see the user.
+        if (nested) {
+            for (const layer of target.stack) layer.__trappsecTrap = true;
+            this.app.use(target);
+        }
         const trapLayers = stack.splice(before);
         for (const layer of trapLayers) layer.__trappsecTrap = true;
-        const seen = new Set();
-        let idx = stack.findIndex(l => this._containsRoute(l, seen));
-        if (idx === -1) idx = stack.length;
         stack.splice(idx, 0, ...trapLayers);
     }
 

@@ -101,6 +101,24 @@ for (const [label, pkg] of [['express4', 'express4'], ['express5', 'express']]) 
         assert.equal((await request(server, { path: '/nope' })).status, 404);
     });
 
+    test(`${label}: OPTIONS on a trap matches real app-level routes behind a 404 catch-all`, async (t) => {
+        const app = express();
+        const { sentry, events } = makeSentry(app);
+        sentry.trap('/api/v1/admin').methods('GET');
+        app.get('/api/v1/me', (req, res) => res.send('me'));
+        app.use((req, res) => res.status(404).send('nf'));
+        const { server, close } = await serve(app);
+        t.after(close);
+
+        const real = await request(server, { method: 'OPTIONS', path: '/api/v1/me' });
+        const trap = await request(server, { method: 'OPTIONS', path: '/api/v1/admin' });
+        assert.equal(real.status, 404);
+        assert.equal(trap.status, real.status);
+        assert.equal(trap.headers.allow, real.headers.allow);
+        assert.equal(trap.text, real.text);
+        assert.equal(events.length, 0);
+    });
+
     test(`${label}: watch_hit path on a mounted router is the full request path`, async (t) => {
         const app = express();
         const { sentry, events } = makeSentry(app);
