@@ -11,6 +11,9 @@ Contents
 6. Alert outputs and logging
 7. CSRF, proxies, shutdown, workers
 8. Gotchas
+9. Versions and known issues
+
+**Check the installed version first** (`npm ls trappsec`, `pip show trappsec`, `go list -m all | grep trappsec`). The docs and this sheet follow the repository; a registry can still serve an older release that behaves differently (§9). The examples below use forms that work on every release.
 
 ## 1. Install and initialize per framework
 
@@ -136,7 +139,11 @@ app.Watch("/api/v2/me").
 ```
 
 - **Defaults.** No default means any presence alerts. With a default, only a different value alerts. A callable default is evaluated per request; if it throws, it is treated as "no default".
-- **Callables are synchronous.** Callable defaults and dynamic bodies are called synchronously in every language. They cannot await a database call: a returned Promise or coroutine compares as a mismatch (a false alert) or encodes as `{}`. Use data already on the request, such as session claims or values set by middleware.
+- **Callables are synchronous.** Callable defaults, dynamic bodies and `identify_user` are called synchronously in every language. They cannot await a database call. A callback that returns a Promise or coroutine is treated as failed:
+  - a failed callable default means "no default", so every request alerts;
+  - a failed `identify_user` means anonymous.
+
+  Use data already on the request, such as session claims or values set by middleware.
 - **Callables can run before route-level middleware.** Watches are inspected when the route is entered, which can be before route-level middleware runs (Express does this when the body was parsed by app-level middleware). A callable default that reads `req.user` set by per-route auth will throw, fall back to "no default", and alert on every legitimate echo. Derive the value from the request itself, verifying the token or session the way `identify_user` does. Then confirm with the real UI's request that no event fires.
 - **Path.** The watch path must equal the route pattern the app registered (same parameter names and converters, full prefix).
 - **Stripping.** Every occurrence of a watched key is stripped before the handler runs. Duplicate parameters alert unless every value matches.
@@ -201,3 +208,41 @@ Defaults resolve at bootstrap, so the order of calls doesn't matter. A template 
 - Litestar before 2.13 and Sanic before 24.6 miss honey fields.
 - Global middleware that rejects anonymous requests also answers anonymous requests to traps. That matches real routes, but you get no signals.
 - uvicorn trusts `X-Forwarded-For` from 127.0.0.1 by default. Set `forwarded_allow_ips` correctly or alerts carry the wrong IP.
+
+## 9. Versions and known issues
+
+### Newer releases
+
+Releases after 0.2.0 add consistent aliases alongside the portable forms used in this sheet. The portable forms keep working.
+- **Default-response setters:** `default_response(...)` and `default_unauthenticated_response(...)`, with the same arguments as `respond` (Go: `DefaultResponse` / `DefaultUnauthenticatedResponse`).
+- **Node:** `{ default, intent }` on watch fields, and `close(seconds)`.
+- **Go:** option helpers such as `trappsec.Default(x)` and `trappsec.Intent(s)`.
+
+### trappsec 0.2.0
+
+These behaviors were verified against 0.2.0 as published on npm and PyPI. They are fixed in later releases. If 0.2.0 is all the registry offers, tell the user, and either wait for or pin a newer release, or apply the workarounds below.
+
+**Node:**
+- **Express 4 crash.** Declaring any watch makes `app.listen()` throw `'app.router' is deprecated!`.
+- **Traps behind catch-alls.** Traps are appended after all existing routes when `listen()` runs, so a catch-all route or 404 middleware (`app.use('/api', notFound)`) answers instead of them.
+- **Missing APIs.** There is no `is_trap`, `bootstrap()`, `close()` or `trigger()`.
+
+**Python:**
+- **FastAPI order.** Create the Sentry before `include_router(...)` and run with lifespan (`with TestClient(app)`). Otherwise watches never fire, or routes fail until startup has run.
+- **String bodies.** A string body with `application/json` is JSON-encoded a second time.
+- **Logging.** trappsec calls `logging.basicConfig`, which can reconfigure the app's root logger.
+- **Missing APIs.** There is no `is_trap`, `bootstrap()` or `close()`.
+
+**Both:**
+- **Order matters.** Default responses are copied when `.trap()` is called, so set them before declaring traps.
+- **Exact matching.** Value matching is exact (`!=` / `!==`). Form and query values are strings (`"800"` does not match `800`; `"false"` does not match `false`), and Node compares arrays by reference.
+- **Unguarded callbacks.** A throwing `identify_user`, callable default or dynamic body can fail the request or leave the field unstripped. Catch inside your callbacks.
+- **Event shape.** Signals omit `user`/`role`, and webhook signatures are a bare hex HMAC of the body.
+
+If you must ship on 0.2.0, the integration's own install steps can be called from a thin adapter at the right point. For Express: mount the traps on a router before the catch-all, and wrap the watched routes. This relies on internals, so pin the exact version and cover the adapter with tests that fire every tripwire.
+
+### Known issues in the current code
+
+Report these upstream, and design around them.
+- **FastAPI `trap` query parameter.** A request to a FastAPI trap that carries a query parameter named `trap` (e.g. `?trap=1`) gets the fallback `401 {}` and logs no event. Treat this as a residual risk until it's fixed, and mention it in the report.
+- **Python JSON spacing.** Python serializes trap JSON with spaces (`{"detail": "..."}`). FastAPI and Starlette, and Flask in production mode, send compact JSON. For byte-identical bodies, pass the body as a pre-serialized string with `mime_type="application/json"`; current releases send string bodies raw. Check the result with `compare_responses.mjs`.

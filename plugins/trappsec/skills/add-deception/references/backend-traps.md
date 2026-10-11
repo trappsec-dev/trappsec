@@ -54,6 +54,12 @@ Use the app's casing and authorization model:
 
 Callable defaults receive the framework request and must be cheap and synchronous. They may run before route-level middleware, so derive the value from the request itself (trappsec-api.md §4). Arrays are compared element by element, in order. Value matching is canonical: the form string `"false"` equals `false`, but `"False"` does not.
 
+**Stale but legitimate values.** A tab opened before a demotion still echoes the old role, and a tab from another account echoes that account's IDs. If the framework exposes the parsed body on the request (Express `req.body`), the callable default can act as a rule:
+- return the submitted value when it is plausible for this caller, so nothing alerts;
+- return the expected value otherwise.
+
+Only impossible values then alert, such as a role nobody can hold through this endpoint, or a tenant the caller doesn't belong to. Write down any blind spot this creates.
+
 ### Bait it
 
 A honey field nobody sees rarely gets tried. Return the field in a real GET response for the same resource, either constant for everyone or the caller's own value. Add it to the frontend type, and optionally display it read-only. Requirements:
@@ -78,7 +84,9 @@ A honey field nobody sees rarely gets tried. Return the field in a real GET resp
 | The app's real 404 shape | Resource-by-ID decoys, where the real API hides existence with 404 | Matches the app's own existence-hiding behavior |
 | The app's retired-version response | Version decoys, if the app really announces retirement that way | Matches history, but ends exploration. Prefer a 403 or success if you want engagement. |
 
-**Synthetic data must look like the app's real data:**
+****Every caller gets the same status.** A trap's status depends on whether the caller is authenticated, not on who they are. Your most privileged users will be denied too, even where real routes let them through. So pick cover stories in which every role is plausibly denied: a flag that is off, a plan that doesn't include the feature, a function that moved to a hosted portal. Dynamic bodies can vary the body per caller, but not the status.
+
+Synthetic data must look like the app's real data:**
 - same ID format;
 - realistic values;
 - timestamps in the app's format;

@@ -147,6 +147,7 @@ Then list the files you will touch, your assumptions, and anything the user must
 **Backend.** Exact syntax per language and framework is in references/trappsec-api.md.
 
 - **Install and initialize.** Install trappsec with the project's package manager. Create one `Sentry` per public API service, at the point the framework requires (Express/Koa: after body parsers). Use the real service name and take the environment from config.
+- **Version.** Check which release you installed. Registries can lag the docs, and 0.2.0 needs workarounds (references/trappsec-api.md §9). Tell the user if you hit one.
 - **One module.** Put every trap and watch definition in one plainly named server-side module, with a one-line cover-story comment per tripwire. Server code never reaches browsers, so clarity there costs nothing and helps maintainers.
 - **Defaults.** Set `default_responses` for both profiles to the app's real responses. That way no trap can ever emit trappsec's recognizable defaults.
 - **Identity.** Wire `identify_user` to the app's real authentication, returning `user` and `role` (or nothing when anonymous). Trap routes run none of the app's per-route middleware, guards or dependencies. If authentication happens per route, verify the session or token inside the callback with the app's own helper.
