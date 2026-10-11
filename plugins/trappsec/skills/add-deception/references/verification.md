@@ -28,7 +28,7 @@ Expect the designed response, plus a `trap_hit` with `"type": "alert"` and the e
 
 If the signed-in call gets the anonymous response, `identify_user` can't see the user on trap routes. Fix that before anything else (trappsec-api.md §2).
 
-Then poke each trap the way a skeptic would: wrong method, empty body, garbage body, another ID, trailing slash. Compare with a real sibling. Any difference should be one a real endpoint could plausibly have.
+Then poke each trap the way a skeptic would: `OPTIONS`, `HEAD`, wrong method, empty body, garbage body, another ID, trailing slash, different case. Compare with a real sibling. Any difference should be one a real endpoint could plausibly have.
 
 If the project has integration tests, add tests that fire each trap and honey field and assert on both the response and the event, so a future refactor can't silently break them. Follow the project's test conventions. trappsec bootstraps on the first request, so test clients work.
 
