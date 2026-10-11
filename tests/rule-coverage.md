@@ -8,17 +8,17 @@ Columns: Fl Flask · FA FastAPI · St Starlette · Li Litestar · Dj Django · S
 
 | Rule | Fl | FA | St | Li | Dj | Sa | To | Ex | Fy | Ha | Ko | Ne | NH | Gi | Ec | core py / node / go |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
-| R1 watch uses route pattern | e2e | e2e | e2e | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | e2e | ✅ | e2e | N/A |
+| R1 watch uses route pattern | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | N/A |
 | R2 traps not shadowed | ✅ | ✅ | ✅ | e2e | ✅ | e2e | ✅ | ✅ | e2e | ✅ | ✅ | ✅ | ✅ | e2e | e2e | N/A |
 | R3 setup before first request | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | N/A |
 | R4 always strip | ✅ | e2e | ✅ | e2e | ✅ | ✅ | e2e | ✅ | e2e | e2e | e2e | e2e | e2e | e2e | e2e | ✅ / ✅ / ✅ |
 | R5 body parsing | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | N/A |
-| R6 stable mutation API | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | e2e | e2e | ✅ | ✅ | ✅ | N/A |
+| R6 stable mutation API | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | N/A |
 | R7 nested routers | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅¹ | ✅ | ✅ | N/A |
 | R8 double-init guard | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | N/A |
 | R9 unknown framework fails loud | N/A | N/A | N/A | N/A | N/A | N/A | N/A | N/A | N/A | N/A | N/A | N/A | N/A | N/A | N/A | ✅ / ✅ / N/A² |
 | R10 traps before watches | — | — | — | — | — | — | — | — | — | — | — | — | — | — | — | N/A |
-| R11 adapter-specific context | ✅ | e2e | e2e | e2e | e2e | e2e | e2e | e2e | e2e | e2e | e2e | e2e | ✅ | ✅ | ✅ | N/A |
+| R11 adapter-specific context | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | N/A |
 | R12 emit is fire-and-forget | N/A | N/A | N/A | N/A | N/A | N/A | N/A | N/A | N/A | N/A | N/A | N/A | N/A | N/A | N/A | ✅ / ✅ / ✅ |
 | R13 O(1) lookups | — | — | — | — | — | — | — | — | — | — | — | — | — | — | — | — / — / — |
 | R14 traps are real routes | e2e | e2e | e2e | e2e | e2e | e2e | ✅ | e2e | e2e | e2e | e2e | e2e | e2e | e2e | e2e | N/A |
@@ -44,8 +44,7 @@ Columns: Fl Flask · FA FastAPI · St Starlette · Li Litestar · Dj Django · S
 Ordered by risk to detection.
 
 - **R22 third-party CSRF middleware:** Flask-WTF is exempted automatically and tested; for the rest (csurf, csrf-csrf, `@fastify/csrf-protection`, crumb, koa-csrf, starlette-csrf, gorilla/csrf) the `is_trap` / `IsTrap` skip hook is tested with stand-in middleware (Express, Starlette, net/http), not with each library.
-- **R1, R6, R11** on the frameworks marked e2e: covered end to end only.
 - **R14 response bodies and headers:** the e2e suite compares a trap with a real route for wrong methods (status and `Allow`), trailing slashes and HEAD; error bodies and other headers are compared only in Tornado's unit test.
 - **R10 and R13:** correctness and performance invariants with no test; low risk.
 
-Notes: R5 multipart is now covered end to end on every framework (the Express, Koa and NestJS examples parse it on the route). R8 is tested under concurrent first requests in Go, Flask and Django; the other Python integrations bootstrap from a startup hook or their first request under the same lock.
+Notes: R1, R6 and R11 are checked together per framework by one request to a watched parameterised route (`test_request_context.py`, `request_context.test.js`, `TestParameterisedWatchAndEventContext`); on Node it also checks that every raw-URL accessor lost the honey field. R5 multipart is now covered end to end on every framework (the Express, Koa and NestJS examples parse it on the route). R8 is tested under concurrent first requests in Go, Flask and Django; the other Python integrations bootstrap from a startup hook or their first request under the same lock.

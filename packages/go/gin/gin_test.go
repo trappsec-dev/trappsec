@@ -700,3 +700,21 @@ func TestPanickingCallbacksNeverBreakRequests(t *testing.T) {
 		t.Fatalf("watched route: code=%d bound=%v", rec.Code, bound)
 	}
 }
+
+func TestParameterisedWatchAndEventContext(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	app := InstallSentry(gin.New(), "svc", "test")
+	logs := &syncBuf{}
+	app.Logger().SetOutput(logs)
+	var seen string
+	app.GET("/users/:id", func(c *gin.Context) { seen = c.Request.URL.RawQuery })
+	app.Sentry.Watch("/users/:id").Query("debug", core.NoDefault, "recon")
+	req := httptest.NewRequest("GET", "/users/7?debug=1&x=1", nil)
+	req.Header.Set("User-Agent", "probe/1.0")
+	req.RemoteAddr = "203.0.113.5:4711"
+	app.ServeHTTP(httptest.NewRecorder(), req)
+	ev := logs.waitEvent(t, "trappsec.watch_hit")
+	if seen != "x=1" || ev["path"] != "/users/7" || ev["method"] != "GET" || ev["user_agent"] != "probe/1.0" || ev["ip"] != "203.0.113.5" {
+		t.Fatalf("handler saw %q; event %v", seen, ev)
+	}
+}

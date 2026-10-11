@@ -2,7 +2,7 @@
 
 const {
     normalizePath, isObject, buildWatchMap, hasFields, replaceInPlace, detect,
-    resolveTrap, emitWatch
+    resolveTrap, emitWatch, stripRawQuery
 } = require('./_common');
 
 // Watches run in `onPostAuth`: the payload is parsed and credentials are set (so
@@ -103,7 +103,15 @@ class HapiIntegration {
         if (hasFields(watch.query_fields) && isObject(request.query)) {
             const { found: f, data, touched } = detect(this.ts, request.query, watch.query_fields, request, 'query');
             found.push(...f);
-            if (touched) replaceInPlace(request.query, data);
+            if (touched) {
+                replaceInPlace(request.query, data);
+                const keys = Object.keys(watch.query_fields);
+                const raw = request.raw && request.raw.req;
+                if (raw) raw.url = stripRawQuery(raw.url, keys);
+                if (request.url && typeof request.url.search === 'string') {
+                    request.url.search = stripRawQuery('?' + request.url.search.slice(1), keys).slice(1);
+                }
+            }
         }
 
         if (hasFields(watch.body_fields) && isObject(request.payload)) {

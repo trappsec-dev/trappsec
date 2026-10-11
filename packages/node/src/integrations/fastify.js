@@ -2,7 +2,7 @@
 
 const {
     normalizePath, isObject, buildWatchMap, hasFields, replaceInPlace, detect,
-    resolveTrap, emitWatch
+    resolveTrap, emitWatch, stripRawQuery
 } = require('./_common');
 
 const PENDING = Symbol('trappsec.pendingWatch');
@@ -129,7 +129,10 @@ class FastifyIntegration {
         if (hasFields(watch.query_fields) && isObject(req.query)) {
             const { found: f, data, touched } = detect(this.ts, req.query, watch.query_fields, req, 'query');
             found.push(...f);
-            if (touched) replaceInPlace(req.query, data); // in place: req.query may be getter-only
+            if (touched) {
+                replaceInPlace(req.query, data); // in place: req.query may be getter-only
+                if (req.raw) req.raw.url = stripRawQuery(req.raw.url, Object.keys(watch.query_fields)); // req.url reads it
+            }
         }
 
         if (hasFields(watch.body_fields)) {

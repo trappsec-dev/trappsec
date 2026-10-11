@@ -142,6 +142,31 @@ function bodyLooksUnparsed(body, headers, parsed) {
     return Number(h['content-length']) > 0 || h['transfer-encoding'] !== undefined;
 }
 
+/**
+ * Removes the watched query keys from a raw URL ("/path?a=1&b=2"), including
+ * qs-style forms ("role[]=x", "role[a]=x") that a framework parses into the
+ * same key. The parsed query object is not enough: a handler or a proxy that
+ * reads the raw URL would still see the honey field (R6). Returns the URL
+ * unchanged when nothing matches.
+ */
+function stripRawQuery(url, keys) {
+    if (typeof url !== 'string') return url;
+    const q = url.indexOf('?');
+    if (q === -1) return url;
+    const hash = url.indexOf('#', q);
+    const query = url.slice(q + 1, hash === -1 ? undefined : hash);
+    const names = [...keys];
+    const parts = query.split('&');
+    const kept = parts.filter((part) => {
+        let key = part.split('=')[0];
+        try { key = decodeURIComponent(key.replace(/\+/g, ' ')); } catch (e) { /* keep raw key */ }
+        return !names.some((n) => key === n || key.startsWith(n + '['));
+    });
+    if (kept.length === parts.length) return url;
+    const rest = hash === -1 ? '' : url.slice(hash);
+    return url.slice(0, q) + (kept.length ? '?' + kept.join('&') : '') + rest;
+}
+
 function emitWatch(ts, req, found, label) {
     if (found.length === 0) return;
     try {
@@ -163,6 +188,7 @@ const BODY_METHODS = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
 
 module.exports = {
     bodyLooksUnparsed,
+    stripRawQuery,
     hasOwn,
     normalizePath,
     isObject,

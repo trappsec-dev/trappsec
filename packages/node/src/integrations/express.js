@@ -4,7 +4,7 @@ const { AsyncLocalStorage } = require('node:async_hooks');
 
 const {
     normalizePath, isObject, buildWatchMap, hasFields, replaceInPlace, detect,
-    resolveTrap, emitWatch, warnOnce, BODY_METHODS, bodyLooksUnparsed
+    resolveTrap, emitWatch, warnOnce, BODY_METHODS, bodyLooksUnparsed, stripRawQuery
 } = require('./_common');
 
 const PENDING = Symbol('trappsec.pendingWatch');
@@ -266,6 +266,7 @@ class ExpressIntegration {
                     // Express 5's req.query is a getter that re-parses on every read, so an
                     // own data property is the only way to make the stripped copy stick.
                     Object.defineProperty(req, 'query', { value: data, writable: true, configurable: true, enumerable: true });
+                    req.url = stripRawQuery(req.url, Object.keys(watch.query_fields)); // originalUrl stays as received
                 }
             }
         }

@@ -673,3 +673,20 @@ func TestIsTrapLetsCSRFMiddlewareSkipTraps(t *testing.T) {
 		t.Fatal("trap event missing")
 	}
 }
+
+func TestParameterisedWatchAndEventContext(t *testing.T) {
+	app := InstallSentry(http.NewServeMux(), "svc", "test")
+	logs := &syncBuf{}
+	app.Logger().SetOutput(logs)
+	var seen string
+	app.HandleFunc("GET /users/{id}", func(w http.ResponseWriter, r *http.Request) { seen = r.URL.RawQuery })
+	app.Sentry.Watch("/users/{id}").Query("debug", core.NoDefault, "recon")
+	req := httptest.NewRequest("GET", "/users/7?debug=1&x=1", nil)
+	req.Header.Set("User-Agent", "probe/1.0")
+	req.RemoteAddr = "203.0.113.5:4711"
+	app.ServeHTTP(httptest.NewRecorder(), req)
+	ev := logs.waitEvent(t, "trappsec.watch_hit")
+	if seen != "x=1" || ev["path"] != "/users/7" || ev["method"] != "GET" || ev["user_agent"] != "probe/1.0" || ev["ip"] != "203.0.113.5" {
+		t.Fatalf("handler saw %q; event %v", seen, ev)
+	}
+}
