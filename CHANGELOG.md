@@ -4,6 +4,18 @@ All notable changes to trappsec are documented here. The format follows [Keep a 
 
 ## Unreleased
 
+### Changed: one API across Python, Node and Go
+
+The SDKs now share names, units and option shapes. Every old form below keeps working; Node and Go log nothing for them except where noted.
+
+- **Default responses have setters:** `default_response(...)` / `default_unauthenticated_response(...)` (Go: `DefaultResponse(ResponseConfig)` / `DefaultUnauthenticatedResponse(ResponseConfig)`) take the same arguments as `respond` / `if_unauthenticated`, including `template`. Assigning to `default_responses` still works; Go's `SetDefaultAuthenticated` / `SetDefaultUnauthenticated` are deprecated.
+- **Node:** watch fields take `{ default, intent }` like Python (`defaultValue` still accepted); `trigger(req, reason, { intent, metadata })` (positional still accepted); the request extractors are `ts.request` with `user_agent`, as in Python (`requestContext` / `userAgent` remain aliases).
+- **Node: `close(timeout)` is in seconds** (default 5), like Python and like Node's own `heartbeat_interval`. Values of 1000 or more are still read as milliseconds, with a one-time warning.
+- **Go: optional arguments are optional.** `watch.Body("x", trappsec.Default(false), trappsec.Intent("PrivEsc"))`, `watch.Query("debug")`, `ts.Trigger(c, reason, trappsec.Intent(...), trappsec.Metadata(...))`, and `Template(name, status, body)` with an optional MIME type. The positional forms still compile and behave as before.
+- **Go: every adapter has the same surface.** `App.IsTrap` takes the framework's request type in all three adapters (`*http.Request`, `*gin.Context`, `echo.Context`); on Gin this replaces the promoted `IsTrap(any)`, which remains as `app.Sentry.IsTrap`. All three answer from the route the framework matched (net/http asks the mux), as Echo's already did, so a real route such as `POST /users/me` next to a trap `POST /users/{id}` is not reported as a trap and keeps its CSRF protection. net/http gains `Use(sentry, mux)` like Gin and Echo. `Sentry.IsTrap` now uses a cached index instead of rebuilding every trap's configuration on each call.
+- **Go: adapter plumbing is no longer public API.** `MethodAllowed`, `QueryToMap`, `MapToQuery`, `ReadBody`, `ReadBodyLimit`, `ResetBody`, `DetectHoneyFields`, `DetectHoneyFieldsAny` and `TriggerWatchEvent` are unexported, and the deprecated `ParseMultipartFields` / `RebuildMultipartBody` are removed. Adapters now reach the core through an internal package; `InspectWatch`, `TriggerTrapEvent` and `SetBodyResolver` stay exported but deprecated, only so that adapter modules older than this release still build.
+- **Docs:** a per-framework table (request object, body parsing, CSRF, known limits) in Supported Frameworks; every example app flushes events with `close()` on shutdown.
+
 ### Dependencies
 
 - Go: OpenTelemetry v1.47.0 (all modules now require **Go 1.26+**), golang.org/x/net v0.61.0, x/crypto v0.58.0 and quic-go v0.59.1 (GO-2026-5676); govulncheck reports no reachable vulnerabilities.

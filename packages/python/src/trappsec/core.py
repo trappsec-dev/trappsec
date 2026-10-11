@@ -225,6 +225,38 @@ class Sentry:
                 except Exception as e:
                     self.logger.error("error closing handler: %s", e)
     
+    def default_response(self, status: int = None, body: typing.Union[dict, str, typing.Callable] = None, mime_type: str = None, template: str = None):
+        """Default response for authenticated requests to traps that do not call ``respond``.
+
+        Same arguments as ``TrapBuilder.respond``: only the arguments you pass
+        change the default, and ``template`` replaces it. Resolved at bootstrap,
+        so it may be called before or after declaring traps.
+        """
+        return self._set_default("authenticated", status, body, mime_type, template)
+
+    def default_unauthenticated_response(self, status: int = None, body: typing.Union[dict, str, typing.Callable] = None, mime_type: str = None, template: str = None):
+        """Default response for unauthenticated requests to traps that do not call ``if_unauthenticated``."""
+        return self._set_default("unauthenticated", status, body, mime_type, template)
+
+    def _set_default(self, key, status, body, mime_type, template):
+        if template is not None:
+            if any(arg is not None for arg in (status, body, mime_type)):
+                raise TypeError("default_response: `template` cannot be used together with `status`, `body`, or `mime_type`.")
+            tmpl = self._templates.get(template)
+            if tmpl is None:
+                raise ValueError(f"default_response: template '{template}' not found.")
+            self.default_responses[key] = dict(tmpl)
+            return self
+        current = dict(self.default_responses[key])
+        if status is not None:
+            current["status_code"] = status
+        if body is not None:
+            current["response_body"] = body
+        if mime_type is not None:
+            current["mime_type"] = mime_type
+        self.default_responses[key] = current
+        return self
+
     def template(self, name: str, status_code: int, response_body: dict, mime_type: str = "application/json"):
         self._templates[name] = {"status_code": status_code, "response_body": response_body, "mime_type": mime_type}
         return self

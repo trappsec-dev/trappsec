@@ -45,7 +45,7 @@ func readAll(t *testing.T, r *http.Request) string {
 func TestInspectWatchQueryStripKeepsOtherValues(t *testing.T) {
 	s, capture, watch := inspectEnv(t)
 	r := httptest.NewRequest("GET", "/w?debug=1&a=1&a=2", nil)
-	InspectWatch(s, r, r, watch, 0)
+	inspectWatch(s, r, r, watch, 0)
 	if got := r.URL.Query(); got.Has("debug") || strings.Join(got["a"], ",") != "1,2" {
 		t.Fatalf("query after strip = %v", got)
 	}
@@ -59,7 +59,7 @@ func TestInspectWatchJSONStripUpdatesLength(t *testing.T) {
 	body := `{"is_admin":true,"role":"user","name":"a"}`
 	r := httptest.NewRequest("POST", "/w", strings.NewReader(body))
 	r.Header.Set("Content-Type", "application/json; charset=utf-8")
-	InspectWatch(s, r, r, watch, 0)
+	inspectWatch(s, r, r, watch, 0)
 	got := readAll(t, r)
 	if got != `{"name":"a"}` {
 		t.Fatalf("body = %s", got)
@@ -79,7 +79,7 @@ func TestInspectWatchJSONWithoutContentTypeIsInspected(t *testing.T) {
 		if ct != "" {
 			r.Header.Set("Content-Type", ct)
 		}
-		InspectWatch(s, r, r, watch, 0)
+		inspectWatch(s, r, r, watch, 0)
 		if got := readAll(t, r); got != `{}` || len(capture.events) != 1 {
 			t.Fatalf("ct=%q: body=%s events=%d", ct, got, len(capture.events))
 		}
@@ -91,7 +91,7 @@ func TestInspectWatchUntouchedBodyIsByteIdentical(t *testing.T) {
 	body := "{ \"name\" : \"a\",\n \"n\": 1.50 }"
 	r := httptest.NewRequest("POST", "/w", strings.NewReader(body))
 	r.Header.Set("Content-Type", "application/json")
-	InspectWatch(s, r, r, watch, 0)
+	inspectWatch(s, r, r, watch, 0)
 	if got := readAll(t, r); got != body || len(capture.events) != 0 {
 		t.Fatalf("body changed: %q (events %d)", got, len(capture.events))
 	}
@@ -107,7 +107,7 @@ func TestInspectWatchTrailingDataCannotBypass(t *testing.T) {
 		s, capture, watch := inspectEnv(t)
 		r := httptest.NewRequest("POST", "/w", strings.NewReader(c.body))
 		r.Header.Set("Content-Type", "application/json")
-		InspectWatch(s, r, r, watch, 0)
+		inspectWatch(s, r, r, watch, 0)
 		if got := readAll(t, r); got != c.want {
 			t.Fatalf("%q: body = %q, want %q", c.body, got, c.want)
 		}
@@ -122,7 +122,7 @@ func TestInspectWatchUnparseableJSONLeftAlone(t *testing.T) {
 	body := `{"is_admin":tru`
 	r := httptest.NewRequest("POST", "/w", strings.NewReader(body))
 	r.Header.Set("Content-Type", "application/json")
-	InspectWatch(s, r, r, watch, 0)
+	inspectWatch(s, r, r, watch, 0)
 	if got := readAll(t, r); got != body || len(capture.events) != 0 {
 		t.Fatalf("body=%q events=%d", got, len(capture.events))
 	}
@@ -132,7 +132,7 @@ func TestInspectWatchFormStripPreservesMultiValues(t *testing.T) {
 	s, capture, watch := inspectEnv(t)
 	r := httptest.NewRequest("POST", "/w", strings.NewReader("role=admin&tag=a&tag=b"))
 	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	InspectWatch(s, r, r, watch, 0)
+	inspectWatch(s, r, r, watch, 0)
 	vals, _ := url.ParseQuery(readAll(t, r))
 	if vals.Has("role") || strings.Join(vals["tag"], ",") != "a,b" {
 		t.Fatalf("form after strip = %v", vals)
@@ -154,7 +154,7 @@ func TestInspectWatchMultipartStripKeepsFileParts(t *testing.T) {
 
 	r := httptest.NewRequest("POST", "/w", &buf)
 	r.Header.Set("Content-Type", w.FormDataContentType())
-	InspectWatch(s, r, r, watch, 0)
+	inspectWatch(s, r, r, watch, 0)
 
 	if err := r.ParseMultipartForm(1 << 20); err != nil {
 		t.Fatalf("rewritten body is not valid multipart: %v", err)
@@ -184,7 +184,7 @@ func TestInspectWatchOversizeBodyPassesThrough(t *testing.T) {
 		if chunked {
 			r.ContentLength = -1
 		}
-		InspectWatch(s, r, r, watch, 100)
+		inspectWatch(s, r, r, watch, 100)
 		if got := readAll(t, r); got != body || len(capture.events) != 0 {
 			t.Fatalf("chunked=%v: body intact=%v events=%d", chunked, got == body, len(capture.events))
 		}
@@ -196,7 +196,7 @@ func TestInspectWatchRecoversFromPanickingDefault(t *testing.T) {
 	watch.BodyFields["role"] = WatchFieldRule{Default: func(any) any { panic("boom") }, Intent: "r"}
 	r := httptest.NewRequest("POST", "/w", strings.NewReader(`{"role":"user","name":"a"}`))
 	r.Header.Set("Content-Type", "application/json")
-	InspectWatch(s, r, r, watch, 0)
+	inspectWatch(s, r, r, watch, 0)
 	if got := readAll(t, r); got != `{"name":"a"}` {
 		t.Fatalf("field must be stripped even when the default panics: %s", got)
 	}
@@ -204,7 +204,7 @@ func TestInspectWatchRecoversFromPanickingDefault(t *testing.T) {
 
 func TestReadBodyLimitRestoresStream(t *testing.T) {
 	r := httptest.NewRequest("POST", "/", strings.NewReader("0123456789"))
-	if data, ok := ReadBodyLimit(r, 4); data != nil || ok {
+	if data, ok := readBodyLimit(r, 4); data != nil || ok {
 		t.Fatalf("over limit: data=%q ok=%v", data, ok)
 	}
 	if got := readAll(t, r); got != "0123456789" {
@@ -213,7 +213,7 @@ func TestReadBodyLimitRestoresStream(t *testing.T) {
 
 	boom := errors.New("boom")
 	r = httptest.NewRequest("POST", "/", io.MultiReader(strings.NewReader("ab"), errReader{boom}))
-	if _, ok := ReadBodyLimit(r, 100); ok {
+	if _, ok := readBodyLimit(r, 100); ok {
 		t.Fatal("read error must report !ok")
 	}
 	b, err := io.ReadAll(r.Body)
@@ -224,16 +224,16 @@ func TestReadBodyLimitRestoresStream(t *testing.T) {
 
 func TestQueryMapRoundTripAndMethodAllowed(t *testing.T) {
 	vals := url.Values{"a": {"1"}, "b": {"x", "y"}}
-	m := QueryToMap(vals)
+	m := queryToMap(vals)
 	if m["a"] != "1" {
 		t.Fatalf("single value should be a scalar: %#v", m["a"])
 	}
-	back, _ := url.ParseQuery(MapToQuery(m))
+	back, _ := url.ParseQuery(mapToQuery(m))
 	if !equalValues(back, vals) {
 		t.Fatalf("round trip = %v", back)
 	}
-	if !MethodAllowed("post", []string{"GET", "POST"}) || MethodAllowed("DELETE", []string{"GET"}) {
-		t.Fatal("MethodAllowed is case-insensitive membership")
+	if !methodAllowed("post", []string{"GET", "POST"}) || methodAllowed("DELETE", []string{"GET"}) {
+		t.Fatal("methodAllowed is case-insensitive membership")
 	}
 }
 
@@ -272,7 +272,7 @@ func TestInspectWatchDuplicateKeysDetectedAndStripped(t *testing.T) {
 			if c.ct != "" {
 				r.Header.Set("Content-Type", c.ct)
 			}
-			InspectWatch(s, r, r, watch, 0)
+			inspectWatch(s, r, r, watch, 0)
 			if r.URL.Query().Has("role") {
 				t.Fatalf("query still has role: %s", r.URL.RawQuery)
 			}

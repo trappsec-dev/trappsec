@@ -27,6 +27,7 @@ import (
 	"fmt"
 	"github.com/gin-gonic/gin"
 	core "github.com/trappsec-dev/trappsec/packages/go"
+	"github.com/trappsec-dev/trappsec/packages/go/internal/adapter"
 	"net"
 	"net/http"
 	"os"
@@ -49,10 +50,17 @@ type (
 	WebhookOptions = core.WebhookOptions
 	SlackOptions   = core.SlackOptions
 	EventHandler   = core.EventHandler
+	Option         = core.Option
 )
 
-// NoDefault is re-exported from core so callers need only one import.
-var NoDefault = core.NoDefault
+// NoDefault, Default, Intent and Metadata are re-exported from core so callers
+// need only one import.
+var (
+	NoDefault = core.NoDefault
+	Default   = core.Default
+	Intent    = core.Intent
+	Metadata  = core.Metadata
+)
 
 // App wraps a Gin engine and a trappsec Sentry. All Gin engine methods (GET, POST,
 // Use, Group, NoRoute, etc.) and all Sentry methods (Trap, Watch, IdentifyUser, etc.)
@@ -108,7 +116,7 @@ func Use(s *core.Sentry, engine *gin.Engine) *App {
 		return context.Background()
 	}
 
-	s.SetBodyResolver(func(body any, req any) any {
+	adapter.SetBodyResolver(s, func(body any, req any) any {
 		if fn, ok := body.(func(*gin.Context) any); ok {
 			if c, ok := req.(*gin.Context); ok {
 				return fn(c)
@@ -153,6 +161,7 @@ type ginIntegration struct {
 	engine *gin.Engine
 
 	watchIdx   map[string]core.WatchConfig
+	trapIdx    map[string]bool // "METHOD /pattern" of every trap route
 	preInstall map[string]bool // "METHOD /pattern" registered before InstallSentry
 	shadow     *gin.Engine     // matcher over all routes, for routes the middleware cannot reach
 	// covered records "METHOD /pattern" routes whose handler chain is known to
@@ -206,6 +215,7 @@ func (a *App) Bootstrap() {
 		existing[ri.Method+" "+ri.Path] = true
 	}
 	// Register each trap as a real Gin route for each declared method.
+	trapIdx := map[string]bool{}
 	for _, trap := range in.ts.Traps() {
 		t := trap
 		for _, method := range trap.Methods {
@@ -223,8 +233,10 @@ func (a *App) Bootstrap() {
 				a.Engine.Handle(method, trap.Path, ginTrapHandler(in.ts, t))
 			}()
 			existing[method+" "+trap.Path] = true
+			trapIdx[method+" "+trap.Path] = true
 		}
 	}
+	in.trapIdx = trapIdx
 
 	if len(idx) > 0 {
 		in.shadow = in.buildShadow()
@@ -241,6 +253,30 @@ func (a *App) Bootstrap() {
 				"(watch paths are full route patterns, including group prefixes, e.g. /api/users/:id)", path)
 		}
 	}
+}
+
+// IsTrap reports whether the request targets a trap. Use it to let traps
+// through middleware that would otherwise reject them before they can answer,
+// such as CSRF protection:
+//
+//	engine.Use(func(c *gin.Context) {
+//		if app.IsTrap(c) {
+//			c.Next()
+//			return
+//		}
+//		csrfMiddleware(c)
+//	})
+//
+// It bootstraps lazily. Once Gin has routed the request it answers from the
+// matched route, so a real route that only looks like a trap (POST /users/me
+// next to a trap POST /users/:id) is never reported as one; otherwise it
+// falls back to Sentry.IsTrap's path matching.
+func (a *App) IsTrap(c *gin.Context) bool {
+	a.Bootstrap()
+	if route := c.FullPath(); route != "" {
+		return a.integration.trapIdx[strings.ToUpper(c.Request.Method)+" "+route]
+	}
+	return a.Sentry.IsTrap(c)
 }
 
 // SetMaxBodyBytes sets the largest request body that watch inspection buffers
@@ -284,7 +320,7 @@ func (p *probeWriter) WriteHeader(int)             {}
 // ginTrapHandler returns a Gin handler for a trap route.
 func ginTrapHandler(ts *core.Sentry, trap core.TrapConfig) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		body, cfg := ts.TriggerTrapEvent(c, trap)
+		body, cfg := adapter.TriggerTrapEvent(ts, c, trap)
 		c.Data(cfg.StatusCode, cfg.MIMEType, body)
 	}
 }
@@ -305,7 +341,7 @@ func (a *App) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			if watch, ok := in.watchIdx[pat]; ok && (in.preInstall[key] || !in.isCovered(key)) {
 				c := gin.CreateTestContextOnly(&probeWriter{h: http.Header{}}, in.engine)
 				c.Request = r
-				core.InspectWatch(in.ts, r, c, watch, atomic.LoadInt64(&in.maxBody))
+				adapter.InspectWatch(in.ts, r, c, watch, atomic.LoadInt64(&in.maxBody))
 				r = r.WithContext(context.WithValue(r.Context(), inspectedKey{}, true))
 			}
 		}
@@ -389,7 +425,7 @@ func (in *ginIntegration) watchMiddleware() gin.HandlerFunc {
 			if watch, ok := in.watchIdx[path]; ok && !in.preInstall[key] {
 				in.covered.Store(key, true) // the middleware reaches this route from now on
 				if c.Request.Context().Value(inspectedKey{}) == nil {
-					core.InspectWatch(in.ts, c.Request, c, watch, atomic.LoadInt64(&in.maxBody))
+					adapter.InspectWatch(in.ts, c.Request, c, watch, atomic.LoadInt64(&in.maxBody))
 				}
 			}
 		}

@@ -9,7 +9,7 @@ func TestDetectHoneyFieldsTouchedWithDefaultStripsWithoutViolation(t *testing.T)
 		"role": {Default: "user", Intent: "Privilege Escalation"},
 	}
 
-	sanitized, found, touched := s.DetectHoneyFields(data, rules, nil)
+	sanitized, found, touched := s.detectHoneyFields(data, rules, nil)
 
 	if !touched {
 		t.Fatalf("expected touched=true")
@@ -32,7 +32,7 @@ func TestDetectHoneyFieldsTouchedWithMismatchStripsAndReports(t *testing.T) {
 		"role": {Default: "user", Intent: "Privilege Escalation"},
 	}
 
-	sanitized, found, touched := s.DetectHoneyFields(data, rules, nil)
+	sanitized, found, touched := s.detectHoneyFields(data, rules, nil)
 
 	if !touched {
 		t.Fatalf("expected touched=true")
@@ -55,7 +55,7 @@ func TestDetectHoneyFieldsUntouchedNoWatchedKeys(t *testing.T) {
 		"role": {Default: "user", Intent: "Privilege Escalation"},
 	}
 
-	sanitized, found, touched := s.DetectHoneyFields(data, rules, nil)
+	sanitized, found, touched := s.detectHoneyFields(data, rules, nil)
 
 	if touched {
 		t.Fatalf("expected touched=false")
@@ -75,7 +75,7 @@ func TestDetectHoneyFieldsNoDefaultAlwaysTriggersAndStrips(t *testing.T) {
 		"token": {Default: NoDefault, Intent: "Credential Stuffing"},
 	}
 
-	sanitized, found, touched := s.DetectHoneyFields(data, rules, nil)
+	sanitized, found, touched := s.detectHoneyFields(data, rules, nil)
 
 	if !touched {
 		t.Fatalf("expected touched=true")

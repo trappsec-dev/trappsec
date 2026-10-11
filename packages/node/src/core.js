@@ -89,9 +89,11 @@ class Sentry {
             auth: null
         };
 
-        this.requestContext = {
+        // Same name and keys as Python's `ts.request`; `requestContext` and
+        // `userAgent` remain as aliases.
+        this.request = {
             path: r => null,
-            userAgent: r => null,
+            user_agent: r => null,
             method: r => null
         };
 
@@ -114,6 +116,49 @@ class Sentry {
         };
 
         this._register(app);
+    }
+
+    /** @deprecated Use `request`. */
+    get requestContext() {
+        return this.request;
+    }
+
+    set requestContext(value) {
+        this.request = value;
+    }
+
+    /**
+     * Default response for authenticated requests to traps that do not call
+     * `respond`. Same options as `TrapBuilder.respond`: only the options you
+     * pass change the default, and `template` replaces it.
+     */
+    default_response(opts = {}) {
+        return this._set_default("authenticated", opts || {});
+    }
+
+    /** Default response for unauthenticated requests to traps that do not call `if_unauthenticated`. */
+    default_unauthenticated_response(opts = {}) {
+        return this._set_default("unauthenticated", opts || {});
+    }
+
+    _set_default(kind, { status = undefined, body = undefined, mime_type = undefined, template = undefined }) {
+        const provided = (v) => v !== undefined && v !== null;
+        if (provided(template)) {
+            if (provided(status) || provided(body) || provided(mime_type)) {
+                throw new Error("default_response: `template` cannot be used together with `status`, `body`, or `mime_type`.");
+            }
+            if (!Object.prototype.hasOwnProperty.call(this._templates, template)) {
+                throw new Error(`default_response: template '${template}' not found.`);
+            }
+            this.default_responses[kind] = { ...this._templates[template] };
+            return this;
+        }
+        const next = { ...this.default_responses[kind] };
+        if (provided(status)) next.status_code = status;
+        if (provided(body)) next.response_body = body;
+        if (provided(mime_type)) next.mime_type = mime_type;
+        this.default_responses[kind] = next;
+        return this;
     }
 
     template(name, status_code, response_body, mime_type = "application/json") {
@@ -176,12 +221,26 @@ class Sentry {
         }
     }
 
-    /** Stop heartbeats and flush in-flight deliveries (default timeout 5s). */
-    async close(timeout = 5000) {
+    /**
+     * Stop heartbeats and flush in-flight deliveries. `timeout` is in seconds
+     * (default 5), as in Python. Values of 1000 or more are read as
+     * milliseconds, the unit used before 0.3, with a deprecation warning.
+     */
+    async close(timeout = 5) {
+        let ms = Number(timeout);
+        if (!Number.isFinite(ms) || ms < 0) ms = 5;
+        if (ms >= 1000) {
+            if (!this._warnedCloseMs) {
+                this._warnedCloseMs = true;
+                this.logger.warn("trappsec: close(timeout) is now in seconds; reading " + timeout + " as milliseconds. Pass seconds instead.");
+            }
+        } else {
+            ms *= 1000;
+        }
         await Promise.all(this._handlers.map(async (h) => {
             if (typeof h.close !== 'function') return;
             try {
-                await h.close(timeout);
+                await h.close(ms);
             } catch (e) {
                 this.logger.error("error closing handler:", e);
             }
@@ -198,8 +257,8 @@ class Sentry {
      */
     is_trap(req) {
         try {
-            const method = String(this.requestContext.method(req) || '').toUpperCase();
-            const path = trapPath(this.requestContext.path(req));
+            const method = String(this.request.method(req) || '').toUpperCase();
+            const path = trapPath(this.request.path(req));
             if (!method || !path) return false;
             return this.traps.some((t) => (t.methods || []).some((m) => String(m).toUpperCase() === method)
                 && trapPathMatches(t.path, path));
@@ -208,9 +267,19 @@ class Sentry {
         }
     }
 
-    /** Emit a custom trappsec.rule_hit event. Never throws. */
-    trigger(req, reason, intent = null, metadata = null) {
+    /**
+     * Emit a custom trappsec.rule_hit event: `trigger(req, reason, { intent, metadata })`.
+     * The positional form `trigger(req, reason, intent, metadata)` is still accepted.
+     * Never throws.
+     */
+    trigger(req, reason, opts = null, legacyMetadata = null) {
         try {
+            let intent = opts;
+            let metadata = legacyMetadata;
+            if (opts !== null && typeof opts === 'object' && !Array.isArray(opts)) {
+                intent = opts.intent === undefined ? null : opts.intent;
+                metadata = opts.metadata === undefined ? null : opts.metadata;
+            }
             const ctx = this._base_event(req, "trappsec.rule_hit");
             ctx.reason = reason === undefined ? null : reason;
             ctx.intent = intent === undefined ? null : intent;
@@ -420,10 +489,11 @@ class Sentry {
                 return null;
             }
         };
+        const rc = this.request || {};
         return {
-            path: safe(this.requestContext.path),
-            userAgent: safe(this.requestContext.userAgent),
-            method: safe(this.requestContext.method)
+            path: safe(rc.path),
+            userAgent: safe(rc.user_agent || rc.userAgent),
+            method: safe(rc.method)
         };
     }
 

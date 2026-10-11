@@ -749,3 +749,52 @@ func TestWatchesBeforeTrapsAndIndexBuiltOnce(t *testing.T) {
 		t.Fatalf("a watch added while serving was applied: handler saw %q", seen)
 	}
 }
+
+func TestAppIsTrapTakesGinContext(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	engine := gin.New()
+	app := InstallSentry(engine, "svc", "test")
+	logs := &syncBuf{}
+	app.Logger().SetOutput(logs)
+	// stand-in for a CSRF middleware: reject POSTs without a token unless the request targets a trap
+	engine.Use(func(c *gin.Context) {
+		if c.Request.Method == "POST" && c.GetHeader("X-CSRF-Token") == "" && !app.IsTrap(c) {
+			c.AbortWithStatus(403)
+			return
+		}
+		c.Next()
+	})
+	app.POST("/real", func(c *gin.Context) { c.Status(200) })
+	app.Trap("/users/:id/export").Methods("POST")
+	app.Watch("/real").Body("role", Default("user"), Intent("PrivEsc"))
+	do := func(path string) int {
+		rec := httptest.NewRecorder()
+		app.ServeHTTP(rec, httptest.NewRequest("POST", path, nil))
+		return rec.Code
+	}
+	if real, trap := do("/real"), do("/users/7/export"); real != 403 || trap != 401 {
+		t.Fatalf("real=%d trap=%d", real, trap)
+	}
+	if logs.count("trappsec.trap_hit") != 1 {
+		t.Fatal("trap event missing")
+	}
+}
+
+// A real route that only looks like a trap must not be reported as one, or
+// CSRF protection would be skipped for it.
+func TestAppIsTrapUsesTheMatchedRoute(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	engine := gin.New()
+	app := InstallSentry(engine, "svc", "test")
+	app.Logger().SetOutput(io.Discard)
+	seen := map[string]bool{}
+	engine.Use(func(c *gin.Context) { seen[c.Request.URL.Path] = app.IsTrap(c); c.Next() })
+	app.POST("/users/me", func(c *gin.Context) { c.Status(200) })
+	app.Trap("/users/:id").Methods("POST")
+	for _, p := range []string{"/users/me", "/users/7"} {
+		app.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest("POST", p, nil))
+	}
+	if seen["/users/me"] || !seen["/users/7"] {
+		t.Fatalf("IsTrap by route: %v", seen)
+	}
+}

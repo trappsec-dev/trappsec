@@ -30,9 +30,9 @@ class ExpressIntegration {
             this.ts.identity.ip = r => r.ip || r.socket?.remoteAddress || r.connection?.remoteAddress || "0.0.0.0";
         }
 
-        this.ts.requestContext.path = r => r.path;
-        this.ts.requestContext.userAgent = r => (typeof r.get === 'function' ? r.get('User-Agent') : r.headers?.['user-agent']) || null;
-        this.ts.requestContext.method = r => r.method;
+        this.ts.request.path = r => r.path;
+        this.ts.request.user_agent = r => (typeof r.get === 'function' ? r.get('User-Agent') : r.headers?.['user-agent']) || null;
+        this.ts.request.method = r => r.method;
 
         const integration = this;
 

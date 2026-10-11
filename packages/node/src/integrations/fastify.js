@@ -33,9 +33,9 @@ class FastifyIntegration {
             this.ts.identity.ip = (req) => req.ip || req.socket?.remoteAddress || req.raw?.socket?.remoteAddress || "0.0.0.0";
         }
 
-        this.ts.requestContext.path = (req) => normalizePath(req.url || req.raw?.url);
-        this.ts.requestContext.userAgent = (req) => req.headers?.["user-agent"] || req.raw?.headers?.["user-agent"] || null;
-        this.ts.requestContext.method = (req) => req.method || req.raw?.method || null;
+        this.ts.request.path = (req) => normalizePath(req.url || req.raw?.url);
+        this.ts.request.user_agent = (req) => req.headers?.["user-agent"] || req.raw?.headers?.["user-agent"] || null;
+        this.ts.request.method = (req) => req.method || req.raw?.method || null;
 
         const integration = this;
         if (options.hookListen !== false && typeof app.listen === 'function') {

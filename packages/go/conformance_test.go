@@ -93,7 +93,7 @@ func TestConformanceDetectHoneyFields(t *testing.T) {
 			}
 
 			s := NewSentry("svc", "test")
-			data, found, touched := s.DetectHoneyFieldsAny(c.Data, rules, nil, source)
+			data, found, touched := s.detectHoneyFieldsAny(c.Data, rules, nil, source)
 			if found == nil {
 				found = []FoundField{}
 			}
@@ -130,8 +130,8 @@ func TestConformanceEventKeys(t *testing.T) {
 	s := NewSentry("svc", "test")
 	capture := &captureHandler{}
 	s.handlers = []EventHandler{capture}
-	s.TriggerTrapEvent(nil, TrapConfig{Path: "/t"})
-	s.TriggerWatchEvent(nil, []FoundField{{Type: "body", Field: "f"}})
+	s.triggerTrapEvent(nil, TrapConfig{Path: "/t"})
+	s.triggerWatchEvent(nil, []FoundField{{Type: "body", Field: "f"}})
 	s.Trigger(nil, "", "", nil)
 
 	keysOf := func(v any) []string {

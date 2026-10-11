@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -10,8 +11,11 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"strings"
+	"syscall"
+	"time"
 
 	trappsec "github.com/trappsec-dev/trappsec/packages/go/nethttp"
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
@@ -156,7 +160,7 @@ func main() {
 		_, _ = io.Copy(w, f)
 	})
 
-	app.SetDefaultUnauthenticated(401, map[string]any{"error": "authentication required"}, "application/json")
+	app.DefaultUnauthenticatedResponse(trappsec.ResponseConfig{Status: 401, Body: map[string]any{"error": "authentication required"}})
 
 	app.IdentifyUser(func(req any) *trappsec.AuthContext {
 		r, ok := req.(*http.Request)
@@ -212,13 +216,13 @@ func main() {
 	app.Trap("/api/v1/orders").Methods("GET", "POST").Intent("Legacy API Probing").Respond(trappsec.ResponseConfig{Template: "fake_deprecated_api_response"})
 	app.Trap("/api/v1/profile").Methods("GET", "POST").Intent("Legacy API Probing").Respond(trappsec.ResponseConfig{Template: "fake_deprecated_api_response"})
 
-	app.Watch("/auth/register").Body("role", "user", "Privilege Escalation (role)").Body("credits", 0, "Credit Manipulation")
-	app.Watch("/api/v2/profile").Body("is_admin", trappsec.NoDefault, "Privilege Escalation")
-	app.Watch("/api/v2/orders/{id}").Query("discount_code", "NONE", "Coupon Tampering")
-	app.Watch("/api/v2/echo/query").Query("honey_q", trappsec.NoDefault, "Query Field Test").Query("role_q", "user", "Query Default Test")
-	app.Watch("/api/v2/echo/body").Body("honey_b", trappsec.NoDefault, "Body Field Test").Body("role_b", "user", "Body Default Test")
-	app.Watch("/api/v2/echo/form").Body("honey_f", trappsec.NoDefault, "Form Field Test")
-	app.Watch("/api/v2/echo/multipart").Body("honey_m", trappsec.NoDefault, "Multipart Field Test")
+	app.Watch("/auth/register").Body("role", trappsec.Default("user"), trappsec.Intent("Privilege Escalation (role)")).Body("credits", trappsec.Default(0), trappsec.Intent("Credit Manipulation"))
+	app.Watch("/api/v2/profile").Body("is_admin", trappsec.Intent("Privilege Escalation"))
+	app.Watch("/api/v2/orders/{id}").Query("discount_code", trappsec.Default("NONE"), trappsec.Intent("Coupon Tampering"))
+	app.Watch("/api/v2/echo/query").Query("honey_q", trappsec.Intent("Query Field Test")).Query("role_q", trappsec.Default("user"), trappsec.Intent("Query Default Test"))
+	app.Watch("/api/v2/echo/body").Body("honey_b", trappsec.Intent("Body Field Test")).Body("role_b", trappsec.Default("user"), trappsec.Intent("Body Default Test"))
+	app.Watch("/api/v2/echo/form").Body("honey_f", trappsec.Intent("Form Field Test"))
+	app.Watch("/api/v2/echo/multipart").Body("honey_m", trappsec.Intent("Multipart Field Test"))
 
 	if *webhook != "" {
 		alertsOnly := false
@@ -228,6 +232,7 @@ func main() {
 		app.AddWebhook(u, &trappsec.WebhookOptions{Secret: os.Getenv("TRAPPSEC_WEBHOOK_SECRET")})
 	}
 
+	flushOnShutdown(app)
 	addr := "127.0.0.1:" + listenPort()
 	log.Printf("Starting server on http://%s", addr)
 	if err := app.ListenAndServe(addr); err != nil && err != http.ErrServerClosed {
@@ -259,4 +264,18 @@ func listenPort() string {
 		return p
 	}
 	return "8000"
+}
+
+// flushOnShutdown flushes queued trappsec deliveries (webhook, Slack) when the
+// process is asked to stop, so events still in flight are not lost.
+func flushOnShutdown(app *trappsec.App) {
+	sig := make(chan os.Signal, 1)
+	signal.Notify(sig, os.Interrupt, syscall.SIGTERM)
+	go func() {
+		<-sig
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = app.Close(ctx)
+		os.Exit(0)
+	}()
 }

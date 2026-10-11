@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"github.com/labstack/echo/v4"
 	core "github.com/trappsec-dev/trappsec/packages/go"
+	"github.com/trappsec-dev/trappsec/packages/go/internal/adapter"
 	"log"
 	"net"
 	"net/http"
@@ -42,10 +43,17 @@ type (
 	WebhookOptions = core.WebhookOptions
 	SlackOptions   = core.SlackOptions
 	EventHandler   = core.EventHandler
+	Option         = core.Option
 )
 
-// NoDefault is re-exported from core so callers need only one import.
-var NoDefault = core.NoDefault
+// NoDefault, Default, Intent and Metadata are re-exported from core so callers
+// need only one import.
+var (
+	NoDefault = core.NoDefault
+	Default   = core.Default
+	Intent    = core.Intent
+	Metadata  = core.Metadata
+)
 
 // App wraps an Echo instance and a trappsec Sentry. All Echo methods (GET, POST,
 // Use, Group, etc.) and all Sentry methods (Trap, Watch, IdentifyUser, etc.) are
@@ -111,7 +119,7 @@ func Use(s *core.Sentry, e *echo.Echo) *App {
 		return context.Background()
 	}
 
-	s.SetBodyResolver(func(body any, req any) any {
+	adapter.SetBodyResolver(s, func(body any, req any) any {
 		if fn, ok := body.(func(echo.Context) any); ok {
 			if c, ok := req.(echo.Context); ok {
 				return fn(c)
@@ -235,10 +243,17 @@ func (a *App) Bootstrap() {
 //
 //	e.Use(middleware.CSRFWithConfig(middleware.CSRFConfig{Skipper: app.IsTrap}))
 //
-// It bootstraps lazily, so it is safe to call before the first request.
+// It bootstraps lazily, so it is safe to call before the first request. Once
+// Echo has routed the request it answers from the matched route, so a real
+// route that only looks like a trap (POST /users/me next to a trap POST
+// /users/:id) is never reported as one. Before routing (e.Pre middleware) it
+// falls back to Sentry.IsTrap's path matching.
 func (a *App) IsTrap(c echo.Context) bool {
 	a.Bootstrap()
-	return a.integration.trapIdx[strings.ToUpper(c.Request().Method)+" "+c.Path()]
+	if route := c.Path(); route != "" {
+		return a.integration.trapIdx[strings.ToUpper(c.Request().Method)+" "+route]
+	}
+	return a.Sentry.IsTrap(c)
 }
 
 // SetMaxBodyBytes sets the largest request body that watch inspection buffers
@@ -248,7 +263,7 @@ func (a *App) SetMaxBodyBytes(n int64) { atomic.StoreInt64(&a.integration.maxBod
 // echoTrapHandler returns an Echo handler for a trap route.
 func echoTrapHandler(ts *core.Sentry, trap core.TrapConfig) echo.HandlerFunc {
 	return func(c echo.Context) error {
-		body, cfg := ts.TriggerTrapEvent(c, trap)
+		body, cfg := adapter.TriggerTrapEvent(ts, c, trap)
 		return c.Blob(cfg.StatusCode, cfg.MIMEType, body)
 	}
 }
@@ -290,7 +305,7 @@ func (in *echoIntegration) watchMiddleware() echo.MiddlewareFunc {
 	return func(next echo.HandlerFunc) echo.HandlerFunc {
 		return func(c echo.Context) error {
 			if watch, ok := in.watchIdx[c.Path()]; ok {
-				core.InspectWatch(in.ts, c.Request(), c, watch, atomic.LoadInt64(&in.maxBody))
+				adapter.InspectWatch(in.ts, c.Request(), c, watch, atomic.LoadInt64(&in.maxBody))
 			}
 			return next(c)
 		}

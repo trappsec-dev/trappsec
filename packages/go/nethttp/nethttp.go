@@ -13,6 +13,7 @@ import (
 	"context"
 	"fmt"
 	core "github.com/trappsec-dev/trappsec/packages/go"
+	"github.com/trappsec-dev/trappsec/packages/go/internal/adapter"
 	"net"
 	"net/http"
 	"net/url"
@@ -36,10 +37,17 @@ type (
 	WebhookOptions = core.WebhookOptions
 	SlackOptions   = core.SlackOptions
 	EventHandler   = core.EventHandler
+	Option         = core.Option
 )
 
-// NoDefault is re-exported from core so callers need only one import.
-var NoDefault = core.NoDefault
+// NoDefault, Default, Intent and Metadata are re-exported from core so callers
+// need only one import.
+var (
+	NoDefault = core.NoDefault
+	Default   = core.Default
+	Intent    = core.Intent
+	Metadata  = core.Metadata
+)
 
 // App wraps a ServeMux and a trappsec Sentry. All ServeMux methods (HandleFunc,
 // Handle, etc.) and all Sentry methods (Trap, Watch, IdentifyUser, etc.) are promoted
@@ -60,6 +68,20 @@ type App struct {
 // half-installed and silently unprotected).
 func (a *App) Bootstrap() { a.integration.bootstrap(a) }
 
+// IsTrap reports whether the mux would route r to a trap. Use it to let traps
+// through middleware that would otherwise reject them before they can answer,
+// such as CSRF protection. It bootstraps lazily, and asks the mux which
+// pattern matches, so a real route that only looks like a trap (POST /users/me
+// next to a trap POST /users/{id}) is never reported as one.
+func (a *App) IsTrap(r *http.Request) bool {
+	a.Bootstrap()
+	if r == nil {
+		return false
+	}
+	_, pattern := a.ServeMux.Handler(r)
+	return a.integration.trapIdx[pattern]
+}
+
 // SetMaxBodyBytes sets the largest request body that watch inspection buffers
 // (default core.DefaultMaxBodyBytes, 1 MiB). Larger bodies pass through intact
 // but uninspected. n <= 0 restores the default.
@@ -73,7 +95,13 @@ func (a *App) SetMaxBodyBytes(n int64) { atomic.StoreInt64(&a.integration.maxBod
 // giving them the same 405 Method Not Allowed behaviour as real routes registered with
 // method patterns.
 func InstallSentry(mux *http.ServeMux, service, environment string) *App {
-	s := core.NewSentry(service, environment)
+	return Use(core.NewSentry(service, environment), mux)
+}
+
+// Use wires an existing Sentry onto the ServeMux and returns the *App to serve
+// through (app.ListenAndServe*, or app as an http.Handler). Traps and watches
+// only become active through the returned App.
+func Use(s *core.Sentry, mux *http.ServeMux) *App {
 	in := &netHTTPIntegration{ts: s, mux: mux}
 
 	if s.Identity.IP == nil {
@@ -126,6 +154,7 @@ type netHTTPIntegration struct {
 	ts       *core.Sentry
 	mux      *http.ServeMux
 	watchIdx map[string]core.WatchConfig
+	trapIdx  map[string]bool // registered trap patterns, "METHOD /path"
 	maxBody  int64
 
 	done atomic.Bool
@@ -165,14 +194,16 @@ func (in *netHTTPIntegration) bootstrap(a *App) {
 	}
 
 	// Register each trap as a real route using Go 1.22+ method-qualified patterns.
+	trapIdx := map[string]bool{}
 	for _, trap := range in.ts.Traps() {
 		t := trap
 		for _, method := range trap.Methods {
 			method = strings.ToUpper(method)
 			pattern := method + " " + trap.Path
 			in.checkConflict(method, trap.Path)
+			trapIdx[pattern] = true
 			in.register(pattern, func(w http.ResponseWriter, r *http.Request) {
-				body, cfg := in.ts.TriggerTrapEvent(r, t)
+				body, cfg := adapter.TriggerTrapEvent(in.ts, r, t)
 				if cfg.MIMEType != "" {
 					w.Header().Set("Content-Type", cfg.MIMEType)
 				}
@@ -182,6 +213,7 @@ func (in *netHTTPIntegration) bootstrap(a *App) {
 		}
 	}
 	in.watchIdx = idx
+	in.trapIdx = trapIdx
 	in.warnUnreachableWatches()
 }
 
@@ -269,7 +301,7 @@ func (a *App) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// Resolve the matched route pattern before dispatch so watches can use it.
 	_, pattern := a.ServeMux.Handler(r)
 	if watch, ok := a.integration.watchIdx[patternPath(pattern)]; ok {
-		core.InspectWatch(a.integration.ts, r, r, watch, atomic.LoadInt64(&a.integration.maxBody))
+		adapter.InspectWatch(a.integration.ts, r, r, watch, atomic.LoadInt64(&a.integration.maxBody))
 	}
 	a.ServeMux.ServeHTTP(w, r)
 }

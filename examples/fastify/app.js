@@ -26,12 +26,12 @@ async function bootstrap() {
     });
 
     const ts = new trappsec.Sentry(fastify, 'FastifyApp', 'Development');
+    // Flush queued webhook/Slack deliveries before exiting.
+    for (const sig of ['SIGINT', 'SIGTERM']) {
+        process.once(sig, async () => { await ts.close(); process.exit(0); });
+    }
 
-    ts.default_responses.unauthenticated = {
-        status_code: 401,
-        response_body: { error: 'authentication required' },
-        mime_type: 'application/json',
-    };
+    ts.default_unauthenticated_response({ status: 401, body: { error: 'authentication required' } });
 
     ts.identify_user((req) => {
         if (req.headers['x-user-id']) {
@@ -111,22 +111,22 @@ async function bootstrap() {
 
     // Watches
     ts.watch('/auth/register')
-        .body('role', { defaultValue: 'user', intent: 'Privilege Escalation (role)' })
-        .body('credits', { defaultValue: 0, intent: 'Credit Manipulation' });
+        .body('role', { default: 'user', intent: 'Privilege Escalation (role)' })
+        .body('credits', { default: 0, intent: 'Credit Manipulation' });
 
     ts.watch('/api/v2/profile')
         .body('is_admin', { intent: 'Privilege Escalation' });
 
     ts.watch('/api/v2/orders/:id')
-        .query('discount_code', { defaultValue: 'NONE', intent: 'Coupon Tampering' });
+        .query('discount_code', { default: 'NONE', intent: 'Coupon Tampering' });
 
     ts.watch('/api/v2/echo/query')
         .query('honey_q', { intent: 'Query Field Test' })
-        .query('role_q', { defaultValue: 'user', intent: 'Query Default Test' });
+        .query('role_q', { default: 'user', intent: 'Query Default Test' });
 
     ts.watch('/api/v2/echo/body')
         .body('honey_b', { intent: 'Body Field Test' })
-        .body('role_b', { defaultValue: 'user', intent: 'Body Default Test' });
+        .body('role_b', { default: 'user', intent: 'Body Default Test' });
 
     ts.watch('/api/v2/echo/form')
         .body('honey_f', { intent: 'Form Field Test' });

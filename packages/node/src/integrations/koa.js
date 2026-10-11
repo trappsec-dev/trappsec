@@ -30,9 +30,9 @@ class KoaIntegration {
             this.ts.identity.ip = (ctx) => ctx.ip || ctx.request?.ip || ctx.req?.socket?.remoteAddress || "0.0.0.0";
         }
 
-        this.ts.requestContext.path = (ctx) => ctx.path || null;
-        this.ts.requestContext.userAgent = (ctx) => ctx.get?.("user-agent") || ctx.headers?.["user-agent"] || null;
-        this.ts.requestContext.method = (ctx) => ctx.method || null;
+        this.ts.request.path = (ctx) => ctx.path || null;
+        this.ts.request.user_agent = (ctx) => ctx.get?.("user-agent") || ctx.headers?.["user-agent"] || null;
+        this.ts.request.method = (ctx) => ctx.method || null;
 
         const integration = this;
 

@@ -205,8 +205,7 @@ ts.Template(
     "deprecated_api",
     410,
     map[string]any{"error": "Gone", "message": "API v1 is deprecated"},
-    "application/json",
-)
+) // an optional fourth argument sets the MIME type (default "application/json")
 
 ts.Trap("/api/v1/users").Methods("GET").
     Respond(trappsec.ResponseConfig{Template: "deprecated_api"})
@@ -241,7 +240,7 @@ ts.watch("/api/profile/update")
 
 // Alert if 'role' is present AND not equal to 'user'
 ts.watch("/auth/register")
-    .body("role", { defaultValue: "user", intent: "Role Tampering" });
+    .body("role", { default: "user", intent: "Role Tampering" });
 ```
 
 </div>
@@ -250,10 +249,11 @@ ts.watch("/auth/register")
 ```go
 // Alert if 'role' is present (regardless of value)
 ts.Watch("/api/profile/update").
-    Body("role", trappsec.NoDefault, "Privilege Escalation")
+    Body("role", trappsec.Intent("Privilege Escalation"))
 
 // Alert if 'role' is present AND not equal to 'user'
-ts.Watch("/auth/register").Body("role", "user", "Role Tampering")
+ts.Watch("/auth/register").
+    Body("role", trappsec.Default("user"), trappsec.Intent("Role Tampering"))
 ```
 
 </div>
@@ -418,26 +418,18 @@ You can globally configure how trappsec responds to events. This is useful for m
 
 Defaults are resolved when traps are built (at bootstrap), not when `.trap()` is called, so you can set them **before or after** declaring traps; the order does not matter.
 
-There are two default profiles you can override:
-1.  **authenticated**: Used when `respond()` is not configured (defaults to `200 OK` with empty JSON).
-2.  **unauthenticated**: Used when `if_unauthenticated()` is not configured (defaults to `401 Unauthorized` with empty JSON).
+There are two default profiles you can override. Each setter takes the same arguments as the trap method it stands in for: only what you pass changes, and `template` replaces the whole response.
+1.  **authenticated**: `default_response(...)` / `DefaultResponse(...)`, used when a trap does not call `respond()` (defaults to `200 OK` with empty JSON).
+2.  **unauthenticated**: `default_unauthenticated_response(...)` / `DefaultUnauthenticatedResponse(...)`, used when a trap does not call `if_unauthenticated()` (defaults to `401 Unauthorized` with empty JSON).
 
 <div class="lang-content" data-lang="python" markdown="1">
 
 ```python
 # Override default unauthenticated response
-ts.default_responses["unauthenticated"] = {
-    "status_code": 403,
-    "response_body": {"error": "Access Denied", "code": 1001},
-    "mime_type": "application/json"
-}
+ts.default_unauthenticated_response(status=403, body={"error": "Access Denied", "code": 1001})
 
 # Override default authenticated response
-ts.default_responses["authenticated"] = {
-    "status_code": 200,
-    "response_body": {"status": "ok"},
-    "mime_type": "application/json"
-}
+ts.default_response(body={"status": "ok"})
 ```
 
 </div>
@@ -445,18 +437,10 @@ ts.default_responses["authenticated"] = {
 
 ```javascript
 // Override default unauthenticated response
-ts.default_responses["unauthenticated"] = {
-    "status_code": 403,
-    "response_body": { "error": "Access Denied", "code": 1001 },
-    "mime_type": "application/json"
-};
+ts.default_unauthenticated_response({ status: 403, body: { error: "Access Denied", code: 1001 } });
 
 // Override default authenticated response
-ts.default_responses["authenticated"] = {
-    "status_code": 200,
-    "response_body": { "status": "ok" },
-    "mime_type": "application/json"
-};
+ts.default_response({ body: { status: "ok" } });
 ```
 
 </div>
@@ -464,16 +448,12 @@ ts.default_responses["authenticated"] = {
 
 ```go
 // Override default unauthenticated response
-ts.SetDefaultUnauthenticated(
-    403,
-    map[string]any{"error": "Access Denied", "code": 1001},
-    "application/json",
-)
+ts.DefaultUnauthenticatedResponse(trappsec.ResponseConfig{
+    Status: 403, Body: map[string]any{"error": "Access Denied", "code": 1001},
+})
 
 // Override default authenticated response
-ts.SetDefaultAuthenticated(
-    200, map[string]any{"status": "ok"}, "application/json",
-)
+ts.DefaultResponse(trappsec.ResponseConfig{Body: map[string]any{"status": "ok"}})
 ```
 
 </div>

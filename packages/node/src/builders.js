@@ -80,6 +80,16 @@ class TrapBuilder {
     }
 }
 
+// `{ default, intent }`, as in Python; `defaultValue` is the pre-0.3 name.
+function fieldRule(opts) {
+    const o = opts || {};
+    let def = NO_DEFAULT;
+    if (hasOwn(o, 'default')) def = o.default;
+    else if (hasOwn(o, 'defaultValue')) def = o.defaultValue;
+    if (def === undefined) def = NO_DEFAULT;
+    return { default: def, intent: o.intent === undefined ? null : o.intent };
+}
+
 class WatchBuilder {
     constructor(path) {
         this.path = path;
@@ -87,13 +97,13 @@ class WatchBuilder {
         this._body = Object.create(null);
     }
 
-    query(name, { defaultValue = NO_DEFAULT, intent = null } = {}) {
-        this._query[name] = { default: defaultValue, intent: intent };
+    query(name, opts = {}) {
+        this._query[name] = fieldRule(opts);
         return this;
     }
 
-    body(name, { defaultValue = NO_DEFAULT, intent = null } = {}) {
-        this._body[name] = { default: defaultValue, intent: intent };
+    body(name, opts = {}) {
+        this._body[name] = fieldRule(opts);
         return this;
     }
 

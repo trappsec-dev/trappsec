@@ -152,6 +152,12 @@ type Sentry struct {
 	templates        map[string]ResponseTemplate
 	handlers         []EventHandler
 
+	// trapGen changes whenever a trap's path or methods may have changed;
+	// trapIdx is the IsTrap index built for generation trapIdxGen.
+	trapGen    uint64
+	trapIdx    *trapIndex
+	trapIdxGen uint64
+
 	mu sync.RWMutex
 }
 
@@ -194,10 +200,10 @@ func NewSentry(service, environment string) *Sentry {
 	return s
 }
 
-// SetBodyResolver registers a framework-specific body resolver. Integration
+// setBodyResolver registers a framework-specific body resolver. Integration
 // packages call this during setup to handle framework-typed body callbacks
 // (e.g. func(*gin.Context) any) before core's generic resolver runs.
-func (s *Sentry) SetBodyResolver(fn func(body any, req any) any) {
+func (s *Sentry) setBodyResolver(fn func(body any, req any) any) {
 	s.mu.Lock()
 	s.bodyResolver = fn
 	s.mu.Unlock()
@@ -218,6 +224,35 @@ func (s *Sentry) DefaultResponses() map[string]ResponseTemplate {
 	}
 }
 
+// DefaultResponse sets the response for authenticated requests to traps that
+// do not call Respond. It takes the same ResponseConfig as Respond: only the
+// fields you set change the default, and Template replaces it. Defaults are
+// resolved when traps are built, so the order of calls does not matter.
+func (s *Sentry) DefaultResponse(cfg ResponseConfig) *Sentry {
+	s.setDefault("authenticated", cfg)
+	return s
+}
+
+// DefaultUnauthenticatedResponse sets the response for unauthenticated
+// requests to traps that do not call IfUnauthenticated.
+func (s *Sentry) DefaultUnauthenticatedResponse(cfg ResponseConfig) *Sentry {
+	s.setDefault("unauthenticated", cfg)
+	return s
+}
+
+func (s *Sentry) setDefault(key string, cfg ResponseConfig) {
+	op := s.responseOp(cfg)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	t := cloneTemplate(s.defaultResponses[key])
+	op(&t)
+	if t.MIMEType == "" {
+		t.MIMEType = "application/json"
+	}
+	s.defaultResponses[key] = t
+}
+
+// Deprecated: use DefaultUnauthenticatedResponse(ResponseConfig{...}).
 func (s *Sentry) SetDefaultUnauthenticated(statusCode int, body any, mimeType string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -227,6 +262,7 @@ func (s *Sentry) SetDefaultUnauthenticated(statusCode int, body any, mimeType st
 	s.defaultResponses["unauthenticated"] = ResponseTemplate{StatusCode: statusCode, Body: body, MIMEType: mimeType}
 }
 
+// Deprecated: use DefaultResponse(ResponseConfig{...}).
 func (s *Sentry) SetDefaultAuthenticated(statusCode int, body any, mimeType string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -236,13 +272,19 @@ func (s *Sentry) SetDefaultAuthenticated(statusCode int, body any, mimeType stri
 	s.defaultResponses["authenticated"] = ResponseTemplate{StatusCode: statusCode, Body: body, MIMEType: mimeType}
 }
 
-func (s *Sentry) Template(name string, statusCode int, body any, mimeType string) *Sentry {
+// Template registers a named response for Respond / IfUnauthenticated /
+// DefaultResponse. The MIME type is optional (default "application/json").
+func (s *Sentry) Template(name string, statusCode int, body any, mimeType ...string) *Sentry {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if mimeType == "" {
-		mimeType = "application/json"
+	mt := ""
+	if len(mimeType) > 0 {
+		mt = mimeType[0]
 	}
-	s.templates[name] = ResponseTemplate{StatusCode: statusCode, Body: body, MIMEType: mimeType}
+	if mt == "" {
+		mt = "application/json"
+	}
+	s.templates[name] = ResponseTemplate{StatusCode: statusCode, Body: body, MIMEType: mt}
 	return s
 }
 
@@ -250,6 +292,7 @@ func (s *Sentry) Trap(path string) *TrapBuilder {
 	builder := newTrapBuilder(s, path)
 	s.mu.Lock()
 	s.traps = append(s.traps, builder)
+	s.trapGen++
 	s.mu.Unlock()
 	return builder
 }
@@ -393,11 +436,70 @@ func (s *Sentry) IsTrap(req any) (is bool) {
 	if method == "" || path == "" {
 		return false
 	}
-	for _, t := range s.Traps() {
-		for _, m := range t.Methods {
-			if strings.EqualFold(m, method) && trapPathMatches(t.Path, path) {
-				return true
+	idx := s.trapIndex()
+	if idx.exact[method+" "+path] {
+		return true
+	}
+	for _, p := range idx.patterns {
+		if p.methods[method] && trapPathMatches(p.path, path) {
+			return true
+		}
+	}
+	return false
+}
+
+// trapIndex is what IsTrap looks up: literal trap paths in a map, and only the
+// traps with parameter segments in a list to match.
+type trapIndex struct {
+	exact    map[string]bool // "METHOD /path"
+	patterns []trapPattern
+}
+
+type trapPattern struct {
+	methods map[string]bool
+	path    string
+}
+
+// trapIndex returns the index for the current traps, rebuilding it only when
+// a trap was added or its methods changed since the last call.
+func (s *Sentry) trapIndex() *trapIndex {
+	s.mu.RLock()
+	idx, gen := s.trapIdx, s.trapGen
+	fresh := idx != nil && s.trapIdxGen == gen
+	if fresh {
+		s.mu.RUnlock()
+		return idx
+	}
+	idx = &trapIndex{exact: map[string]bool{}}
+	for _, b := range s.traps {
+		path := cleanTrapPath(patternPathOnly(b.path))
+		if isParamPath(path) {
+			p := trapPattern{methods: map[string]bool{}, path: b.path}
+			for _, m := range b.methods {
+				p.methods[strings.ToUpper(m)] = true
 			}
+			idx.patterns = append(idx.patterns, p)
+			continue
+		}
+		for _, m := range b.methods {
+			idx.exact[strings.ToUpper(m)+" "+path] = true
+		}
+	}
+	s.mu.RUnlock()
+	s.mu.Lock()
+	if s.trapGen == gen {
+		s.trapIdx, s.trapIdxGen = idx, gen
+	}
+	s.mu.Unlock()
+	return idx
+}
+
+func isParamPath(path string) bool {
+	for _, seg := range strings.Split(path, "/") {
+		if strings.HasPrefix(seg, ":") || strings.HasPrefix(seg, "*") ||
+			(strings.HasPrefix(seg, "{") && strings.HasSuffix(seg, "}")) ||
+			(strings.HasPrefix(seg, "<") && strings.HasSuffix(seg, ">")) {
+			return true
 		}
 	}
 	return false
@@ -488,8 +590,41 @@ func (s *Sentry) newEvent(req any, name string) (TriggerContext, extractedIdenti
 	return ctx, identity
 }
 
-func (s *Sentry) Trigger(req any, reason, intent string, metadata any) {
+// Trigger emits a trappsec.rule_hit event from your own logic. Intent and
+// Metadata are optional:
+//
+//	ts.Trigger(c, "Velocity limit exceeded", trappsec.Intent("fraud"), trappsec.Metadata(m))
+//
+// The positional form Trigger(req, reason, intent, metadata) is still
+// accepted. It never panics.
+func (s *Sentry) Trigger(req any, reason string, opts ...any) {
 	s.guard("Trigger", func() {
+		var intent string
+		var metadata any
+		positional, err := splitOptions(opts, func(o Option) bool {
+			switch o.kind {
+			case optIntent:
+				intent, _ = o.value.(string)
+			case optMetadata:
+				metadata = o.value
+			default:
+				return false
+			}
+			return true
+		})
+		if err != nil {
+			s.logger.Printf("trappsec: Trigger: %v", err)
+		}
+		if len(positional) > 0 {
+			if v, ok := positional[0].(string); ok {
+				intent = v
+			} else {
+				s.logger.Printf("trappsec: Trigger: intent must be a string, got %T", positional[0])
+			}
+		}
+		if len(positional) > 1 {
+			metadata = positional[1]
+		}
 		ctx, _ := s.newEvent(req, "trappsec.rule_hit")
 		ctx.Reason = reason
 		ctx.Intent = intent
@@ -498,15 +633,15 @@ func (s *Sentry) Trigger(req any, reason, intent string, metadata any) {
 	})
 }
 
-// TriggerTrapEvent emits a trap_hit event and returns the response body and config.
+// triggerTrapEvent emits a trap_hit event and returns the response body and config.
 // Called by framework integration packages. It never panics: failures in
 // callbacks degrade to an empty `{}` body.
-func (s *Sentry) TriggerTrapEvent(req any, trap TrapConfig) (payload []byte, cfg ResponseTemplate) {
+func (s *Sentry) triggerTrapEvent(req any, trap TrapConfig) (payload []byte, cfg ResponseTemplate) {
 	cfg = trap.ResponseUnauthenticated
 	payload = []byte("{}")
 	defer func() {
 		if r := recover(); r != nil {
-			s.logger.Printf("trappsec: panic in TriggerTrapEvent: %v", r)
+			s.logger.Printf("trappsec: panic in triggerTrapEvent: %v", r)
 			payload = []byte("{}")
 		}
 	}()
@@ -523,16 +658,16 @@ func (s *Sentry) TriggerTrapEvent(req any, trap TrapConfig) (payload []byte, cfg
 	return payload, cfg
 }
 
-// TriggerWatchEvent emits a watch_hit event. Called by framework integration packages.
-func (s *Sentry) TriggerWatchEvent(req any, found []FoundField) {
-	s.guard("TriggerWatchEvent", func() {
+// triggerWatchEvent emits a watch_hit event. Called by framework integration packages.
+func (s *Sentry) triggerWatchEvent(req any, found []FoundField) {
+	s.guard("triggerWatchEvent", func() {
 		ctx, _ := s.newEvent(req, "trappsec.watch_hit")
 		ctx.Found = found
 		s.emit(ctx, s.getContext(req))
 	})
 }
 
-// DetectHoneyFields scans data for fields matching the watch rules and returns
+// detectHoneyFields scans data for fields matching the watch rules and returns
 // the sanitized map, any triggered fields, and whether any watched key was present.
 // Called by framework integration packages.
 //
@@ -547,7 +682,7 @@ func (s *Sentry) TriggerWatchEvent(req any, found []FoundField) {
 // Value comparison follows values_match: numbers compare numerically
 // regardless of Go type (float64, json.Number, ints), and a string matches a
 // bool/number whose canonical text equals it ("5", "true").
-func (s *Sentry) DetectHoneyFields(data map[string]any, rules map[string]WatchFieldRule, requestObj any, source ...string) (map[string]any, []FoundField, bool) {
+func (s *Sentry) detectHoneyFields(data map[string]any, rules map[string]WatchFieldRule, requestObj any, source ...string) (map[string]any, []FoundField, bool) {
 	if len(data) == 0 || len(rules) == 0 {
 		return data, nil, false
 	}
@@ -607,21 +742,21 @@ func (s *Sentry) DetectHoneyFields(data map[string]any, rules map[string]WatchFi
 	return data, found, touched
 }
 
-// DetectHoneyFieldsAny is DetectHoneyFields for a decoded top-level JSON
+// detectHoneyFieldsAny is detectHoneyFields for a decoded top-level JSON
 // value: an object is inspected, an array has each object element inspected
 // (watched keys stripped inside them), anything else is returned untouched.
 // It never panics for any input shape.
-func (s *Sentry) DetectHoneyFieldsAny(data any, rules map[string]WatchFieldRule, requestObj any, source ...string) (any, []FoundField, bool) {
+func (s *Sentry) detectHoneyFieldsAny(data any, rules map[string]WatchFieldRule, requestObj any, source ...string) (any, []FoundField, bool) {
 	switch v := data.(type) {
 	case map[string]any:
-		m, f, t := s.DetectHoneyFields(v, rules, requestObj, source...)
+		m, f, t := s.detectHoneyFields(v, rules, requestObj, source...)
 		return m, f, t
 	case []any:
 		var all []FoundField
 		touched := false
 		for _, el := range v {
 			if m, ok := el.(map[string]any); ok {
-				_, f, t := s.DetectHoneyFields(m, rules, requestObj, source...)
+				_, f, t := s.detectHoneyFields(m, rules, requestObj, source...)
 				all = append(all, f...)
 				touched = touched || t
 			}

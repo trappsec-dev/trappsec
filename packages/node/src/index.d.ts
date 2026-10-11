@@ -33,6 +33,9 @@ export interface WatchConfig {
 }
 
 export interface FieldOptions {
+    /** Expected value; omit to alert on any presence of the field. */
+    default?: any | ((req: any) => any);
+    /** @deprecated Use `default`. */
     defaultValue?: any | ((req: any) => any);
     intent?: string | null;
 }
@@ -90,8 +93,15 @@ export interface WebhookOptions {
 
 export interface RequestContext {
     path: (req: any) => string | null;
-    userAgent: (req: any) => string | null;
+    user_agent: (req: any) => string | null;
+    /** @deprecated Use `user_agent`. */
+    userAgent?: (req: any) => string | null;
     method: (req: any) => string | null;
+}
+
+export interface TriggerOptions {
+    intent?: string | null;
+    metadata?: Record<string, any> | null;
 }
 
 export interface IdentityResult {
@@ -113,12 +123,18 @@ export class Sentry {
     };
 
     identity: IdentityContext;
+    request: RequestContext;
+    /** @deprecated Use `request`. */
     requestContext: RequestContext;
     integration?: any;
 
     readonly traps: TrapConfig[];
     readonly watches: WatchConfig[];
 
+    /** Default response for authenticated requests to traps without `respond`. Same options as `respond`. */
+    default_response(config?: ResponseConfig): this;
+    /** Default response for unauthenticated requests to traps without `if_unauthenticated`. */
+    default_unauthenticated_response(config?: ResponseConfig): this;
     template(name: string, statusCode: number, responseBody: any, mimeType?: string): this;
     trap(path: string): TrapBuilder;
     watch(path: string): WatchBuilder;
@@ -128,11 +144,13 @@ export class Sentry {
     identify_user(callback: (req: any) => IdentityResult | null): this;
     override_source_ip(callback: (req: any) => string | null): this;
     /** Emit a trappsec.rule_hit event. Never throws. */
+    trigger(req: any, reason: string, options?: TriggerOptions): void;
+    /** @deprecated Use `trigger(req, reason, { intent, metadata })`. */
     trigger(req: any, reason: string, intent?: string | null, metadata?: Record<string, any> | null): void;
     /** True when the request targets a trap; use to skip CSRF or similar middleware for traps. */
     is_trap(req: any): boolean;
     /** Idempotent: install traps and watches. */
     bootstrap(): void;
-    /** Stop heartbeats and flush in-flight webhook/Slack deliveries (default timeout 5000 ms). */
+    /** Stop heartbeats and flush in-flight webhook/Slack deliveries. `timeout` in seconds (default 5). */
     close(timeout?: number): Promise<void>;
 }

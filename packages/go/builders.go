@@ -71,6 +71,7 @@ func (b *TrapBuilder) Methods(methods ...string) *TrapBuilder {
 	if len(cleaned) > 0 {
 		b.ts.mu.Lock()
 		b.methods = cleaned
+		b.ts.trapGen++
 		b.ts.mu.Unlock()
 	}
 	return b
@@ -87,7 +88,7 @@ func (b *TrapBuilder) Intent(intent string) *TrapBuilder {
 // applyResponse for the "provided" semantics. It panics if cfg.Template names
 // a template that has not been registered with Sentry.Template.
 func (b *TrapBuilder) Respond(cfg ResponseConfig) *TrapBuilder {
-	op := b.responseOp(cfg)
+	op := b.ts.responseOp(cfg)
 	b.ts.mu.Lock()
 	b.authOps = append(b.authOps, op)
 	b.ts.mu.Unlock()
@@ -96,7 +97,7 @@ func (b *TrapBuilder) Respond(cfg ResponseConfig) *TrapBuilder {
 
 // IfUnauthenticated customises the response for unauthenticated requests.
 func (b *TrapBuilder) IfUnauthenticated(cfg ResponseConfig) *TrapBuilder {
-	op := b.responseOp(cfg)
+	op := b.ts.responseOp(cfg)
 	b.ts.mu.Lock()
 	b.unauthOps = append(b.unauthOps, op)
 	b.ts.mu.Unlock()
@@ -135,11 +136,11 @@ func (b *TrapBuilder) Build() TrapConfig {
 // Otherwise only provided fields override the defaults: Status != 0, Body !=
 // nil (so "", 0, false and empty maps are honoured) and MIMEType != "". A zero
 // Status means "not provided"; it is never a valid HTTP status anyway.
-func (b *TrapBuilder) responseOp(cfg ResponseConfig) func(*ResponseTemplate) {
+func (s *Sentry) responseOp(cfg ResponseConfig) func(*ResponseTemplate) {
 	if cfg.Template != "" {
-		b.ts.mu.RLock()
-		t, ok := b.ts.templates[cfg.Template]
-		b.ts.mu.RUnlock()
+		s.mu.RLock()
+		t, ok := s.templates[cfg.Template]
+		s.mu.RUnlock()
 		if !ok {
 			panic(fmt.Sprintf("trappsec: response template %q not found; register it with Sentry.Template(name, ...) before referencing it", cfg.Template))
 		}
@@ -176,16 +177,25 @@ func newWatchBuilder(ts *Sentry, path string) *WatchBuilder {
 	}
 }
 
-func (b *WatchBuilder) Query(name string, defaultValue any, intent string) *WatchBuilder {
+// Query watches a query-string field. Pass Default(v) to alert only when the
+// value differs from v, and Intent(s) to label the alert:
+//
+//	watch.Query("debug", trappsec.Default("false"), trappsec.Intent("Recon"))
+//
+// The positional form Query(name, defaultValue, intent) is still accepted.
+func (b *WatchBuilder) Query(name string, opts ...any) *WatchBuilder {
+	rule := b.ts.fieldRule("Query", name, opts)
 	b.ts.mu.Lock()
-	b.config.QueryFields[name] = WatchFieldRule{Default: defaultValue, Intent: intent}
+	b.config.QueryFields[name] = rule
 	b.ts.mu.Unlock()
 	return b
 }
 
-func (b *WatchBuilder) Body(name string, defaultValue any, intent string) *WatchBuilder {
+// Body watches a request-body field. It takes the same options as Query.
+func (b *WatchBuilder) Body(name string, opts ...any) *WatchBuilder {
+	rule := b.ts.fieldRule("Body", name, opts)
 	b.ts.mu.Lock()
-	b.config.BodyFields[name] = WatchFieldRule{Default: defaultValue, Intent: intent}
+	b.config.BodyFields[name] = rule
 	b.ts.mu.Unlock()
 	return b
 }

@@ -761,3 +761,26 @@ func TestWatchesBeforeTrapsAndIndexBuiltOnce(t *testing.T) {
 		t.Fatalf("a watch added while serving was applied: handler saw %q", seen)
 	}
 }
+
+// Once routed, IsTrap answers from the matched route: a real route that only
+// looks like a trap is not one. Before routing (e.Pre) it matches the path.
+func TestAppIsTrapUsesTheMatchedRoute(t *testing.T) {
+	e := echo.New()
+	app := InstallSentry(e, "svc", "test")
+	app.Logger().SetOutput(io.Discard)
+	app.Trap("/users/:id").Methods("POST")
+	ctx := func(path, route string) echo.Context {
+		c := e.NewContext(httptest.NewRequest("POST", path, nil), httptest.NewRecorder())
+		c.SetPath(route)
+		return c
+	}
+	if app.IsTrap(ctx("/users/me", "/users/me")) {
+		t.Fatal("real route /users/me reported as a trap")
+	}
+	if !app.IsTrap(ctx("/users/7", "/users/:id")) {
+		t.Fatal("routed trap not reported")
+	}
+	if !app.IsTrap(ctx("/users/7", "")) {
+		t.Fatal("unrouted (e.Pre) trap path not reported")
+	}
+}

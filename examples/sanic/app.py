@@ -7,6 +7,7 @@
 # ]
 # ///
 
+import atexit
 import sys
 import os
 import random
@@ -23,6 +24,7 @@ PORT = int(os.environ.get("PORT", "8000"))
 
 app = Sanic("trappsec-sanic-example")
 ts = trappsec.Sentry(app, service="SanicApp", environment="Development")
+atexit.register(ts.close)  # flush queued webhook/Slack deliveries on exit
 
 # Handlers are configured at module level so that spawned worker processes
 # (which re-import this module but never execute __main__) pick them up.
@@ -32,11 +34,7 @@ if _webhook_url:
 if os.environ.get("TRAPPSEC_ALERTS_WEBHOOK"):  # second receiver with the default alerts_only=True
     ts.add_webhook(url=os.environ["TRAPPSEC_ALERTS_WEBHOOK"], secret=os.environ.get("TRAPPSEC_WEBHOOK_SECRET"))
 
-ts.default_responses["unauthenticated"] = {
-    "status_code": 401,
-    "response_body": {"error": "authentication required"},
-    "mime_type": "application/json"
-}
+ts.default_unauthenticated_response(status=401, body={"error": "authentication required"})
 
 ts.identify_user(lambda r: {
     "user": r.headers.get("x-user-id"),

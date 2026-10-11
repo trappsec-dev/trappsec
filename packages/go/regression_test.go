@@ -69,7 +69,7 @@ func TestWebhookEmitDoesNotBlockOnSlowServer(t *testing.T) {
 
 	start := time.Now()
 	for i := 0; i < 20; i++ {
-		s.TriggerWatchEvent(nil, []FoundField{{Type: "body", Field: "f"}})
+		s.triggerWatchEvent(nil, []FoundField{{Type: "body", Field: "f"}})
 		s.Trigger(nil, "r", "i", nil)
 	}
 	if d := time.Since(start); d > 500*time.Millisecond {
@@ -322,7 +322,7 @@ func TestPanicInIdentifyUserFallsBackToSignal(t *testing.T) {
 	s.handlers = []EventHandler{capture}
 	s.IdentifyUser(func(any) *AuthContext { panic("auth exploded") })
 
-	s.TriggerWatchEvent(nil, nil)
+	s.triggerWatchEvent(nil, nil)
 	if len(capture.events) != 1 || capture.events[0].Type != "signal" || capture.events[0].User != "" {
 		t.Fatalf("unexpected events: %+v", capture.events)
 	}
@@ -334,12 +334,12 @@ func TestPanicInOverrideSourceIPFallsBackToDefault(t *testing.T) {
 	s.handlers = []EventHandler{capture}
 	s.Identity.IP = func(any) string { return "9.9.9.9" }
 	s.OverrideSourceIP(func(any) string { panic("ip exploded") })
-	s.TriggerWatchEvent(nil, nil)
+	s.triggerWatchEvent(nil, nil)
 	if capture.events[0].IP != "9.9.9.9" {
 		t.Fatalf("expected default IP fallback, got %q", capture.events[0].IP)
 	}
 	s.OverrideSourceIP(func(any) string { return "7.7.7.7" })
-	s.TriggerWatchEvent(nil, nil)
+	s.triggerWatchEvent(nil, nil)
 	if capture.events[1].IP != "7.7.7.7" {
 		t.Fatalf("override must win, got %q", capture.events[1].IP)
 	}
@@ -353,7 +353,7 @@ func TestPanicInHandlerDoesNotPropagateOrStarveOthers(t *testing.T) {
 	s := NewSentry("svc", "test")
 	capture := &captureHandler{}
 	s.handlers = []EventHandler{panicHandler{}, capture}
-	s.TriggerWatchEvent(nil, nil)
+	s.triggerWatchEvent(nil, nil)
 	if len(capture.events) != 1 {
 		t.Fatal("later handlers must still run")
 	}
@@ -370,7 +370,7 @@ func TestPanicInRequestExtractorsAndDynamicBody(t *testing.T) {
 		ResponseUnauthenticated: ResponseTemplate{StatusCode: 401, MIMEType: "application/json",
 			Body: func(any) any { panic("body exploded") }},
 	}
-	body, cfg := s.TriggerTrapEvent(nil, trap)
+	body, cfg := s.triggerTrapEvent(nil, trap)
 	if string(body) != "{}" || cfg.StatusCode != 401 {
 		t.Fatalf("expected {} fallback, got %q %d", body, cfg.StatusCode)
 	}
@@ -383,7 +383,7 @@ func TestPanicInDefaultCallbackTreatedAsNoDefaultAndStillStrips(t *testing.T) {
 	s := NewSentry("svc", "test")
 	data := map[string]any{"role": "user", "keep": 1}
 	rules := map[string]WatchFieldRule{"role": {Default: func(any) any { panic("x") }, Intent: "i"}}
-	out, found, touched := s.DetectHoneyFields(data, rules, nil)
+	out, found, touched := s.detectHoneyFields(data, rules, nil)
 	if !touched || len(found) != 1 {
 		t.Fatalf("expected violation, got %+v touched=%v", found, touched)
 	}
@@ -448,7 +448,7 @@ func TestValuesMatchTable(t *testing.T) {
 }
 
 func detectH(rules map[string]WatchFieldRule, data map[string]any, src ...string) (map[string]any, []FoundField, bool) {
-	return NewSentry("svc", "t").DetectHoneyFields(data, rules, nil, src...)
+	return NewSentry("svc", "t").detectHoneyFields(data, rules, nil, src...)
 }
 
 func TestDetectBenignJSONZeroNoLongerAlerts(t *testing.T) {
@@ -584,7 +584,7 @@ func TestDetectHoneyFieldsAnyShapes(t *testing.T) {
 	s := NewSentry("svc", "t")
 	rules := map[string]WatchFieldRule{"role": {Default: "user"}}
 	arr := []any{map[string]any{"role": "admin", "n": 1}, "str", 3.0, nil, map[string]any{"role": "user"}}
-	out, found, touched := s.DetectHoneyFieldsAny(arr, rules, nil)
+	out, found, touched := s.detectHoneyFieldsAny(arr, rules, nil)
 	if !touched || len(found) != 1 {
 		t.Fatalf("expected one violation in array: %+v", found)
 	}
@@ -596,7 +596,7 @@ func TestDetectHoneyFieldsAnyShapes(t *testing.T) {
 		}
 	}
 	for _, v := range []any{"s", 1.0, nil, true, []any{}, map[string]any{}} {
-		if _, _, touched := s.DetectHoneyFieldsAny(v, rules, nil); touched {
+		if _, _, touched := s.detectHoneyFieldsAny(v, rules, nil); touched {
 			t.Fatalf("shape %#v should be skipped", v)
 		}
 	}
@@ -840,7 +840,7 @@ func TestConcurrentConfigAndEmitRace(t *testing.T) {
 					s.OverrideSourceIP(func(any) string { return "1.1.1.1" })
 				case 4:
 					s.Trigger(nil, "r", "i", nil)
-					s.TriggerWatchEvent(nil, nil)
+					s.triggerWatchEvent(nil, nil)
 				case 5:
 					_ = s.DefaultResponses()
 					s.Template("x", 200, nil, "")

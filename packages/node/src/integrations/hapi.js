@@ -21,9 +21,9 @@ class HapiIntegration {
             this.ts.identity.ip = (request) => request.info?.remoteAddress || request.raw?.req?.socket?.remoteAddress || "0.0.0.0";
         }
 
-        this.ts.requestContext.path = (request) => normalizePath(request.path || request.url?.pathname || request.raw?.req?.url);
-        this.ts.requestContext.userAgent = (request) => request.headers?.["user-agent"] || null;
-        this.ts.requestContext.method = (request) => (request.method || "").toUpperCase();
+        this.ts.request.path = (request) => normalizePath(request.path || request.url?.pathname || request.raw?.req?.url);
+        this.ts.request.user_agent = (request) => request.headers?.["user-agent"] || null;
+        this.ts.request.method = (request) => (request.method || "").toUpperCase();
 
         const integration = this;
 
