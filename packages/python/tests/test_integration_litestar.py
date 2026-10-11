@@ -365,7 +365,19 @@ def _multipart(boundary, *parts):
 
 
 def test_multipart_boundary_text_inside_value_does_not_end_parsing():
-    app, s, cap = make(watch_x)
+    # The route reads the raw body only: Litestar's own multipart parser rejects
+    # boundary text inside a value on some supported versions (2.13), so the
+    # handler's form() is not what this test is about. The body it is handed
+    # must lose only the honey part, and the event must be sent.
+    @post("/raw", status_code=200)
+    async def raw(request: Request) -> dict:
+        return {"body": (await request.body()).decode("utf-8", "replace")}
+
+    app = Litestar(route_handlers=[raw])
+    sentry = Sentry(app, "svc", "test")
+    cap = Capture()
+    sentry._handlers.append(cap)
+    sentry.watch("/raw").body("x", intent="b")
     body = _multipart(
         b"XB",
         (b'Content-Disposition: form-data; name="a"', b"1 --XB-- 2"),
@@ -373,10 +385,8 @@ def test_multipart_boundary_text_inside_value_does_not_end_parsing():
         (b'Content-Disposition: form-data; name="b"', b"3"),
     )
     with TestClient(app) as c:
-        d = c.post("/echo", content=body, headers={"content-type": "multipart/form-data; boundary=XB"}).json()
-    assert d["form_x"] is None
-    assert d["form_a"] == ["1 --XB-- 2"]
-    assert "evil" not in d["body"] and "1 --XB-- 2" in d["body"]
+        d = c.post("/raw", content=body, headers={"content-type": "multipart/form-data; boundary=XB"}).json()
+    assert "evil" not in d["body"] and "1 --XB-- 2" in d["body"] and 'name="b"' in d["body"]
     (hit,) = hits(cap, "trappsec.watch_hit")
     assert [f["field"] for f in hit["found_fields"]] == ["x"]
 
