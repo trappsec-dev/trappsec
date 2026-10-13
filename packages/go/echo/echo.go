@@ -1,4 +1,8 @@
-// Package trappsececho integrates trappsec with the Echo web framework.
+// Package trappsececho integrates trappsec with Echo v4.
+//
+// Deprecated: Echo v4 gets upstream fixes only until 2026-12-31. Use
+// github.com/trappsec-dev/trappsec/packages/go/echov5 with Echo v5; the
+// package name and API are the same.
 //
 // Usage:
 //

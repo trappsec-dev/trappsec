@@ -6,6 +6,7 @@ name: Tag Go Modules
 #   2. packages/go/nethttp/v1.2.3    (adapters)
 #      packages/go/gin/v1.2.3
 #      packages/go/echo/v1.2.3
+#      packages/go/echov5/v1.2.3
 #      packages/go/handler/v1.2.3
 # Adapters depend on the core through a local `replace` during development. Each
 # adapter tag therefore points at a small detached commit (not on any branch) that
@@ -78,7 +79,7 @@ jobs:
 
       - name: Tag adapters
         run: |
-          for adapter in nethttp gin echo handler; do
+          for adapter in nethttp gin echo echov5 handler; do
             git checkout --detach "${RELEASE_SHA}"
             (
               cd "packages/go/${adapter}"

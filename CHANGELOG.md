@@ -4,6 +4,11 @@ All notable changes to trappsec are documented here. The format follows [Keep a 
 
 ## Unreleased
 
+### Added: Echo v5 (Go)
+
+- **New `packages/go/echov5` adapter** for Echo v5 (`*echo.Context`, `slog` logger, `echo.StartConfig`). The package is still named `trappsececho` with the same API, so migrating from v4 means changing the import path. It requires Echo 5.2+, the first release without GO-2026-6293 (an encoded slash bypassing route-level middleware).
+- **Deprecated: the Echo v4 adapter** (`packages/go/echo`). Echo v4 gets upstream security and bug fixes only until 2026-12-31; the adapter keeps working but will be removed in a later release.
+
 ### Added: chi, gorilla/mux and any `http.Handler` (Go)
 
 - **New `packages/go/handler` adapter** wraps any `http.Handler` router. Traps are answered before the router and watched requests are inspected before it sees them. `app.MatchRoutes(fn)` lets it ask the router which route a request matches: real routes at least as specific as a trap win over it, traps that duplicate a route panic at bootstrap, and watches follow the matched route, including routes in chi `Mount`s and gorilla/mux subrouters. The module has no router dependency; `handler/routertest` tests it against chi and gorilla/mux.
