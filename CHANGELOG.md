@@ -4,6 +4,10 @@ All notable changes to trappsec are documented here. The format follows [Keep a 
 
 ## Unreleased
 
+### Added: chi, gorilla/mux and any `http.Handler` (Go)
+
+- **New `packages/go/handler` adapter** wraps any `http.Handler` router. Traps are answered before the router and watched requests are inspected before it sees them. `app.MatchRoutes(fn)` lets it ask the router which route a request matches: real routes at least as specific as a trap win over it, traps that duplicate a route panic at bootstrap, and watches follow the matched route, including routes in chi `Mount`s and gorilla/mux subrouters. The module has no router dependency; `handler/routertest` tests it against chi and gorilla/mux.
+
 ### Changed: one API across Python, Node and Go
 
 The SDKs now share names, units and option shapes. Every old form below keeps working; Node and Go log nothing for them except where noted.

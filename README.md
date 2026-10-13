@@ -88,11 +88,12 @@ Then ask it to *add deception to this app*, or run `/trappsec:add-deception`.
     <tr><td>Hapi</td></tr>
     <tr><td>Koa</td></tr>
     <tr>
-      <td rowspan="3"><b>Go</b></td>
+      <td rowspan="4"><b>Go</b></td>
       <td>net/http</td>
     </tr>
     <tr><td>Gin</td></tr>
     <tr><td>Echo</td></tr>
+    <tr><td>chi, gorilla/mux and other <code>http.Handler</code> routers</td></tr>
   </tbody>
 </table>
 

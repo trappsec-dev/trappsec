@@ -35,6 +35,34 @@ Import path varies by framework:
 - `github.com/trappsec-dev/trappsec/packages/go/gin`
 - `github.com/trappsec-dev/trappsec/packages/go/nethttp`
 - `github.com/trappsec-dev/trappsec/packages/go/echo`
+- `github.com/trappsec-dev/trappsec/packages/go/handler` (chi, gorilla/mux or any other `http.Handler`)
+
+The `handler` adapter wraps the router and answers traps before it. Tell it how to ask the router which route a request matches, so that a real route at least as specific as a trap (`POST /users/me` next to a trap `POST /users/{id}`) wins, a trap that duplicates a route panics at bootstrap, and watches apply only to the route they name:
+
+```go
+r := chi.NewRouter()
+// ... real routes ...
+app := trappsechandler.InstallSentry(r, "svc", "prod")
+app.MatchRoutes(func(req *http.Request) string {
+    return r.Find(chi.NewRouteContext(), req.Method, req.URL.Path)
+})
+http.ListenAndServe(":8080", app)
+```
+
+For gorilla/mux, return the template of the matched route:
+
+```go
+app.MatchRoutes(func(req *http.Request) string {
+    var m mux.RouteMatch
+    if !r.Match(req, &m) || m.MatchErr != nil || m.Route == nil {
+        return ""
+    }
+    tpl, _ := m.Route.GetPathTemplate()
+    return tpl
+})
+```
+
+Without `MatchRoutes`, traps and watches match the request path alone, like `Sentry.IsTrap`.
 
 Every adapter also has `Use(s *trappsec.Sentry, router) *App` to wire a Sentry you created with `NewSentry` from the core package. Each adapter package re-exports the core types and the `NoDefault`, `Default`, `Intent` and `Metadata` helpers, so one import is enough.
 
@@ -42,7 +70,7 @@ Every adapter also has `Use(s *trappsec.Sentry, router) *App` to wire a Sentry y
 
 Initializes the trappsec Sentry.
 
-*   **app / router**: The application or router instance (Flask/FastAPI/Express/NestJS/*gin.Engine/*http.ServeMux/*echo.Echo).
+*   **app / router**: The application or router instance (Flask/FastAPI/Express/NestJS/*gin.Engine/*http.ServeMux/*echo.Echo/any http.Handler).
 *   **service**: Name of your service (e.g., "PaymentService").
 *   **environment**: Deployment environment (e.g., "Production", "Staging").
 
@@ -719,7 +747,7 @@ app.addHook('onRequest', (req, reply, done) => (ts.is_trap(req) ? done() : app.c
 </div>
 <div class="lang-content" data-lang="go" markdown="1">
 
-Every adapter's `App.IsTrap` takes its framework's request type: `*http.Request` (net/http), `*gin.Context` (Gin), `echo.Context` (Echo). It answers from the route the framework matched (net/http asks the mux), so a real route that only looks like a trap, such as `POST /users/me` next to a trap `POST /users/{id}`, is never reported as one; prefer it over `app.Sentry.IsTrap(req any)`, which matches the path against trap patterns like Python's and Node's `is_trap`.
+Every adapter's `App.IsTrap` takes its framework's request type: `*http.Request` (net/http and `handler`), `*gin.Context` (Gin), `echo.Context` (Echo). It answers from the route the framework matched (net/http asks the mux, `handler` asks the `MatchRoutes` function), so a real route that only looks like a trap, such as `POST /users/me` next to a trap `POST /users/{id}`, is never reported as one; prefer it over `app.Sentry.IsTrap(req any)`, which matches the path against trap patterns like Python's and Node's `is_trap`.
 
 ```go
 // gorilla/csrf (net/http)
