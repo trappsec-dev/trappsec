@@ -21,7 +21,7 @@ Thanks for helping. trappsec ships three parallel SDKs (Python, Node.js, Go) tha
 
 ## Development setup
 
-### Python (3.10+)
+### Python (3.11+)
 
 ```bash
 python -m venv .venv && source .venv/bin/activate
@@ -32,7 +32,7 @@ pytest packages/python/tests
 
 Integration tests skip when a framework is not installed.
 
-### Node.js (20+)
+### Node.js (22+)
 
 ```bash
 cd packages/node
@@ -52,7 +52,7 @@ for d in examples/go-*/; do (cd $d && go build ./...); done
 
 ## End-to-end tests
 
-The e2e harness starts each example, points its webhook at a local receiver and runs the shared pytest suite. You need Python 3.10+, `uv`, Node, npm and Go.
+The e2e harness starts each example, points its webhook at a local receiver and runs the shared pytest suite. You need Python 3.11+, `uv`, Node, npm and Go.
 
 ```bash
 pip install pytest requests

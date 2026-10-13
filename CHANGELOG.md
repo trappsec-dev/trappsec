@@ -4,6 +4,15 @@ All notable changes to trappsec are documented here. The format follows [Keep a 
 
 ## Unreleased
 
+### Changed: minimum supported versions raised
+
+Runtimes and frameworks that are past end of life, or several majors behind, are no longer supported. Each new floor is the oldest release CI runs the integration tests against.
+
+- **Python 3.11+** (3.10 reached end of life on 2026-10-01); 3.14 is now tested and listed. **Node 22+** (Node 20 reached end of life on 2026-04-30); CI tests Node 22, 24 and 26.
+- **Python frameworks:** Flask 3.0 (was 2.0), FastAPI 0.115.3 (was 0.95), Starlette 0.40 (was 0.24), Django 5.2 LTS (was 3.2; 3.2 and 4.2 are both out of support). Litestar 2.13, Sanic 24.6 and Tornado 6.0 are unchanged. The minimum-version CI jobs no longer pin `httpx<0.28` or an old Werkzeug.
+- **Node frameworks:** Fastify 5 (Fastify 4 reached end of life on 2025-06-30), NestJS 11, Hapi 21, Koa 3 with `@koa/router` 13. Express 4.17+ and 5, and Hono 4.2+, are unchanged.
+- Older releases may still work, but are no longer tested. pip and npm now refuse to install trappsec on Python 3.10 or Node 20 (`requires-python`, `engines`).
+
 ### Added: Hono (Node)
 
 - **`new Sentry(app, ...)` now accepts a Hono app** (Hono 4.2+). Traps are real router entries, placed after middleware and before the first route even when a catch-all (`app.get('*', serveStatic())`) was registered earlier; watches match the full route pattern, including `app.route()` and `basePath()` prefixes. trappsec parses JSON, urlencoded and multipart bodies itself and rebuilds `c.req.raw`, so `c.req.json()`, `parseBody()`, validators and `c.req.raw` all see the stripped request. Install Sentry before `serve()` or `export default app`; it hooks `app.fetch`. The default client IP comes from `@hono/node-server`; other runtimes need `override_source_ip`. `hono/csrf` is skipped for traps with `ts.is_trap(c)`. New `examples/hono` app on `@hono/node-server` passes the shared e2e suite.
