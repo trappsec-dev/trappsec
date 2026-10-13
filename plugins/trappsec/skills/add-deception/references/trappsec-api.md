@@ -28,6 +28,7 @@ What `app` is and where initialization goes:
 - **Django:** the WSGI or ASGI application. Wrap it in `wsgi.py`/`asgi.py`: `application = get_wsgi_application()`, then `ts = trappsec.Sentry(application, ...)`. Put trap and watch definitions in a module imported there.
 - **Express:** `app`. Initialize after `express.json()` / `urlencoded()` and global auth/session middleware. Traps are inserted after middleware and before the first route, so global middleware runs for them.
 - **Koa:** `app` (with `@koa/router`). Initialize after `koa-bodyparser`.
+- **Hono:** `app` (`new Hono()`), before `serve({ fetch: app.fetch })` or `export default app`: trappsec hooks `app.fetch`. No body parser needed. The request object is the Hono `Context` `c` (`c.req.header(...)`, `c.get(...)`). Outside `@hono/node-server`, set `override_source_ip` (Hono's `getConnInfo`).
 - **Fastify:** the fastify instance.
 - **Hapi:** the `server`.
 - **NestJS:** the app returned by `NestFactory.create(...)`, before `app.listen()`. Works with the Express and Fastify adapters.
@@ -106,7 +107,7 @@ app.Trap("/api/v2/workspaces/:workspaceId/<decoy>").
 	IfUnauthenticated(trappsec.ResponseConfig{Status: 401, Body: map[string]any{"error": "..."}})
 ```
 
-- **Path syntax** is the framework's own: `{id}` (FastAPI/Starlette/Litestar), `<id>` (Flask), `<str:id>` (Django), `:id` (Express/Koa/Fastify/NestJS/Gin/Echo), `{id}` (Hapi and Go net/http). Use the full public path, including mount prefixes.
+- **Path syntax** is the framework's own: `{id}` (FastAPI/Starlette/Litestar), `<id>` (Flask), `<str:id>` (Django), `:id` (Express/Koa/Hono/Fastify/NestJS/Gin/Echo), `{id}` (Hapi and Go net/http). Use the full public path, including mount prefixes.
 - **Methods** default to `["GET", "POST"]`. Set them explicitly.
 - **Body** is a dict/object, a string, or a function of the request returning one of those (Python `lambda r: {...}`, Node `(req) => ({...})`, Go `func(any) any`; Echo also accepts `func(*echo.Context) any`). String bodies are sent raw. Set `mime_type` / `MIMEType` for anything that isn't `application/json`.
 - **Failing bodies.** A function body that throws falls back to `{}`. Keep it simple and deterministic.

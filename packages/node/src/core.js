@@ -581,6 +581,7 @@ class Sentry {
             { detect: a => fn(a.ext) && fn(a.start) && fn(a.route),             path: './integrations/hapi'    },
             { detect: a => fn(a.callback) && Array.isArray(a.middleware),       path: './integrations/koa'     },
             { detect: a => fn(a.addHook) && fn(a.register) && fn(a.listen),     path: './integrations/fastify' },
+            { detect: a => fn(a.fetch) && fn(a.request) && Array.isArray(a.routes) && fn(a.router?.match), path: './integrations/hono' },
             { detect: a => fn(a.use) && fn(a.get) && fn(a.post) && !fn(a.ext) && !fn(a.callback), path: './integrations/express' },
         ];
 

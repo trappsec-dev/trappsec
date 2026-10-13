@@ -4,6 +4,10 @@ All notable changes to trappsec are documented here. The format follows [Keep a 
 
 ## Unreleased
 
+### Added: Hono (Node)
+
+- **`new Sentry(app, ...)` now accepts a Hono app** (Hono 4.2+). Traps are real router entries, placed after middleware and before the first route even when a catch-all (`app.get('*', serveStatic())`) was registered earlier; watches match the full route pattern, including `app.route()` and `basePath()` prefixes. trappsec parses JSON, urlencoded and multipart bodies itself and rebuilds `c.req.raw`, so `c.req.json()`, `parseBody()`, validators and `c.req.raw` all see the stripped request. Install Sentry before `serve()` or `export default app`; it hooks `app.fetch`. The default client IP comes from `@hono/node-server`; other runtimes need `override_source_ip`. `hono/csrf` is skipped for traps with `ts.is_trap(c)`. New `examples/hono` app on `@hono/node-server` passes the shared e2e suite.
+
 ### Changed: the Echo adapter targets Echo v5 (Go); Echo v4 support is dropped
 
 - **`packages/go/echo` now requires Echo v5** (`github.com/labstack/echo/v5`, 5.2+) and no longer works with Echo v4, which gets upstream fixes only until 2026-12-31. Handlers and `IdentifyUser` callbacks take `*echo.Context` instead of `echo.Context`, `EchoLogger()` returns `*slog.Logger`, and `StartTLS` / `StartAutoTLS` / `StartServer` / `StartH2CServer` are gone with their Echo v5 counterparts: pass the App to `echo.StartConfig{...}.Start(ctx, app)` (or `StartTLS`) instead. The package name, import path and the rest of the API are unchanged. 5.2 is the first release without GO-2026-6293 (an encoded slash bypassing route-level middleware).

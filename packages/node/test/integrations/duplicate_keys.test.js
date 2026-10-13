@@ -9,6 +9,7 @@ const Koa = require('koa');
 const Router = require('@koa/router');
 const bodyParser = require('koa-bodyparser');
 const Fastify = require('fastify');
+const { Hono } = require('hono');
 const express = require('express');
 const { makeSentry, request } = require('./helpers');
 
@@ -48,6 +49,16 @@ test('koa: duplicate watched keys', async (t) => {
     t.after(() => server.close());
     const q = (await request(server, { path: QS })).json.q;
     const b = (await request(server, { method: 'POST', path: '/q', headers: FORM, body: BODY })).json.b;
+    check(events, q, b);
+});
+
+test('hono: duplicate watched keys', async () => {
+    const app = new Hono();
+    const { sentry, events } = makeSentry(app);
+    watch(sentry);
+    app.all('/q', async (c) => c.json({ q: c.req.query(), b: c.req.method === 'POST' ? await c.req.parseBody() : null }));
+    const q = (await (await app.request(QS)).json()).q;
+    const b = (await (await app.request('/q', { method: 'POST', headers: FORM, body: BODY })).json()).b;
     check(events, q, b);
 });
 

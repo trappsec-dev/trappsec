@@ -80,13 +80,14 @@ Then ask it to *add deception to this app*, or run `/trappsec:add-deception`.
     <tr><td>Sanic</td></tr>
     <tr><td>Tornado</td></tr>
     <tr>
-      <td rowspan="5"><b>Node.js</b></td>
+      <td rowspan="6"><b>Node.js</b></td>
       <td>Express</td>
     </tr>
     <tr><td>NestJS</td></tr>
     <tr><td>Fastify</td></tr>
     <tr><td>Hapi</td></tr>
     <tr><td>Koa</td></tr>
+    <tr><td>Hono</td></tr>
     <tr>
       <td rowspan="4"><b>Go</b></td>
       <td>net/http</td>

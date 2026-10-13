@@ -49,6 +49,7 @@
     "express",
     "fastify",
     "koa",
+    "hono",
     "hapi",
     "nestjs"
   ],

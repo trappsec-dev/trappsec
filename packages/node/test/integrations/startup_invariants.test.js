@@ -13,6 +13,7 @@ const Hapi = require('@hapi/hapi');
 const Koa = require('koa');
 const Router = require('@koa/router');
 const Fastify = require('fastify');
+const { Hono } = require('hono');
 const { NestFactory } = require('@nestjs/core');
 const common = require('@nestjs/common');
 const { ExpressAdapter } = require('@nestjs/platform-express');
@@ -83,6 +84,14 @@ test('koa: watches before traps; no per-request scans (R10, R13)', async (t) => 
     const server = await new Promise((r) => { const s = app.listen(0, '127.0.0.1', () => r(s)); });
     t.after(() => server.close());
     await exercise(sentry, events, viaServer(server));
+});
+
+test('hono: watches before traps; no per-request scans (R10, R13)', async () => {
+    const app = new Hono();
+    const { sentry, events } = makeSentry(app);
+    configure(sentry, '/users/:id');
+    app.get('/users/:id', (c) => c.text('ok'));
+    await exercise(sentry, events, async (method, path) => (await app.request(path, { method })).status);
 });
 
 for (const [label, makeAdapter] of [['nest-express', () => new ExpressAdapter()], ['nest-fastify', () => new FastifyAdapter()]]) {
