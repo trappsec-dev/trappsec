@@ -5,13 +5,14 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
-	"io"
+	"io/fs"
 	"log"
 	"math/rand"
 	"net"
 	"net/http"
 	"os"
 	"os/signal"
+	"path"
 	"path/filepath"
 	"strings"
 	"syscall"
@@ -72,33 +73,22 @@ func main() {
 		r.Mount("/echo", echoRouter())
 	})
 
-	frontendDir := filepath.Join("..", "lure-frontend")
+	// os.DirFS refuses names that leave the directory ("..", absolute paths).
+	frontend := os.DirFS(filepath.Join("..", "lure-frontend"))
 	r.Get("/*", func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasPrefix(r.URL.Path, "/api/") || strings.HasPrefix(r.URL.Path, "/auth/") || strings.HasPrefix(r.URL.Path, "/deployment/") {
 			w.WriteHeader(http.StatusNotFound)
 			return
 		}
-
-		path := r.URL.Path
-		if path == "/" {
-			path = "/index.html"
+		name := strings.TrimPrefix(path.Clean(r.URL.Path), "/")
+		if name == "" {
+			name = "index.html"
 		}
-		cleanPath := filepath.Clean(strings.TrimPrefix(path, "/"))
-		target := filepath.Join(frontendDir, cleanPath)
-		f, err := os.Open(target)
-		if err != nil {
+		if st, err := fs.Stat(frontend, name); err != nil || st.IsDir() {
 			w.WriteHeader(http.StatusNotFound)
 			return
 		}
-		defer f.Close()
-		if strings.HasSuffix(target, ".html") {
-			w.Header().Set("Content-Type", "text/html")
-		} else if strings.HasSuffix(target, ".css") {
-			w.Header().Set("Content-Type", "text/css")
-		} else if strings.HasSuffix(target, ".js") {
-			w.Header().Set("Content-Type", "application/javascript")
-		}
-		_, _ = io.Copy(w, f)
+		http.ServeFileFS(w, r, frontend, name)
 	})
 
 	app.DefaultUnauthenticatedResponse(trappsec.ResponseConfig{Status: 401, Body: map[string]any{"error": "authentication required"}})
