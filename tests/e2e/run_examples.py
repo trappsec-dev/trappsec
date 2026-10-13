@@ -42,6 +42,7 @@ def _default_cases() -> List[Case]:
         Case("node-express", ex / "express", node("express")),
         Case("node-fastify", ex / "fastify", node("fastify")),
         Case("node-hapi", ex / "hapi", node("hapi")),
+        Case("node-hono", ex / "hono", node("hono")),
         Case("node-koa", ex / "koa", node("koa")),
         Case("node-nestjs-express", ex / "nestjs", ["npm", "run", "start", "--", "--webhook={webhook}"]),
         Case("node-nestjs-fastify", ex / "nestjs", ["npm", "run", "start_fastify", "--", "--webhook={webhook}"]),

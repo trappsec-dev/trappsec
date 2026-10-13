@@ -78,7 +78,7 @@ If you cannot write a plausible Think, the tripwire is not believable. If the Do
 
 - **Supported backend.** trappsec supports:
   - Python: Flask, FastAPI, Django, Starlette, Litestar, Sanic, Tornado.
-  - Node: Express, NestJS, Fastify, Hapi, Koa.
+  - Node: Express, NestJS, Fastify, Hapi, Koa, Hono.
   - Go: net/http, Gin, Echo.
 
   If the API runs on anything else (Next.js route handlers, Rails, Spring...), tell the user and stop. Do not hand-roll a substitute. The user can request support at https://github.com/trappsec-dev/trappsec/discussions.

@@ -70,7 +70,7 @@ Every adapter also has `Use(s *trappsec.Sentry, router) *App` to wire a Sentry y
 
 Initializes the trappsec Sentry.
 
-*   **app / router**: The application or router instance (Flask/FastAPI/Express/NestJS/*gin.Engine/*http.ServeMux/*echo.Echo/any http.Handler).
+*   **app / router**: The application or router instance (Flask/FastAPI/Express/NestJS/Hono/*gin.Engine/*http.ServeMux/*echo.Echo/any http.Handler).
 *   **service**: Name of your service (e.g., "PaymentService").
 *   **environment**: Deployment environment (e.g., "Production", "Staging").
 
@@ -383,7 +383,7 @@ watch.Query("debug", trappsec.Default("false"), trappsec.Intent("Recon"))
 *   Every occurrence of a watched key is removed from the request your handler sees, so a honey field can never influence real logic.
 *   Go matches JSON keys case-insensitively (as `encoding/json` does); Python and Node are case-sensitive.
 *   A JSON body that is an array is inspected element by element (object elements only). Other body shapes are skipped.
-*   `body` watches need a parsed body. On Express and Koa, register a body parser (app- or route-level); see [Production](/production/#body-parsers) and [Framework differences](/supported-frameworks/#framework-differences).
+*   `body` watches need a parsed body. On Express and Koa, register a body parser (app- or route-level); Hono bodies are parsed by trappsec; see [Production](/production/#body-parsers) and [Framework differences](/supported-frameworks/#framework-differences).
 
 ## Configuration
 

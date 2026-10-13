@@ -66,7 +66,7 @@ Framework hooks let you link every event to an authenticated user identity. Unau
 | Language | Frameworks | Install |
 |----------|------------|---------|
 | **Python** | Flask, FastAPI, Django, Starlette, Litestar, Sanic, Tornado | `pip install trappsec` |
-| **Node.js** | Express, NestJS, Fastify, Hapi, Koa | `npm install trappsec` |
+| **Node.js** | Express, NestJS, Fastify, Hapi, Koa, Hono | `npm install trappsec` |
 | **Go** | Gin, net/http, Echo | `go get github.com/trappsec-dev/trappsec/packages/go/gin` |
 
 Missing your framework? [Raise a request →](https://github.com/trappsec-dev/trappsec/discussions/new?category=feature-requests){:target="_blank"}

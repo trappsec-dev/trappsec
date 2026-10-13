@@ -30,6 +30,7 @@ The requirement differs based on how the framework resolves route conflicts:
 
 **Reference:**
 - FastAPI prepends `APIRoute` objects: `app.router.routes = new_routes + app.router.routes` — required because Starlette is order-based
+- Hono composes every matching route and middleware in registration order, so it is order-based too: trap routes are added at bootstrap and its router's match results are reordered so traps sit after middleware (`app.use()`, or an `app.all()` handler that takes `next`) and before the first route.
 - Express, Koa and NestJS-Express insert trap routes **immediately before the first route layer**, i.e. after ordinary middleware (auth, session, body parsers) so `identify_user` can see the user, but before any application route so traps are never shadowed. Never prepend ahead of middleware, and never append after routes.
 - If a trap path+method exactly duplicates an existing app route, fail loud (throw/panic with a clear message); never silently replace or shadow either side (see R20).
 - Sanic, Gin, Echo, Hapi, net/http: native `add_route()` / `engine.Handle()` / `app.route()` registration is sufficient — specificity-based routing provides the guarantee implicitly
@@ -207,6 +208,7 @@ observable behavioral differences that allow attackers to identify traps.
 - FastAPI: `app.router.routes = new_routes + app.router.routes`, called from a patched
   lifespan context at startup
 - Express/Koa/NestJS-Express: real route layers inserted before the first route layer (after middleware), called from bootstrap (R3/R15)
+- Hono: router entries added at bootstrap (from the hooked `app.fetch`), ordered after middleware and before the first route at match time
 - Go Gin: `engine.Handle(method, path, handler)`, called from the `*App.Run*()` wrappers
   returned by `InstallSentry`
 - Go Echo: `app.Add(method, path, handler)`, called from the `*App.Start*()` wrappers

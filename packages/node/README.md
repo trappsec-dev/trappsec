@@ -1,6 +1,6 @@
 # trappsec (Node.js)
 
-Deception as a developer tool: decoy routes (traps) and honey fields (watches) for Express, Fastify, Koa, Hapi and NestJS.
+Deception as a developer tool: decoy routes (traps) and honey fields (watches) for Express, Fastify, Koa, Hapi, NestJS and Hono.
 
 ```js
 const express = require('express');

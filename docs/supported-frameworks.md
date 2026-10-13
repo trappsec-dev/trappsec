@@ -44,7 +44,7 @@ tagline: "All frameworks supported across Python, Node.js, and Go."
       <td>6.0</td>
     </tr>
     <tr>
-      <td rowspan="5"><b>Node.js</b><br>20+</td>
+      <td rowspan="6"><b>Node.js</b><br>20+</td>
       <td>Express</td>
       <td>4.17 (and 5.x)</td>
     </tr>
@@ -63,6 +63,10 @@ tagline: "All frameworks supported across Python, Node.js, and Go."
     <tr>
       <td>Koa</td>
       <td>2.13 with @koa/router 10</td>
+    </tr>
+    <tr>
+      <td>Hono</td>
+      <td>4.2 (any runtime; the default client IP is read from @hono/node-server)</td>
     </tr>
     <tr>
       <td rowspan="4"><b>Go</b><br>1.26+</td>
@@ -102,6 +106,7 @@ The API is the same in every framework; these are the places where the framework
 | Fastify | `request` | Fastify content-type parsers and `@fastify/multipart` | `@fastify/csrf-protection`: skip with `ts.is_trap(req)` in an `onRequest` hook | |
 | Koa | `ctx` | your parser (`koa-bodyparser`, …), app- or route-level | koa-csrf: skip with `ts.is_trap(ctx)` | register `router.routes()` directly: routers wrapped in `koa-compose` or `koa-mount` are not seen (a warning says so) |
 | Hapi | `request` | Hapi | crumb: skip with `ts.is_trap(request)` | |
+| Hono | `c` (the Hono `Context`) | by trappsec (JSON, urlencoded, multipart; up to 10 MiB): `c.req.json()`, `parseBody()`, `formData()` and `c.req.raw` all see the stripped request | `hono/csrf`: skip with `app.use('*', (c, next) => ts.is_trap(c) ? next() : protect(c, next))` | install Sentry before `serve()` / `export default app`: it hooks `app.fetch`. Middleware (`app.use()`, or `app.all()` with a `(c, next)` handler) runs before traps; `app.all()` with a `(c)` handler is a route. Outside `@hono/node-server`, set `override_source_ip` (e.g. with Hono's `getConnInfo`), or every event records `0.0.0.0` |
 | NestJS | the platform's request (Express `req` or Fastify `request`) | the platform; multipart via `FileInterceptor` / `AnyFilesInterceptor` | as for the underlying platform | a handler reading `req.body` through `@Req()` with no `@Body()` parameter gets the event, but the multipart honey field is not stripped |
 | net/http | `*http.Request` | by trappsec (up to `SetMaxBodyBytes`, 1 MiB) | gorilla/csrf, `CrossOriginProtection`: skip with `app.IsTrap(r)` | serve through `app`; watches inside a mounted sub-mux are logged as unreachable |
 | Gin | `*gin.Context` | by trappsec (up to `SetMaxBodyBytes`, 1 MiB) | skip with `app.IsTrap(c)` in your CSRF middleware | serve through `app` (`app.Run*`, or `app.Handler()`, which honours `UseH2C`) |

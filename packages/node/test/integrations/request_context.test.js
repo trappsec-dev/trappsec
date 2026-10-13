@@ -13,6 +13,8 @@ const Hapi = require('@hapi/hapi');
 const Koa = require('koa');
 const Router = require('@koa/router');
 const Fastify = require('fastify');
+const { Hono } = require('hono');
+const { serve } = require('@hono/node-server');
 const { NestFactory } = require('@nestjs/core');
 const common = require('@nestjs/common');
 const { ExpressAdapter } = require('@nestjs/platform-express');
@@ -87,6 +89,21 @@ test('koa: request context and raw URL', async (t) => {
     });
     app.use(router.routes());
     const server = await listen(t, app.listen(0, '127.0.0.1'));
+    const r = await request(server, { path: PATH, headers: { 'user-agent': UA } });
+    check(events, r.json);
+});
+
+test('hono: request context and raw URL', async (t) => {
+    const app = new Hono();
+    const { sentry, events } = makeSentry(app);
+    sentry.watch('/users/:id').query('debug');
+    app.get('/users/:id', (c) => c.json({
+        ip: c.env.incoming.socket.remoteAddress,
+        query: c.req.query(),
+        urls: { url: c.req.url, raw: c.req.raw.url },
+    }));
+    const server = await new Promise((r) => { const s = serve({ fetch: app.fetch, port: 0, hostname: '127.0.0.1' }, () => r(s)); });
+    t.after(() => new Promise((r) => server.close(r)));
     const r = await request(server, { path: PATH, headers: { 'user-agent': UA } });
     check(events, r.json);
 });
