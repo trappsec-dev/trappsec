@@ -26,6 +26,8 @@ The SDKs now share names, units and option shapes. Every old form below keeps wo
 
 ### Fixed: full SDK review
 
+- **Examples could read any file on the host.** The net/http, Litestar and Django examples built the lure-frontend file path from the request URL, so `/..%2f..%2fetc%2fpasswd` (and, on Litestar and Django, `/%2fetc%2fpasswd`) returned files outside the frontend directory. The Go examples now serve through `os.DirFS`, and the Python examples resolve the path and refuse anything outside the directory; Gin, Echo and Sanic had the same pattern and get the same fix. The Echo example's `/` answered 500 after the move to Echo v5 and serves the page again, and Litestar serves the frontend's CSS and JS, which it never found before.
+
 - **Django under ASGI returned 500 on every request** once Sentry was installed (a synchronous view hook in an async chain). Django traps with path parameters, Flask traps with `<id>` / `<path:p>`, and Tornado traps with `:id` / `{id}` / `<id>` / catch-alls now answer with the decoy instead of 500 or 404.
 - **A deeply nested honey value bypassed detection** (Python at ~1000 levels, Node at ~5000): the sanitizer overflowed the stack, so no event was sent and the field reached the app. Values nested more than 32 levels deep now always alert and are recorded with `"<nested>"` in place of the too-deep part, identically in all three SDKs.
 - **Async callbacks:** an `async` `identify_user` (or other callback) could crash a Node process with an unhandled rejection, and in Python silently made every hit anonymous. Callbacks must be synchronous; one that returns a promise or coroutine is logged once and treated as failed. A failing Python `override_source_ip` now falls back to the framework's own client IP, as in Node and Go.

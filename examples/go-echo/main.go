@@ -4,11 +4,13 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"io/fs"
 	"log"
 	"math/rand"
 	"net/http"
 	"os"
 	"os/signal"
+	"path"
 	"path/filepath"
 	"strings"
 	"syscall"
@@ -152,22 +154,18 @@ func main() {
 		return c.JSON(http.StatusOK, result)
 	})
 
-	frontendDir := filepath.Join("..", "lure-frontend")
+	frontend := os.DirFS(filepath.Join("..", "lure-frontend"))
 	app.GET("/", func(c *echo.Context) error {
-		return c.File(filepath.Join(frontendDir, "index.html"))
+		serveFrontend(c.Response(), c.Request(), frontend, "/")
+		return nil
 	})
 	app.GET("/*", func(c *echo.Context) error {
-		path := c.Param("*")
-		fullPath := "/" + path
+		fullPath := "/" + c.Param("*")
 		if strings.HasPrefix(fullPath, "/api/") || strings.HasPrefix(fullPath, "/auth/") || strings.HasPrefix(fullPath, "/deployment/") {
 			return c.NoContent(http.StatusNotFound)
 		}
-
-		target := filepath.Join(frontendDir, filepath.Clean(path))
-		if _, err := os.Stat(target); err != nil {
-			return c.NoContent(http.StatusNotFound)
-		}
-		return c.File(target)
+		serveFrontend(c.Response(), c.Request(), frontend, fullPath)
+		return nil
 	})
 
 	app.Trap("/deployment/config").Methods("GET").Intent("Reconnaissance").Respond(trappsec.ResponseConfig{
@@ -245,4 +243,19 @@ func flush(app *trappsec.App) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	_ = app.Close(ctx)
+}
+
+// serveFrontend serves the lure frontend file named by urlPath, or answers
+// 404. os.DirFS refuses names that leave the directory ("..", absolute
+// paths), so a crafted path cannot read files elsewhere on the machine.
+func serveFrontend(w http.ResponseWriter, r *http.Request, frontend fs.FS, urlPath string) {
+	name := strings.TrimPrefix(path.Clean("/"+urlPath), "/")
+	if name == "" {
+		name = "index.html"
+	}
+	if st, err := fs.Stat(frontend, name); err != nil || st.IsDir() {
+		w.WriteHeader(http.StatusNotFound)
+		return
+	}
+	http.ServeFileFS(w, r, frontend, name)
 }

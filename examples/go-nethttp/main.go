@@ -5,13 +5,14 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
-	"io"
+	"io/fs"
 	"log"
 	"math/rand"
 	"net"
 	"net/http"
 	"os"
 	"os/signal"
+	"path"
 	"path/filepath"
 	"strings"
 	"syscall"
@@ -131,33 +132,13 @@ func main() {
 		writeJSON(w, http.StatusOK, result)
 	})
 
-	frontendDir := filepath.Join("..", "lure-frontend")
+	frontend := os.DirFS(filepath.Join("..", "lure-frontend"))
 	register("/", func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasPrefix(r.URL.Path, "/api/") || strings.HasPrefix(r.URL.Path, "/auth/") || strings.HasPrefix(r.URL.Path, "/deployment/") {
 			w.WriteHeader(http.StatusNotFound)
 			return
 		}
-
-		path := r.URL.Path
-		if path == "/" {
-			path = "/index.html"
-		}
-		cleanPath := filepath.Clean(strings.TrimPrefix(path, "/"))
-		target := filepath.Join(frontendDir, cleanPath)
-		f, err := os.Open(target)
-		if err != nil {
-			w.WriteHeader(http.StatusNotFound)
-			return
-		}
-		defer f.Close()
-		if strings.HasSuffix(target, ".html") {
-			w.Header().Set("Content-Type", "text/html")
-		} else if strings.HasSuffix(target, ".css") {
-			w.Header().Set("Content-Type", "text/css")
-		} else if strings.HasSuffix(target, ".js") {
-			w.Header().Set("Content-Type", "application/javascript")
-		}
-		_, _ = io.Copy(w, f)
+		serveFrontend(w, r, frontend, r.URL.Path)
 	})
 
 	app.DefaultUnauthenticatedResponse(trappsec.ResponseConfig{Status: 401, Body: map[string]any{"error": "authentication required"}})
@@ -278,4 +259,19 @@ func flushOnShutdown(app *trappsec.App) {
 		_ = app.Close(ctx)
 		os.Exit(0)
 	}()
+}
+
+// serveFrontend serves the lure frontend file named by urlPath, or answers
+// 404. os.DirFS refuses names that leave the directory ("..", absolute
+// paths), so a crafted path cannot read files elsewhere on the machine.
+func serveFrontend(w http.ResponseWriter, r *http.Request, frontend fs.FS, urlPath string) {
+	name := strings.TrimPrefix(path.Clean("/"+urlPath), "/")
+	if name == "" {
+		name = "index.html"
+	}
+	if st, err := fs.Stat(frontend, name); err != nil || st.IsDir() {
+		w.WriteHeader(http.StatusNotFound)
+		return
+	}
+	http.ServeFileFS(w, r, frontend, name)
 }

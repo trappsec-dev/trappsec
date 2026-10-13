@@ -4,12 +4,15 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"io/fs"
 	"log"
 	"math/rand"
 	"net/http"
 	"os"
 	"os/signal"
+	"path"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
@@ -140,21 +143,12 @@ func main() {
 		c.JSON(http.StatusOK, result)
 	})
 
-	frontendDir := filepath.Join("..", "lure-frontend")
+	frontend := os.DirFS(filepath.Join("..", "lure-frontend"))
 	app.GET("/", func(c *gin.Context) {
-		c.File(filepath.Join(frontendDir, "index.html"))
+		serveFrontend(c.Writer, c.Request, frontend, "/")
 	})
 	app.NoRoute(func(c *gin.Context) {
-		path := c.Request.URL.Path
-		if len(path) > 0 && path[0] == '/' {
-			path = path[1:]
-		}
-		target := filepath.Join(frontendDir, filepath.Clean(path))
-		if _, err := os.Stat(target); err != nil {
-			c.Status(http.StatusNotFound)
-			return
-		}
-		c.File(target)
+		serveFrontend(c.Writer, c.Request, frontend, c.Request.URL.Path)
 	})
 
 	app.Trap("/deployment/config").Methods("GET").Intent("Reconnaissance").Respond(trappsec.ResponseConfig{
@@ -232,4 +226,19 @@ func flushOnShutdown(app *trappsec.App) {
 		_ = app.Close(ctx)
 		os.Exit(0)
 	}()
+}
+
+// serveFrontend serves the lure frontend file named by urlPath, or answers
+// 404. os.DirFS refuses names that leave the directory ("..", absolute
+// paths), so a crafted path cannot read files elsewhere on the machine.
+func serveFrontend(w http.ResponseWriter, r *http.Request, frontend fs.FS, urlPath string) {
+	name := strings.TrimPrefix(path.Clean("/"+urlPath), "/")
+	if name == "" {
+		name = "index.html"
+	}
+	if st, err := fs.Stat(frontend, name); err != nil || st.IsDir() {
+		w.WriteHeader(http.StatusNotFound)
+		return
+	}
+	http.ServeFileFS(w, r, frontend, name)
 }
