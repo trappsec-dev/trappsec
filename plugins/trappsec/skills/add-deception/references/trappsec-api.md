@@ -19,8 +19,8 @@ Contents
 
 | Stack | Install | Initialize |
 |---|---|---|
-| Python 3.10+ | `pip install trappsec` (or the project's tool: uv, poetry...) | `ts = trappsec.Sentry(app, "billing-api", env)` |
-| Node 20+ | `npm install trappsec` (or pnpm/yarn) | `const { Sentry } = require('trappsec'); const ts = new Sentry(app, 'billing-api', env);` (ESM: `import { Sentry } from 'trappsec'`) |
+| Python 3.11+ | `pip install trappsec` (or the project's tool: uv, poetry...) | `ts = trappsec.Sentry(app, "billing-api", env)` |
+| Node 22+ | `npm install trappsec` (or pnpm/yarn) | `const { Sentry } = require('trappsec'); const ts = new Sentry(app, 'billing-api', env);` (ESM: `import { Sentry } from 'trappsec'`) |
 | Go 1.26+ | `go get github.com/trappsec-dev/trappsec/packages/go/<gin\|echo\|nethttp>` | `app := trappsec.InstallSentry(router, "billing-api", env)` |
 
 What `app` is and where initialization goes:

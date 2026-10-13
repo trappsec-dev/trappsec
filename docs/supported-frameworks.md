@@ -15,17 +15,17 @@ tagline: "All frameworks supported across Python, Node.js, and Go."
   </thead>
   <tbody>
     <tr>
-      <td rowspan="7"><b>Python</b><br>3.10+</td>
+      <td rowspan="7"><b>Python</b><br>3.11+</td>
       <td>Flask</td>
-      <td>2.0</td>
+      <td>3.0</td>
     </tr>
     <tr>
       <td>FastAPI</td>
-      <td>0.95</td>
+      <td>0.115.3</td>
     </tr>
     <tr>
       <td>Starlette</td>
-      <td>0.24</td>
+      <td>0.40</td>
     </tr>
     <tr>
       <td>Litestar</td>
@@ -33,7 +33,7 @@ tagline: "All frameworks supported across Python, Node.js, and Go."
     </tr>
     <tr>
       <td>Django</td>
-      <td>3.2</td>
+      <td>5.2 (LTS)</td>
     </tr>
     <tr>
       <td>Sanic</td>
@@ -44,25 +44,25 @@ tagline: "All frameworks supported across Python, Node.js, and Go."
       <td>6.0</td>
     </tr>
     <tr>
-      <td rowspan="6"><b>Node.js</b><br>20+</td>
+      <td rowspan="6"><b>Node.js</b><br>22+</td>
       <td>Express</td>
       <td>4.17 (and 5.x)</td>
     </tr>
     <tr>
       <td>NestJS</td>
-      <td>10</td>
+      <td>11</td>
     </tr>
     <tr>
       <td>Fastify</td>
-      <td>4</td>
+      <td>5</td>
     </tr>
     <tr>
       <td>Hapi</td>
-      <td>20</td>
+      <td>21</td>
     </tr>
     <tr>
       <td>Koa</td>
-      <td>2.13 with @koa/router 10</td>
+      <td>3.0 with @koa/router 13</td>
     </tr>
     <tr>
       <td>Hono</td>
@@ -88,7 +88,7 @@ tagline: "All frameworks supported across Python, Node.js, and Go."
   </tbody>
 </table>
 
-Minimum versions are the oldest releases the integration tests pass on. CI checks them on every change: each Python framework on Python 3.10, every Node framework on Node 20. Go adapters require these versions in their `go.mod`, so Go's minimum version selection enforces them; the `handler` adapter has no router dependency and is tested against current chi and gorilla/mux releases. Older releases may work but are not tested; Litestar before 2.13 and Sanic before 24.6 are known to miss honey fields.
+Minimum versions are the oldest releases the integration tests pass on. CI checks them on every change: each Python framework on Python 3.11, every Node framework on Node 22. Go adapters require these versions in their `go.mod`, so Go's minimum version selection enforces them; the `handler` adapter has no router dependency and is tested against current chi and gorilla/mux releases. Older releases may work but are not tested; Litestar before 2.13 and Sanic before 24.6 are known to miss honey fields.
 
 ## Framework differences
 

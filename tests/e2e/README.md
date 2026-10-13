@@ -52,4 +52,4 @@ The harness runs cases in parallel (`--jobs`, default 4): case N listens on port
 
 ### Requirements
 
-Python 3.10+ with `pytest` and `requests`; `uv` (the Python examples declare inline dependencies and run with `uv run`); Node 20+ and npm; Go 1.26+ (as required by `packages/go/go.mod`).
+Python 3.11+ with `pytest` and `requests`; `uv` (the Python examples declare inline dependencies and run with `uv run`); Node 22+ and npm; Go 1.26+ (as required by `packages/go/go.mod`).
