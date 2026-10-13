@@ -12,7 +12,7 @@ Thanks for helping. trappsec ships three parallel SDKs (Python, Node.js, Go) tha
 |---|---|
 | `packages/python` | Python package (`pip install -e packages/python`) |
 | `packages/node` | Node package; integration tests in `test/integrations` |
-| `packages/go` | Go core module; adapters in `nethttp/`, `gin/`, `echo/` (Echo v4), `echov5/`, `handler/` are separate modules (`handler/routertest/` tests `handler` against chi and gorilla/mux) |
+| `packages/go` | Go core module; adapters in `nethttp/`, `gin/`, `echo/`, `handler/` are separate modules (`handler/routertest/` tests `handler` against chi and gorilla/mux) |
 | `examples/` | One runnable app per framework, all following one shared spec |
 | `tests/e2e` | Black-box suite run against every example |
 | `tests/conformance` | Shared JSON cases (value matching, detection, event keys) every SDK's unit tests load |
@@ -44,7 +44,7 @@ cd test/integrations && npm ci && node --test
 ### Go (see `go.mod` for the version)
 
 ```bash
-for m in packages/go packages/go/nethttp packages/go/gin packages/go/echo packages/go/echov5 packages/go/handler packages/go/handler/routertest; do
+for m in packages/go packages/go/nethttp packages/go/gin packages/go/echo packages/go/handler packages/go/handler/routertest; do
   (cd $m && go vet ./... && go test -race ./...)
 done
 for d in examples/go-*/; do (cd $d && go build ./...); done
@@ -79,7 +79,7 @@ Matching, detection and event-shape rules that must agree across languages live 
 
 ## Releases
 
-Publishing a GitHub release runs tests, then publishes PyPI (environment `pypi`) and npm (environment `npm`), and tags the Go modules in order: `packages/go/vX.Y.Z` first, then the `nethttp`, `gin`, `echo`, `echov5` and `handler` adapters (see `go-tag.yml`).
+Publishing a GitHub release runs tests, then publishes PyPI (environment `pypi`) and npm (environment `npm`), and tags the Go modules in order: `packages/go/vX.Y.Z` first, then the `nethttp`, `gin`, `echo` and `handler` adapters (see `go-tag.yml`).
 
 ## Security
 

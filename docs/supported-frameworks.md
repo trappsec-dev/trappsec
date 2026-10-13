@@ -75,7 +75,7 @@ tagline: "All frameworks supported across Python, Node.js, and Go."
     </tr>
     <tr>
       <td>Echo</td>
-      <td>5.2 (<code>echov5</code>); 4.16 (<code>echo</code>, deprecated)</td>
+      <td>5.2</td>
     </tr>
     <tr>
       <td>chi, gorilla/mux and other <code>http.Handler</code> routers</td>
@@ -106,8 +106,7 @@ The API is the same in every framework; these are the places where the framework
 | net/http | `*http.Request` | by trappsec (up to `SetMaxBodyBytes`, 1 MiB) | gorilla/csrf, `CrossOriginProtection`: skip with `app.IsTrap(r)` | serve through `app`; watches inside a mounted sub-mux are logged as unreachable |
 | Gin | `*gin.Context` | by trappsec (up to `SetMaxBodyBytes`, 1 MiB) | skip with `app.IsTrap(c)` in your CSRF middleware | serve through `app` (`app.Run*`, or `app.Handler()`, which honours `UseH2C`) |
 | chi, gorilla/mux, any `http.Handler` (`handler` package) | `*http.Request` | by trappsec (up to `SetMaxBodyBytes`, 1 MiB) | wrap your CSRF middleware around the router, or skip with `app.IsTrap(r)` if it wraps the App | serve through `app`; pass `app.MatchRoutes(...)` so real routes beat look-alike traps, duplicates fail at bootstrap, and watches follow the matched route ([example](/api/#installsentryrouter-service-environment-string-app)); traps and watches run before the router's middleware, so `IdentifyUser` sees headers and cookies but not values that middleware adds; traps are not router routes, so a trap path requested with a method the trap does not declare gets the router's 404 where a real route would answer 405: declare every method a real route at that path would plausibly accept |
-| Echo v5 (`echov5`) | `*echo.Context` | by trappsec (up to `SetMaxBodyBytes`, 1 MiB) | `middleware.CSRF`: `Skipper: app.IsTrap` | serve through `app` (`app.Start`, `echo.StartConfig{...}.Start(ctx, app)`, or `app` as the handler); requests rejected by earlier middleware are reported but not stripped; Echo before 5.2 has a route-protection bypass (GO-2026-6293) |
-| Echo v4 (`echo`, deprecated) | `echo.Context` | by trappsec (up to `SetMaxBodyBytes`, 1 MiB) | `middleware.CSRF`: `Skipper: app.IsTrap` | serve through `app` (`app.Start*`, `app.StartH2CServer`, or `app` as the handler); requests rejected by earlier middleware are reported but not stripped; Echo v4 gets upstream fixes only until 2026-12-31 |
+| Echo | `*echo.Context` | by trappsec (up to `SetMaxBodyBytes`, 1 MiB) | `middleware.CSRF`: `Skipper: app.IsTrap` | serve through `app` (`app.Start`, `echo.StartConfig{...}.Start(ctx, app)`, or `app` as the handler); requests rejected by earlier middleware are reported but not stripped; Echo v4 is not supported, and Echo before 5.2 has a route-protection bypass (GO-2026-6293) |
 
 In Go, every adapter's `App.IsTrap` takes that framework's request type, as in the table; `app.Sentry.IsTrap(req any)` accepts any of them. Every adapter has `InstallSentry(router, service, environment)` and `Use(sentry, router)` (to wire a Sentry you created with `trappsec.NewSentry`).
 

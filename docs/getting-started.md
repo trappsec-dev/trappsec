@@ -33,7 +33,7 @@ npm install trappsec
 <div class="lang-content" data-lang="go" markdown="1">
 
 ```bash
-# Install the integration for your framework (gin, nethttp, echov5, or handler for chi / gorilla/mux)
+# Install the integration for your framework (gin, nethttp, echo, or handler for chi / gorilla/mux)
 go get github.com/trappsec-dev/trappsec/packages/go/gin
 ```
 

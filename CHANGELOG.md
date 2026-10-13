@@ -4,10 +4,9 @@ All notable changes to trappsec are documented here. The format follows [Keep a 
 
 ## Unreleased
 
-### Added: Echo v5 (Go)
+### Changed: the Echo adapter targets Echo v5 (Go); Echo v4 support is dropped
 
-- **New `packages/go/echov5` adapter** for Echo v5 (`*echo.Context`, `slog` logger, `echo.StartConfig`). The package is still named `trappsececho` with the same API, so migrating from v4 means changing the import path. It requires Echo 5.2+, the first release without GO-2026-6293 (an encoded slash bypassing route-level middleware).
-- **Deprecated: the Echo v4 adapter** (`packages/go/echo`). Echo v4 gets upstream security and bug fixes only until 2026-12-31; the adapter keeps working but will be removed in a later release.
+- **`packages/go/echo` now requires Echo v5** (`github.com/labstack/echo/v5`, 5.2+) and no longer works with Echo v4, which gets upstream fixes only until 2026-12-31. Handlers and `IdentifyUser` callbacks take `*echo.Context` instead of `echo.Context`, `EchoLogger()` returns `*slog.Logger`, and `StartTLS` / `StartAutoTLS` / `StartServer` / `StartH2CServer` are gone with their Echo v5 counterparts: pass the App to `echo.StartConfig{...}.Start(ctx, app)` (or `StartTLS`) instead. The package name, import path and the rest of the API are unchanged. 5.2 is the first release without GO-2026-6293 (an encoded slash bypassing route-level middleware).
 
 ### Added: chi, gorilla/mux and any `http.Handler` (Go)
 

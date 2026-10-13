@@ -69,7 +69,7 @@ ts.identify_user((req) => {
 ```
 
 ```go
-// Go (Gin): req is *gin.Context; Echo: echo.Context; net/http: *http.Request
+// Go (Gin): req is *gin.Context; Echo: *echo.Context; net/http: *http.Request
 app.IdentifyUser(func(req any) *trappsec.AuthContext {
 	c := req.(*gin.Context)
 	claims, err := auth.VerifyToken(c.GetHeader("Authorization")) // the app's helper
@@ -108,7 +108,7 @@ app.Trap("/api/v2/workspaces/:workspaceId/<decoy>").
 
 - **Path syntax** is the framework's own: `{id}` (FastAPI/Starlette/Litestar), `<id>` (Flask), `<str:id>` (Django), `:id` (Express/Koa/Fastify/NestJS/Gin/Echo), `{id}` (Hapi and Go net/http). Use the full public path, including mount prefixes.
 - **Methods** default to `["GET", "POST"]`. Set them explicitly.
-- **Body** is a dict/object, a string, or a function of the request returning one of those (Python `lambda r: {...}`, Node `(req) => ({...})`, Go `func(any) any`; Echo also accepts `func(echo.Context) any`). String bodies are sent raw. Set `mime_type` / `MIMEType` for anything that isn't `application/json`.
+- **Body** is a dict/object, a string, or a function of the request returning one of those (Python `lambda r: {...}`, Node `(req) => ({...})`, Go `func(any) any`; Echo also accepts `func(*echo.Context) any`). String bodies are sent raw. Set `mime_type` / `MIMEType` for anything that isn't `application/json`.
 - **Failing bodies.** A function body that throws falls back to `{}`. Keep it simple and deterministic.
 - **Headers.** Responses cannot set custom headers (see backend-traps.md §3).
 

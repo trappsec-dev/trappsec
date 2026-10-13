@@ -59,14 +59,6 @@ updates:
       go-deps:
         patterns: ["*"]
   - package-ecosystem: gomod
-    directory: /packages/go/echov5
-    open-pull-requests-limit: 0
-    schedule:
-      interval: weekly
-    groups:
-      go-deps:
-        patterns: ["*"]
-  - package-ecosystem: gomod
     directory: /packages/go/handler
     open-pull-requests-limit: 0
     schedule:

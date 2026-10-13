@@ -2,15 +2,16 @@ package trappsececho
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/labstack/echo/v4"
-	"github.com/labstack/echo/v4/middleware"
+	"github.com/labstack/echo/v5"
+	"github.com/labstack/echo/v5/middleware"
 	core "github.com/trappsec-dev/trappsec/packages/go"
-	"golang.org/x/net/http2"
 	"io"
 	"mime/multipart"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/textproto"
@@ -39,7 +40,6 @@ func httpReq(req any) *http.Request { return requestOf(req) }
 
 func newEnv(t *testing.T, pre []route) *env {
 	e := echo.New()
-	e.HideBanner = true
 	for _, r := range pre {
 		e.Add(r.method, r.path, echo.WrapHandler(r.fn))
 	}
@@ -63,7 +63,6 @@ func TestLoggerAmbiguityResolved(t *testing.T) {
 
 func TestStandaloneUseWorks(t *testing.T) {
 	ec := echo.New()
-	ec.HideBanner = true
 	s := core.NewSentry("svc", "test")
 	s.Trap("/t").Methods("GET")
 	app := Use(s, ec)
@@ -74,15 +73,14 @@ func TestStandaloneUseWorks(t *testing.T) {
 
 func TestMiddlewareRunsBeforeWatchAndTrap(t *testing.T) {
 	ec := echo.New()
-	ec.HideBanner = true
 	app := InstallSentry(ec, "svc", "test")
 	logs := &syncBuf{}
 	app.Logger().SetOutput(logs)
 	app.Use(func(next echo.HandlerFunc) echo.HandlerFunc {
-		return func(c echo.Context) error { c.Set("u", "carol"); return next(c) }
+		return func(c *echo.Context) error { c.Set("u", "carol"); return next(c) }
 	})
 	app.IdentifyUser(func(req any) *core.AuthContext {
-		if c, ok := req.(echo.Context); ok {
+		if c, ok := req.(*echo.Context); ok {
 			if u, _ := c.Get("u").(string); u != "" {
 				return &core.AuthContext{User: u}
 			}
@@ -624,7 +622,7 @@ func TestCSRFSkipperKeepsTrapsWorking(t *testing.T) {
 			cfg.Skipper = app.IsTrap
 		}
 		e.Use(middleware.CSRFWithConfig(cfg))
-		e.POST("/real", func(c echo.Context) error { return c.String(200, "ok") })
+		e.POST("/real", func(c *echo.Context) error { return c.String(200, "ok") })
 		app.Sentry.Trap("/admin/backup").Methods("POST")
 
 		do := func(path string) int {
@@ -659,7 +657,7 @@ func TestUnreachableWatchIsLogged(t *testing.T) {
 	app := InstallSentry(e, "svc", "test")
 	logs := &syncBuf{}
 	app.Logger().SetOutput(logs)
-	e.Group("/api").POST("/users/:id", func(echo.Context) error { return nil })
+	e.Group("/api").POST("/users/:id", func(*echo.Context) error { return nil })
 	app.Sentry.Watch("/api/users/:id").Body("is_admin", core.NoDefault, "priv")
 	app.Sentry.Watch("/users/:id").Body("is_admin", core.NoDefault, "priv") // missing the group prefix
 	app.Bootstrap()
@@ -675,7 +673,7 @@ func TestWatchOnGroupRoute(t *testing.T) {
 	logs := &syncBuf{}
 	app.Logger().SetOutput(logs)
 	var bound map[string]any
-	e.Group("/api").POST("/users/:id", func(c echo.Context) error {
+	e.Group("/api").POST("/users/:id", func(c *echo.Context) error {
 		bound = nil
 		_ = c.Bind(&bound)
 		return c.NoContent(200)
@@ -695,9 +693,9 @@ func TestPanickingCallbacksNeverBreakRequests(t *testing.T) {
 	app.Logger().SetOutput(&syncBuf{})
 	app.IdentifyUser(func(any) *core.AuthContext { panic("identify") })
 	app.OverrideSourceIP(func(any) string { panic("ip") })
-	app.Sentry.Trap("/admin").Methods("GET").Respond(core.ResponseConfig{Status: 200, Body: func(echo.Context) any { panic("body") }})
+	app.Sentry.Trap("/admin").Methods("GET").Respond(core.ResponseConfig{Status: 200, Body: func(*echo.Context) any { panic("body") }})
 	var bound map[string]any
-	e.POST("/w", func(c echo.Context) error { bound = nil; _ = c.Bind(&bound); return c.NoContent(200) })
+	e.POST("/w", func(c *echo.Context) error { bound = nil; _ = c.Bind(&bound); return c.NoContent(200) })
 	app.Sentry.Watch("/w").Body("role", func(any) any { panic("default") }, "priv")
 
 	rec := httptest.NewRecorder()
@@ -720,7 +718,7 @@ func TestParameterisedWatchAndEventContext(t *testing.T) {
 	logs := &syncBuf{}
 	app.Logger().SetOutput(logs)
 	var seen string
-	e.GET("/users/:id", func(c echo.Context) error { seen = c.Request().URL.RawQuery; return nil })
+	e.GET("/users/:id", func(c *echo.Context) error { seen = c.Request().URL.RawQuery; return nil })
 	app.Sentry.Watch("/users/:id").Query("debug", core.NoDefault, "recon")
 	req := httptest.NewRequest("GET", "/users/7?debug=1&x=1", nil)
 	req.Header.Set("User-Agent", "probe/1.0")
@@ -741,7 +739,7 @@ func TestWatchesBeforeTrapsAndIndexBuiltOnce(t *testing.T) {
 	logs := &syncBuf{}
 	app.Logger().SetOutput(logs)
 	var seen string
-	e.GET("/users/:id", func(c echo.Context) error { seen = c.Request().URL.RawQuery; return nil })
+	e.GET("/users/:id", func(c *echo.Context) error { seen = c.Request().URL.RawQuery; return nil })
 	app.Sentry.Watch("/users/:id").Query("debug", core.NoDefault, "recon")
 	app.Sentry.Trap("/admin/backup").Methods("POST")
 	do := func(method, path string) int {
@@ -770,7 +768,7 @@ func TestAppIsTrapUsesTheMatchedRoute(t *testing.T) {
 	app := InstallSentry(e, "svc", "test")
 	app.Logger().SetOutput(io.Discard)
 	app.Trap("/users/:id").Methods("POST")
-	ctx := func(path, route string) echo.Context {
+	ctx := func(path, route string) *echo.Context {
 		c := e.NewContext(httptest.NewRequest("POST", path, nil), httptest.NewRecorder())
 		c.SetPath(route)
 		return c
@@ -796,7 +794,7 @@ func TestRejectedRequestsAreStillInspected(t *testing.T) {
 	logs := &syncBuf{}
 	app.Logger().SetOutput(logs)
 	app.IdentifyUser(func(req any) *core.AuthContext {
-		if c, ok := req.(echo.Context); ok {
+		if c, ok := req.(*echo.Context); ok {
 			if u, _ := c.Get("u").(string); u != "" {
 				return &core.AuthContext{User: u}
 			}
@@ -804,7 +802,7 @@ func TestRejectedRequestsAreStillInspected(t *testing.T) {
 		return nil
 	})
 	e.Use(func(next echo.HandlerFunc) echo.HandlerFunc {
-		return func(c echo.Context) error {
+		return func(c *echo.Context) error {
 			c.Set("u", "mallory")
 			if c.Request().Header.Get("X-Key") == "" {
 				return echo.ErrUnauthorized
@@ -812,7 +810,7 @@ func TestRejectedRequestsAreStillInspected(t *testing.T) {
 			return next(c)
 		}
 	})
-	e.GET("/search", func(c echo.Context) error { return c.String(200, "ok") })
+	e.GET("/search", func(c *echo.Context) error { return c.String(200, "ok") })
 	app.Watch("/search").Query("debug", core.NoDefault, "recon")
 
 	if rec := do(t, app, "GET", "/search?debug=1", "", nil); rec.Code != 401 {
@@ -832,30 +830,30 @@ func TestRejectedRequestsAreStillInspected(t *testing.T) {
 	}
 }
 
-// Echo's promoted StartH2CServer would serve the bare Echo instance; the
-// App's wrapper bootstraps first so traps are live.
-func TestStartH2CServerBootstraps(t *testing.T) {
+// echo.StartConfig serves whatever handler it is given; given the App, the
+// first request bootstraps it, so traps are live.
+func TestStartConfigServesApp(t *testing.T) {
 	e := echo.New()
-	e.HideBanner, e.HidePort = true, true
 	app := InstallSentry(e, "svc", "test")
+	app.Logger().SetOutput(io.Discard)
 	app.Trap("/t").Methods("GET")
+	ctx, cancel := context.WithCancel(context.Background())
+	addr := make(chan string, 1)
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		_ = app.StartH2CServer("127.0.0.1:0", &http2.Server{})
+		sc := echo.StartConfig{Address: "127.0.0.1:0", HideBanner: true, HidePort: true,
+			ListenerAddrFunc: func(a net.Addr) { addr <- a.String() }}
+		_ = sc.Start(ctx, app)
 	}()
-	deadline := time.Now().Add(2 * time.Second)
-	for !app.integration.once.Done() && time.Now().Before(deadline) {
-		time.Sleep(5 * time.Millisecond)
+	resp, err := http.Get("http://" + <-addr + "/t")
+	if err != nil {
+		t.Fatal(err)
 	}
-	if !app.integration.once.Done() {
-		t.Fatal("StartH2CServer did not bootstrap")
-	}
-	_ = e.Close()
+	resp.Body.Close()
+	cancel()
 	<-done
-	rec := httptest.NewRecorder()
-	e.ServeHTTP(rec, httptest.NewRequest("GET", "/t", nil))
-	if rec.Code == http.StatusNotFound {
-		t.Fatal("trap route not registered")
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("trap answered %d, want the default 401", resp.StatusCode)
 	}
 }

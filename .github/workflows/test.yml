@@ -86,7 +86,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        module: [packages/go, packages/go/nethttp, packages/go/gin, packages/go/echo, packages/go/echov5, packages/go/handler, packages/go/handler/routertest]
+        module: [packages/go, packages/go/nethttp, packages/go/gin, packages/go/echo, packages/go/handler, packages/go/handler/routertest]
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-go@v5
