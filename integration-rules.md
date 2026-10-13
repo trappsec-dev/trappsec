@@ -215,6 +215,14 @@ observable behavioral differences that allow attackers to identify traps.
   patterns, called from `*App.ListenAndServe*()` / `Serve*()` wrappers returned by
   `InstallSentry`; `App.ServeHTTP` is shadowed to inject watch inspection before dispatch
 
+**Documented exception:** Go `handler` (chi, gorilla/mux, any `http.Handler`) cannot add
+routes to a router it knows only as an `http.Handler`, so it intercepts traps in
+`App.ServeHTTP` before the router. R2's explicit priority comes from `MatchRoutes`
+(a real route at least as specific as a trap wins; an exact duplicate panics). The
+observable difference: a trap path requested with a method the trap does not declare gets
+the router's answer for an unknown path (usually 404), where a real route would answer
+405. Prefer a framework-specific adapter where one exists.
+
 ---
 
 ## R15: Bootstrap is public, idempotent and lazy

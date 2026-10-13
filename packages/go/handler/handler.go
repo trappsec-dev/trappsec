@@ -27,6 +27,11 @@
 // Because the App runs before the router, IdentifyUser sees the request as it
 // arrives (headers, cookies), not values that the router's middleware adds to
 // its context.
+//
+// Traps are not routes on the router, so a trap path requested with a method
+// the trap does not declare gets the router's answer for an unknown path
+// (usually 404) where a real route would answer 405. Declare every method a
+// real route at that path would plausibly accept.
 package trappsechandler
 
 import (
@@ -195,11 +200,20 @@ func (a *App) ServeTLS(l net.Listener, certFile, keyFile string) error {
 	return http.ServeTLS(l, a, certFile, keyFile)
 }
 
+// handlerIntegration indexes traps and watches so that a request costs one
+// map lookup: literal paths are map keys, and only the patterns with
+// parameter segments are matched one by one, as in Sentry.IsTrap.
 type handlerIntegration struct {
 	ts      *core.Sentry
 	match   RouteMatcher
 	traps   []trapRoute
 	watches []watchRoute
+
+	trapExact     map[string]map[string]int // literal path -> method -> index in traps
+	trapPatterns  []int                     // traps with parameter segments
+	watchByShape  map[string]int            // route shape -> index in watches (with a RouteMatcher)
+	watchPatterns []int                     // watches with parameter segments (without one)
+
 	maxBody adapter.MaxBody
 	once    adapter.Once
 }
@@ -235,6 +249,28 @@ func (in *handlerIntegration) install() {
 	for _, w := range in.ts.Watches() {
 		in.watches = append(in.watches, watchRoute{pat: parsePattern(w.Path), cfg: w})
 	}
+
+	in.trapExact = map[string]map[string]int{}
+	for i, t := range in.traps {
+		if !t.pat.literal() {
+			in.trapPatterns = append(in.trapPatterns, i)
+			continue
+		}
+		key := t.pat.shape()
+		if in.trapExact[key] == nil {
+			in.trapExact[key] = map[string]int{}
+		}
+		for m := range t.methods {
+			in.trapExact[key][m] = i
+		}
+	}
+	in.watchByShape = map[string]int{}
+	for i, w := range in.watches {
+		in.watchByShape[w.pat.shape()] = i
+		if !w.pat.literal() {
+			in.watchPatterns = append(in.watchPatterns, i)
+		}
+	}
 	in.warnUnreachableWatches()
 }
 
@@ -264,10 +300,15 @@ func (in *handlerIntegration) warnUnreachableWatches() {
 func (in *handlerIntegration) trapFor(r *http.Request) (core.TrapConfig, bool) {
 	method := strings.ToUpper(r.Method)
 	segs := splitPath(r.URL.Path)
-	best := -1
-	for i, t := range in.traps {
-		if t.methods[method] && t.pat.matches(segs) && (best < 0 || t.pat.compare(in.traps[best].pat) > 0) {
-			best = i
+	// A literal trap is more specific than any pattern matching the same path.
+	best, ok := in.trapExact[pathKey(segs)][method]
+	if !ok {
+		best = -1
+		for _, i := range in.trapPatterns {
+			t := in.traps[i]
+			if t.methods[method] && t.pat.matches(segs) && (best < 0 || t.pat.compare(in.traps[best].pat) > 0) {
+				best = i
+			}
 		}
 	}
 	if best < 0 {
@@ -290,19 +331,21 @@ func (in *handlerIntegration) watchFor(r *http.Request) (core.WatchConfig, bool)
 		if got == "" {
 			return core.WatchConfig{}, false
 		}
-		shape := parsePattern(got).shape()
-		for _, w := range in.watches {
-			if w.pat.shape() == shape {
-				return w.cfg, true
-			}
+		i, ok := in.watchByShape[parsePattern(got).shape()]
+		if !ok {
+			return core.WatchConfig{}, false
 		}
-		return core.WatchConfig{}, false
+		return in.watches[i].cfg, true
 	}
 	segs := splitPath(r.URL.Path)
-	best := -1
-	for i, w := range in.watches {
-		if w.pat.matches(segs) && (best < 0 || w.pat.compare(in.watches[best].pat) > 0) {
-			best = i
+	best, ok := in.watchByShape[pathKey(segs)]
+	if !ok || !in.watches[best].pat.literal() {
+		best = -1
+		for _, i := range in.watchPatterns {
+			w := in.watches[i]
+			if w.pat.matches(segs) && (best < 0 || w.pat.compare(in.watches[best].pat) > 0) {
+				best = i
+			}
 		}
 	}
 	if best < 0 {

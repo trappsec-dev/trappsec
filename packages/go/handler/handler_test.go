@@ -320,3 +320,15 @@ func TestIsTrapConformance(t *testing.T) {
 		}
 	}
 }
+
+func TestLiteralTrapBeatsPattern(t *testing.T) {
+	app, _ := newApp(t, newRouter(), false)
+	app.Trap("/a/{id}").Methods("GET").IfUnauthenticated(core.ResponseConfig{Status: 403})
+	app.Trap("/a/b").Methods("GET").IfUnauthenticated(core.ResponseConfig{Status: 418})
+	if got := do(app, "GET", "/a/b", "").Code; got != 418 {
+		t.Fatalf("literal trap: %d", got)
+	}
+	if got := do(app, "GET", "/a/c", "").Code; got != 403 {
+		t.Fatalf("pattern trap: %d", got)
+	}
+}

@@ -57,6 +57,25 @@ func splitPath(p string) []string {
 	return strings.Split(p, "/")
 }
 
+// literal reports whether the pattern has no parameter segments.
+func (p pattern) literal() bool {
+	for _, s := range p.segs {
+		if s.kind != segLit {
+			return false
+		}
+	}
+	return true
+}
+
+// pathKey is the shape of a literal pattern for the same path, so a request
+// path can be looked up among literal traps and watches.
+func pathKey(segs []string) string {
+	if len(segs) == 0 {
+		return "/"
+	}
+	return "/" + strings.Join(segs, "/")
+}
+
 // matches reports whether the request path segments fit the pattern.
 func (p pattern) matches(path []string) bool {
 	for i, s := range p.segs {
