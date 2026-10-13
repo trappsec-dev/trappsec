@@ -58,6 +58,22 @@ updates:
     groups:
       go-deps:
         patterns: ["*"]
+  - package-ecosystem: gomod
+    directory: /packages/go/handler
+    open-pull-requests-limit: 0
+    schedule:
+      interval: weekly
+    groups:
+      go-deps:
+        patterns: ["*"]
+  - package-ecosystem: gomod
+    directory: /packages/go/handler/routertest
+    open-pull-requests-limit: 0
+    schedule:
+      interval: weekly
+    groups:
+      go-deps:
+        patterns: ["*"]
   - package-ecosystem: github-actions
     directory: /
     open-pull-requests-limit: 0

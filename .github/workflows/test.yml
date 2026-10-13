@@ -86,7 +86,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        module: [packages/go, packages/go/nethttp, packages/go/gin, packages/go/echo]
+        module: [packages/go, packages/go/nethttp, packages/go/gin, packages/go/echo, packages/go/handler, packages/go/handler/routertest]
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-go@v5
@@ -95,6 +95,7 @@ jobs:
           cache-dependency-path: |
             packages/go/go.sum
             packages/go/*/go.sum
+            packages/go/*/*/go.sum
       - name: Vet
         working-directory: ${{ matrix.module }}
         run: go vet ./...

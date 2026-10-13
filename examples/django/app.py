@@ -96,9 +96,20 @@ def serve_index(_request):
         return HttpResponse(f.read(), content_type="text/html")
 
 
+def frontend_file(base, rel):
+    """The file named rel inside base, or None. Resolving the path and checking
+    that it stays inside base stops "..", encoded slashes and absolute paths
+    from reading files elsewhere on the machine."""
+    base = os.path.realpath(base)
+    full = os.path.realpath(os.path.join(base, rel.lstrip("/")))
+    if os.path.commonpath([base, full]) != base or not os.path.isfile(full):
+        return None
+    return full
+
+
 def serve_static(_request, file_path):
-    path = os.path.join(FRONTEND_DIR, file_path)
-    if not os.path.isfile(path):
+    path = frontend_file(FRONTEND_DIR, file_path)
+    if path is None:
         return HttpResponse("not found", status=404)
     ctype = "application/octet-stream"
     if file_path.endswith(".css"):

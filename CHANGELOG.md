@@ -4,6 +4,14 @@ All notable changes to trappsec are documented here. The format follows [Keep a 
 
 ## Unreleased
 
+### Changed: the Echo adapter targets Echo v5 (Go); Echo v4 support is dropped
+
+- **`packages/go/echo` now requires Echo v5** (`github.com/labstack/echo/v5`, 5.2+) and no longer works with Echo v4, which gets upstream fixes only until 2026-12-31. Handlers and `IdentifyUser` callbacks take `*echo.Context` instead of `echo.Context`, `EchoLogger()` returns `*slog.Logger`, and `StartTLS` / `StartAutoTLS` / `StartServer` / `StartH2CServer` are gone with their Echo v5 counterparts: pass the App to `echo.StartConfig{...}.Start(ctx, app)` (or `StartTLS`) instead. The package name, import path and the rest of the API are unchanged. 5.2 is the first release without GO-2026-6293 (an encoded slash bypassing route-level middleware).
+
+### Added: chi, gorilla/mux and any `http.Handler` (Go)
+
+- **New `packages/go/handler` adapter** wraps any `http.Handler` router. Traps are answered before the router and watched requests are inspected before it sees them. `app.MatchRoutes(fn)` lets it ask the router which route a request matches: real routes at least as specific as a trap win over it, traps that duplicate a route panic at bootstrap, and watches follow the matched route, including routes in chi `Mount`s and gorilla/mux subrouters. The module has no router dependency; `handler/routertest` tests it against chi and gorilla/mux, and the new `examples/go-chi` app (chi sub-routers via `Route` and `Mount`) runs the shared e2e suite.
+
 ### Changed: one API across Python, Node and Go
 
 The SDKs now share names, units and option shapes. Every old form below keeps working; Node and Go log nothing for them except where noted.
@@ -17,6 +25,8 @@ The SDKs now share names, units and option shapes. Every old form below keeps wo
 - **Docs:** a per-framework table (request object, body parsing, CSRF, known limits) in Supported Frameworks; every example app flushes events with `close()` on shutdown.
 
 ### Fixed: full SDK review
+
+- **Examples could read any file on the host.** The net/http, Litestar and Django examples built the lure-frontend file path from the request URL, so `/..%2f..%2fetc%2fpasswd` (and, on Litestar and Django, `/%2fetc%2fpasswd`) returned files outside the frontend directory. The Go examples now serve through `os.DirFS`, and the Python examples resolve the path and refuse anything outside the directory; Gin, Echo and Sanic had the same pattern and get the same fix. The Echo example's `/` answered 500 after the move to Echo v5 and serves the page again, and Litestar serves the frontend's CSS and JS, which it never found before.
 
 - **Django under ASGI returned 500 on every request** once Sentry was installed (a synchronous view hook in an async chain). Django traps with path parameters, Flask traps with `<id>` / `<path:p>`, and Tornado traps with `:id` / `{id}` / `<id>` / catch-alls now answer with the decoy instead of 500 or 404.
 - **A deeply nested honey value bypassed detection** (Python at ~1000 levels, Node at ~5000): the sanitizer overflowed the stack, so no event was sent and the field reached the app. Values nested more than 32 levels deep now always alert and are recorded with `"<nested>"` in place of the too-deep part, identically in all three SDKs.

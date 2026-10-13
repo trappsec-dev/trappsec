@@ -4,19 +4,21 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"io/fs"
 	"log"
 	"math/rand"
 	"net/http"
 	"os"
 	"os/signal"
+	"path"
 	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
 
-	"github.com/labstack/echo/v4"
+	echootel "github.com/labstack/echo-otel/v5"
+	"github.com/labstack/echo/v5"
 	trappsec "github.com/trappsec-dev/trappsec/packages/go/echo"
-	"go.opentelemetry.io/contrib/instrumentation/github.com/labstack/echo/otelecho"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/exporters/stdout/stdouttrace"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
@@ -36,8 +38,7 @@ func main() {
 	// Use the socket address for c.RealIP(); echo's default trusts X-Forwarded-For.
 	// Behind a proxy you control, use echo.ExtractIPFromXFFHeader(echo.TrustIPRange(...)).
 	e.IPExtractor = echo.ExtractIPDirect()
-	e.HideBanner = true
-	e.HTTPErrorHandler = func(err error, c echo.Context) {
+	e.HTTPErrorHandler = func(c *echo.Context, err error) {
 		_ = c.String(http.StatusInternalServerError, err.Error())
 	}
 
@@ -46,12 +47,12 @@ func main() {
 
 	if *otelEnabled {
 		setupOpenTelemetry()
-		app.Use(otelecho.Middleware("GoEchoApp"))
+		app.Use(echootel.NewMiddleware("GoEchoApp"))
 		app.AddOTEL()
 	}
 
 	app.IdentifyUser(func(req any) *trappsec.AuthContext {
-		c, ok := req.(echo.Context)
+		c, ok := req.(*echo.Context)
 		if !ok {
 			return nil
 		}
@@ -67,7 +68,7 @@ func main() {
 	})
 
 	app.OverrideSourceIP(func(req any) string {
-		c, ok := req.(echo.Context)
+		c, ok := req.(*echo.Context)
 		if !ok {
 			return "0.0.0.0"
 		}
@@ -77,21 +78,21 @@ func main() {
 		return c.RealIP()
 	})
 
-	app.POST("/auth/register", func(c echo.Context) error {
+	app.POST("/auth/register", func(c *echo.Context) error {
 		payload := new(registerPayload)
 		_ = c.Bind(payload)
 		return c.JSON(http.StatusOK, map[string]any{"status": "registered", "email": payload.Email})
 	})
 
-	app.GET("/api/v2/profile", func(c echo.Context) error {
+	app.GET("/api/v2/profile", func(c *echo.Context) error {
 		return c.JSON(http.StatusOK, map[string]any{"name": c.Request().Header.Get("x-user-id"), "is_admin": false})
 	})
 
-	app.POST("/api/v2/profile", func(c echo.Context) error {
+	app.POST("/api/v2/profile", func(c *echo.Context) error {
 		return c.JSON(http.StatusOK, map[string]any{"name": c.Request().Header.Get("x-user-id"), "status": "updated"})
 	})
 
-	app.GET("/api/v2/orders", func(c echo.Context) error {
+	app.GET("/api/v2/orders", func(c *echo.Context) error {
 		return c.JSON(http.StatusOK, map[string]any{
 			"orders": []map[string]any{
 				{"id": "ord-123", "item": "Laptop", "amount": 1200},
@@ -100,7 +101,7 @@ func main() {
 		})
 	})
 
-	app.GET("/api/v2/orders/:id", func(c echo.Context) error {
+	app.GET("/api/v2/orders/:id", func(c *echo.Context) error {
 		return c.JSON(http.StatusOK, map[string]any{
 			"id":     c.Param("id"),
 			"item":   "Laptop",
@@ -109,7 +110,7 @@ func main() {
 		})
 	})
 
-	app.GET("/api/v2/echo/query", func(c echo.Context) error {
+	app.GET("/api/v2/echo/query", func(c *echo.Context) error {
 		result := map[string]string{}
 		for k, v := range c.QueryParams() {
 			if len(v) > 0 {
@@ -119,7 +120,7 @@ func main() {
 		return c.JSON(http.StatusOK, result)
 	})
 
-	app.POST("/api/v2/echo/body", func(c echo.Context) error {
+	app.POST("/api/v2/echo/body", func(c *echo.Context) error {
 		var body map[string]any
 		if err := c.Bind(&body); err != nil || body == nil {
 			return c.JSON(http.StatusOK, map[string]any{})
@@ -127,7 +128,7 @@ func main() {
 		return c.JSON(http.StatusOK, body)
 	})
 
-	app.POST("/api/v2/echo/form", func(c echo.Context) error {
+	app.POST("/api/v2/echo/form", func(c *echo.Context) error {
 		result := map[string]string{}
 		if err := c.Request().ParseForm(); err == nil {
 			for k, v := range c.Request().PostForm {
@@ -139,7 +140,7 @@ func main() {
 		return c.JSON(http.StatusOK, result)
 	})
 
-	app.POST("/api/v2/echo/multipart", func(c echo.Context) error {
+	app.POST("/api/v2/echo/multipart", func(c *echo.Context) error {
 		result := map[string]string{}
 		if err := c.Request().ParseMultipartForm(32 << 20); err == nil {
 			if c.Request().MultipartForm != nil {
@@ -153,22 +154,18 @@ func main() {
 		return c.JSON(http.StatusOK, result)
 	})
 
-	frontendDir := filepath.Join("..", "lure-frontend")
-	app.GET("/", func(c echo.Context) error {
-		return c.File(filepath.Join(frontendDir, "index.html"))
+	frontend := os.DirFS(filepath.Join("..", "lure-frontend"))
+	app.GET("/", func(c *echo.Context) error {
+		serveFrontend(c.Response(), c.Request(), frontend, "/")
+		return nil
 	})
-	app.GET("/*", func(c echo.Context) error {
-		path := c.Param("*")
-		fullPath := "/" + path
+	app.GET("/*", func(c *echo.Context) error {
+		fullPath := "/" + c.Param("*")
 		if strings.HasPrefix(fullPath, "/api/") || strings.HasPrefix(fullPath, "/auth/") || strings.HasPrefix(fullPath, "/deployment/") {
 			return c.NoContent(http.StatusNotFound)
 		}
-
-		target := filepath.Join(frontendDir, filepath.Clean(path))
-		if _, err := os.Stat(target); err != nil {
-			return c.NoContent(http.StatusNotFound)
-		}
-		return c.File(target)
+		serveFrontend(c.Response(), c.Request(), frontend, fullPath)
+		return nil
 	})
 
 	app.Trap("/deployment/config").Methods("GET").Intent("Reconnaissance").Respond(trappsec.ResponseConfig{
@@ -209,12 +206,15 @@ func main() {
 		app.AddWebhook(u, &trappsec.WebhookOptions{Secret: os.Getenv("TRAPPSEC_WEBHOOK_SECRET")})
 	}
 
-	flushOnShutdown(app)
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
 	addr := "127.0.0.1:" + *port
 	log.Printf("Starting server on http://%s", addr)
-	if err := app.Start(addr); err != nil && err != http.ErrServerClosed {
+	sc := echo.StartConfig{Address: addr, HideBanner: true}
+	if err := sc.Start(ctx, app); err != nil && err != http.ErrServerClosed {
 		log.Fatal(err)
 	}
+	flush(app)
 }
 
 func setupOpenTelemetry() {
@@ -237,16 +237,25 @@ func listenPort() string {
 	return "8000"
 }
 
-// flushOnShutdown flushes queued trappsec deliveries (webhook, Slack) when the
-// process is asked to stop, so events still in flight are not lost.
-func flushOnShutdown(app *trappsec.App) {
-	sig := make(chan os.Signal, 1)
-	signal.Notify(sig, os.Interrupt, syscall.SIGTERM)
-	go func() {
-		<-sig
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		_ = app.Close(ctx)
-		os.Exit(0)
-	}()
+// flush flushes queued trappsec deliveries (webhook, Slack) after the server
+// stops, so events still in flight are not lost.
+func flush(app *trappsec.App) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	_ = app.Close(ctx)
+}
+
+// serveFrontend serves the lure frontend file named by urlPath, or answers
+// 404. os.DirFS refuses names that leave the directory ("..", absolute
+// paths), so a crafted path cannot read files elsewhere on the machine.
+func serveFrontend(w http.ResponseWriter, r *http.Request, frontend fs.FS, urlPath string) {
+	name := strings.TrimPrefix(path.Clean("/"+urlPath), "/")
+	if name == "" {
+		name = "index.html"
+	}
+	if st, err := fs.Stat(frontend, name); err != nil || st.IsDir() {
+		w.WriteHeader(http.StatusNotFound)
+		return
+	}
+	http.ServeFileFS(w, r, frontend, name)
 }

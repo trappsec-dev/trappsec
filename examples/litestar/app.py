@@ -95,11 +95,22 @@ async def serve_index() -> Response:
         return Response(content=f.read(), media_type="text/html")
 
 
+def frontend_file(base, rel):
+    """The file named rel inside base, or None. Resolving the path and checking
+    that it stays inside base stops "..", encoded slashes and absolute paths
+    from reading files elsewhere on the machine."""
+    base = os.path.realpath(base)
+    full = os.path.realpath(os.path.join(base, rel.lstrip("/")))
+    if os.path.commonpath([base, full]) != base or not os.path.isfile(full):
+        return None
+    return full
+
+
 @get("/{path:path}")
 async def serve_static(path: str) -> Response:
     frontend_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'lure-frontend')
-    file_path = os.path.join(frontend_dir, path)
-    if not os.path.isfile(file_path):
+    file_path = frontend_file(frontend_dir, path)
+    if file_path is None:
         return Response(content=b"not found", status_code=404, media_type="text/plain")
     with open(file_path, "rb") as f:
         data = f.read()
