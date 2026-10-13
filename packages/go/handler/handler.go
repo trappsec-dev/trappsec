@@ -17,7 +17,9 @@
 // serving the router directly bypasses trappsec.
 //
 // Traps and watches are matched against the request path, with :id, {id},
-// <id> and *rest segments matching any value. A router that can report the
+// <id> and *rest segments matching any value. Without a RouteMatcher a
+// trailing slash is ignored, as in Sentry.IsTrap; with one, a trap does not
+// answer a path with a trailing slash, as chi and gorilla/mux do not. A router that can report the
 // route a request matches should be given to MatchRoutes: then a real route
 // that is at least as specific as a trap (POST /users/me next to a trap POST
 // /users/{id}) wins over it, a trap that duplicates a real route fails loudly
@@ -298,6 +300,12 @@ func (in *handlerIntegration) warnUnreachableWatches() {
 // trapFor returns the most specific trap matching r, unless the router serves
 // r from a real route at least as specific as that trap.
 func (in *handlerIntegration) trapFor(r *http.Request) (core.TrapConfig, bool) {
+	// Routers that report their routes (chi, gorilla/mux by default) treat a
+	// trailing slash as a different path and answer it with 404, so a trap must
+	// not answer it either: that difference would give the trap away.
+	if in.match != nil && len(r.URL.Path) > 1 && strings.HasSuffix(r.URL.Path, "/") {
+		return core.TrapConfig{}, false
+	}
 	method := strings.ToUpper(r.Method)
 	segs := splitPath(r.URL.Path)
 	// A literal trap is more specific than any pattern matching the same path.

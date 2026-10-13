@@ -62,7 +62,7 @@ app.MatchRoutes(func(req *http.Request) string {
 })
 ```
 
-Without `MatchRoutes`, traps and watches match the request path alone, like `Sentry.IsTrap`.
+Without `MatchRoutes`, traps and watches match the request path alone, like `Sentry.IsTrap`. With it, a trap does not answer its path with a trailing slash, since chi and gorilla/mux answer those with 404. See `examples/go-chi` for a complete app.
 
 Every adapter also has `Use(s *trappsec.Sentry, router) *App` to wire a Sentry you created with `NewSentry` from the core package. Each adapter package re-exports the core types and the `NoDefault`, `Default`, `Intent` and `Metadata` helpers, so one import is enough.
 

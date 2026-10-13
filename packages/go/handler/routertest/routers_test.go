@@ -152,3 +152,25 @@ func TestDuplicateTrapPanics(t *testing.T) {
 		})
 	}
 }
+
+// A trailing slash is a different path to chi and gorilla/mux (404), so a trap
+// must not answer it either.
+func TestTrailingSlashFallsThroughToRouter(t *testing.T) {
+	for name, build := range map[string]func(*served) *trappsechandler.App{"chi": chiApp, "gorilla": gorillaApp} {
+		t.Run(name, func(t *testing.T) {
+			app := build(&served{})
+			app.Logger().SetOutput(io.Discard)
+			app.Trap("/deployment/config").Methods("GET")
+			for path, want := range map[string]bool{"/deployment/config": true, "/deployment/config/": false} {
+				if got := app.IsTrap(httptest.NewRequest("GET", path, nil)); got != want {
+					t.Errorf("IsTrap(%s) = %v, want %v", path, got, want)
+				}
+			}
+			rec := httptest.NewRecorder()
+			app.ServeHTTP(rec, httptest.NewRequest("GET", "/deployment/config/", nil))
+			if rec.Code != http.StatusNotFound {
+				t.Fatalf("GET /deployment/config/ = %d, want the router's 404", rec.Code)
+			}
+		})
+	}
+}

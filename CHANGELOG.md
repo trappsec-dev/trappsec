@@ -10,7 +10,7 @@ All notable changes to trappsec are documented here. The format follows [Keep a 
 
 ### Added: chi, gorilla/mux and any `http.Handler` (Go)
 
-- **New `packages/go/handler` adapter** wraps any `http.Handler` router. Traps are answered before the router and watched requests are inspected before it sees them. `app.MatchRoutes(fn)` lets it ask the router which route a request matches: real routes at least as specific as a trap win over it, traps that duplicate a route panic at bootstrap, and watches follow the matched route, including routes in chi `Mount`s and gorilla/mux subrouters. The module has no router dependency; `handler/routertest` tests it against chi and gorilla/mux.
+- **New `packages/go/handler` adapter** wraps any `http.Handler` router. Traps are answered before the router and watched requests are inspected before it sees them. `app.MatchRoutes(fn)` lets it ask the router which route a request matches: real routes at least as specific as a trap win over it, traps that duplicate a route panic at bootstrap, and watches follow the matched route, including routes in chi `Mount`s and gorilla/mux subrouters. The module has no router dependency; `handler/routertest` tests it against chi and gorilla/mux, and the new `examples/go-chi` app (chi sub-routers via `Route` and `Mount`) runs the shared e2e suite.
 
 ### Changed: one API across Python, Node and Go
 

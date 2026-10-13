@@ -52,6 +52,7 @@ def _default_cases() -> List[Case]:
         Case("py-sanic", ex / "sanic", py("sanic")),
         Case("py-starlette", ex / "starlette", py("starlette")),
         Case("py-tornado", ex / "tornado", py("tornado")),
+        Case("go-chi", ex / "go-chi", go("go-chi")),
         Case("go-echo", ex / "go-echo", go("go-echo")),
         Case("go-gin", ex / "go-gin", go("go-gin")),
         Case("go-nethttp", ex / "go-nethttp", go("go-nethttp")),
