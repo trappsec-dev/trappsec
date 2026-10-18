@@ -92,7 +92,7 @@ Minimum versions are the oldest releases the integration tests pass on. CI check
 
 ## Framework differences
 
-The API is the same in every framework; these are the places where the framework shows through. "Request object" is what trappsec passes to `identify_user`, `override_source_ip`, callable defaults and dynamic bodies, and what you pass to `trigger` and `is_trap`.
+The API is the same in every framework; these are the places where the framework shows through. "Request object" is what trappsec passes to `identify_user`, `override_source_ip`, callable defaults, dynamic bodies and `respond_with` hooks, and what you pass to `trigger` and `is_trap`.
 
 | Framework | Request object | Body parsing for `body` watches | CSRF middleware and traps | Known limits |
 |---|---|---|---|---|

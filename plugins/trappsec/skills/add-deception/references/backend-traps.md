@@ -87,7 +87,7 @@ A honey field nobody sees rarely gets tried. Return the field in a real GET resp
 
 ## 3. Responses that blend in
 
-**Capture, don't guess.** Call real endpoints and record the status, body and content type for each case: no credentials, valid credentials without permission, unknown resource, wrong method, invalid body. Copy those shapes.
+**Capture, don't guess.** Call real endpoints and record the status, body, content type and headers for each case: no credentials, valid credentials without permission, unknown resource, wrong method, invalid body. Copy those shapes, with bodies as strings so the bytes match.
 
 **Anonymous.** Set `default_responses["unauthenticated"]` to the app's real anonymous response, byte for byte. Override it per trap only where a real sibling behaves differently.
 
@@ -101,7 +101,7 @@ A honey field nobody sees rarely gets tried. Return the field in a real GET resp
 | The app's real 404 shape | Resource-by-ID decoys, where the real API hides existence with 404 | Matches the app's own existence-hiding behavior |
 | The app's retired-version response | Version decoys, if the app really announces retirement that way | Matches history, but ends exploration. Prefer a 403 or success if you want engagement. |
 
-**Every caller gets the same status.** A trap's status depends on whether the caller is authenticated, not on who they are. Your most privileged users will be denied too, even where real routes let them through. So pick cover stories in which every role is plausibly denied: a flag that is off, a plan that doesn't include the feature, a function that moved to a hosted portal. Dynamic bodies can vary the body per caller, but not the status.
+**Status per caller.** A static trap's status depends only on whether the caller is authenticated. Real siblings differ: 404 for an unknown or foreign parent ID, 201 for the owner of their own project (the most privileged role a self-signup attacker holds), 422 or 400 for a malformed body. With `respond_with` (releases after 0.2.0) a trap can mirror those checks from data already on the request (path parameters, session or token claims), so compare a trap with its sibling as each role you can sign up as. On 0.2.0, or where the check needs data the request doesn't carry, pick cover stories in which every role is plausibly denied: a flag that is off, a plan that doesn't include the feature, a function that moved to a hosted portal.
 
 **Synthetic data must look like the app's real data:**
 - same ID format;
@@ -113,10 +113,9 @@ Never include real data. Convincing fake data can trigger bug bounty reports, so
 
 **Content type and headers.**
 - Set `mime_type` to what real endpoints send (e.g. `application/problem+json`).
-- trappsec responses cannot set custom headers:
-  - Headers added by global middleware (CORS, security headers, request IDs) apply to traps automatically.
-  - Headers set inside individual handlers (ETag, Cache-Control, rate-limit counters, Location) won't appear.
-- Prefer decoys whose real siblings don't depend on per-handler headers. Run the parity script, and list the remaining differences as residual risks.
+- Headers added by global middleware (CORS, security headers, request IDs) apply to traps automatically.
+- Headers a framework or handler adds per route don't, so set them with `headers` (releases after 0.2.0): FastAPI's `HTTPBearer` / `OAuth2PasswordBearer` send `WWW-Authenticate: Bearer` on every 401; Django REST framework sends `Allow`, `Vary: Accept` and `WWW-Authenticate` on every APIView response. Values that change per request (ETag, rate-limit counters) can come from `respond_with`. On 0.2.0, a middleware gated on `is_trap(request)` can add them.
+- Run the parity script, and list the remaining differences as residual risks.
 - For the same reason, a trap cannot mimic an endpoint that redirects anonymous requests. Put decoys among JSON endpoints that answer 401.
 
 **Timing.** Keep dynamic bodies fast, and never sleep in them: sleeping blocks workers. Denials are fast in real apps too, which is another reason the 403 makes a good default.

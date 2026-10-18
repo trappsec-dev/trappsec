@@ -144,6 +144,7 @@ trap.respond(
     body: dict | str | Callable,
     mime_type: str = None,
     template: str = None,
+    headers: dict[str, str] = None,
 )
 ```
 
@@ -156,6 +157,7 @@ trap.respond({
     body: object | string | Function,
     mime_type: string,
     template: string,
+    headers: { [name: string]: string },
 })
 ```
 
@@ -166,6 +168,7 @@ trap.respond({
 trap.Respond(trappsec.ResponseConfig{
     Status: int, Body: any,
     MIMEType: string, Template: string,
+    Headers: map[string]string,
 })
 ```
 
@@ -206,9 +209,10 @@ trap.Respond(trappsec.ResponseConfig{Template: "deprecated_api"})
 </div>
 
 *   **status**: HTTP status code.
-*   **body**: JSON object, string, or a function returning one of those.
+*   **body**: JSON object, string, or a function returning one of those. If the function fails, the trap sends the [default response](#default-responses) for the auth state instead (never `{}`).
 *   **mime_type**: Content-Type header (defaults to "application/json"). You must explicitly set this to "text/plain" (or others) if returning a non-JSON body.
-*   **template**: Name of a registered response template.
+*   **template**: Name of a registered response template. It replaces the whole response and cannot be combined with the other arguments (Go: the other fields are ignored).
+*   **headers**: Extra response headers, such as the `WWW-Authenticate: Bearer` FastAPI sends on every 401 or the `Allow` and `Vary: Accept` Django REST framework sends on every response. Names and values must be strings without CR or LF (Python raises `TypeError`/`ValueError`, Node throws `TypeError`, Go panics). Passing `headers` replaces the headers inherited from the default response; it does not merge with them. A `Content-Type` header replaces `mime_type`; `Content-Length` and `Transfer-Encoding` are ignored, because the framework sets them.
 
 ### `if_unauthenticated`
 
@@ -221,9 +225,10 @@ Configures a specific response for unauthenticated requests. Overrides `respond`
 ```python
 trap.if_unauthenticated(
     status: int,
-    body: dict | Callable,
+    body: dict | str | Callable,
     mime_type: str = None,
     template: str = None,
+    headers: dict[str, str] = None,
 )
 ```
 
@@ -233,9 +238,10 @@ trap.if_unauthenticated(
 ```javascript
 trap.if_unauthenticated({
     status: number,
-    body: object | Function,
+    body: object | string | Function,
     mime_type: string,
     template: string,
+    headers: { [name: string]: string },
 })
 ```
 
@@ -246,6 +252,7 @@ trap.if_unauthenticated({
 trap.IfUnauthenticated(trappsec.ResponseConfig{
     Status: int, Body: any,
     MIMEType: string, Template: string,
+    Headers: map[string]string,
 })
 ```
 
@@ -256,14 +263,18 @@ trap.IfUnauthenticated(trappsec.ResponseConfig{
 <div class="lang-content" data-lang="python" markdown="1">
 
 ```python
-trap.if_unauthenticated(401, {"error": "Login Required"})
+trap.if_unauthenticated(401, {"detail": "Not authenticated"}, headers={"WWW-Authenticate": "Bearer"})
 ```
 
 </div>
 <div class="lang-content" data-lang="node" markdown="1">
 
 ```javascript
-trap.if_unauthenticated({ status: 401, body: { "error": "Login Required" } });
+trap.if_unauthenticated({
+    status: 401,
+    body: { detail: "Not authenticated" },
+    headers: { "WWW-Authenticate": "Bearer" },
+});
 ```
 
 </div>
@@ -271,10 +282,73 @@ trap.if_unauthenticated({ status: 401, body: { "error": "Login Required" } });
 
 ```go
 trap.IfUnauthenticated(trappsec.ResponseConfig{
-    Status: 401,
-    Body:   map[string]any{"error": "Login Required"},
+    Status:  401,
+    Body:    map[string]any{"detail": "Not authenticated"},
+    Headers: map[string]string{"WWW-Authenticate": "Bearer"},
 })
 ```
+
+</div>
+
+### `respond_with`
+
+Sets a per-request response hook. A real route answers differently depending on things a static response cannot see: 404 for an unknown or foreign parent ID, 201 for the owner of a project, 422 for a malformed body. The hook runs on every hit, after `identify_user`, and may change the status, body, MIME type and headers of that one response.
+
+The hook is called with the request (the same object `identify_user` gets) and a context holding `authenticated`, `user` and `role`. It returns nothing (`None` / `null` / `nil`) to send the static response for the auth state, or the parts to override: fields it leaves out keep their static value, and its headers are merged into the static headers (names compare case-insensitively). It must be synchronous and should only use data already on the request, such as path parameters or session and token claims.
+
+If the hook raises (Go: panics), returns a promise or coroutine, or returns an invalid result (a status outside 100-599, a function body, a header with CR or LF), trappsec logs it and sends the trap's static response.
+
+<div class="lang-content" data-lang="python" markdown="1">
+
+```python
+def mirror_projects(request, ctx):
+    project_id = request.path_params["project_id"]  # FastAPI / Starlette
+    if project_id not in request.state.claims.get("projects", []):  # set by your auth middleware
+        return {"status": 404, "body": {"detail": "Not found."}}
+    if ctx["role"] == "owner":
+        return {"status": 201, "body": {"id": 1, "status": "queued"}}
+    return None  # the static 403
+
+ts.trap("/api/v1/projects/{project_id}/export") \
+    .respond(403, {"detail": "You do not have permission to perform this action."},
+             headers={"Allow": "POST, OPTIONS", "Vary": "Accept"}) \
+    .respond_with(mirror_projects)
+```
+
+</div>
+<div class="lang-content" data-lang="node" markdown="1">
+
+```javascript
+ts.trap("/api/v1/projects/:projectId/export")
+    .respond({ status: 403, body: { error: "forbidden" }, headers: { Vary: "Accept" } })
+    .respond_with((req, ctx) => {
+        if (!req.session?.projects?.includes(req.params.projectId)) {
+            return { status: 404, body: { error: "not found" } };
+        }
+        if (ctx.role === "owner") return { status: 201, body: { id: 1, status: "queued" } };
+        return null; // the static 403
+    });
+```
+
+</div>
+<div class="lang-content" data-lang="go" markdown="1">
+
+```go
+ts.Trap("/api/v1/projects/{id}/export").
+    Respond(trappsec.ResponseConfig{Status: 403, Body: map[string]any{"error": "forbidden"}}).
+    RespondWith(func(req any, ctx trappsec.TrapRequest) *trappsec.TrapResponse {
+        r := req.(*http.Request) // *gin.Context with gin, *echo.Context with echo
+        if !ownsProject(r.Context(), r.PathValue("id")) {
+            return &trappsec.TrapResponse{Status: 404, Body: map[string]any{"error": "not found"}}
+        }
+        if ctx.Role == "owner" {
+            return &trappsec.TrapResponse{Status: 201, Body: map[string]any{"id": 1}}
+        }
+        return nil // the static 403
+    })
+```
+
+`TrapResponse` fields left at their zero value (`Status` 0, `Body` nil, `MIMEType` "") keep the static value; `Headers` are merged.
 
 </div>
 
@@ -610,12 +684,13 @@ ts.AddOTEL()
 
 ## `template`
 
-Registers a named, reusable response that traps can reference via `respond(template=...)` / `if_unauthenticated(template=...)` and that `default_response(template=...)` can use. A template cannot be combined with `status`, `body` or `mime_type` in the same call. The MIME type argument is optional everywhere (default `application/json`).
+Registers a named, reusable response that traps can reference via `respond(template=...)` / `if_unauthenticated(template=...)` and that `default_response(template=...)` can use. A template cannot be combined with `status`, `body`, `mime_type` or `headers` in the same call. The MIME type argument is optional everywhere (default `application/json`), and so are the headers (Go: register them with `TemplateResponse`).
 
 <div class="lang-content" data-lang="python" markdown="1">
 
 ```python
 ts.template("deprecated_api", 410, {"error": "This API version is retired"})
+ts.template("bearer_401", 401, '{"detail":"Not authenticated"}', headers={"WWW-Authenticate": "Bearer"})
 ts.trap("/v1/users").respond(template="deprecated_api")
 ```
 
@@ -624,6 +699,7 @@ ts.trap("/v1/users").respond(template="deprecated_api")
 
 ```javascript
 ts.template("deprecated_api", 410, { error: "This API version is retired" });
+ts.template("bearer_401", 401, '{"error":"unauthorized"}', "application/json", { "WWW-Authenticate": "Bearer" });
 ts.trap("/v1/users").respond({ template: "deprecated_api" });
 ```
 
@@ -632,17 +708,35 @@ ts.trap("/v1/users").respond({ template: "deprecated_api" });
 
 ```go
 ts.Template("deprecated_api", 410, map[string]any{"error": "This API version is retired"})
+ts.TemplateResponse("bearer_401", trappsec.ResponseTemplate{
+    StatusCode: 401, Body: "{\"error\":\"unauthorized\"}\n",
+    Headers: map[string]string{"WWW-Authenticate": "Bearer"},
+})
 ts.Trap("/v1/users").Respond(trappsec.ResponseConfig{Template: "deprecated_api"})
 ```
 
 </div>
 
-*   String bodies are sent raw regardless of `mime_type`; other values are JSON-encoded for `application/json`.
+*   String bodies (Go: also `[]byte`) are sent raw regardless of `mime_type`; any other value is JSON-encoded by trappsec.
 *   `respond` uses "was provided" checks, so `body={}`, `""`, `0`, `false` and a status of `0` are honored rather than ignored.
+
+### Matching the real response bytes
+
+trappsec JSON-encodes object, dict and map bodies itself, not through your framework's JSON response path, so the bytes can differ from what a real route sends for the same value:
+
+| SDK | trappsec sends | Real routes may send |
+|---|---|---|
+| Python | `json.dumps` compact, non-ASCII escaped (`\u00e9`), keys in insertion order, no trailing newline | Flask `jsonify`: sorted keys and a trailing `\n`; FastAPI and DRF: raw UTF-8 |
+| Node | `JSON.stringify`, compact | Express with the `json spaces` setting: indented |
+| Go | `json.Marshal`: sorted map keys, HTML-escaped `<`, `>`, `&`, no trailing newline | chi `render.JSON`, `json.NewEncoder`: a trailing `\n` |
+
+**To match a real route byte for byte, pass the body as a string** (Go: string or `[]byte`), captured from the running app: strings are sent exactly as given. Use the same capture for `headers`, and keep the real `Content-Type` (charset included) in `mime_type`.
 
 ## Default responses
 
-`default_response` and `default_unauthenticated_response` (Go: `DefaultResponse` / `DefaultUnauthenticatedResponse`) set the responses used when a trap does not configure `respond` / `if_unauthenticated`. They take exactly the same arguments as those methods: only what you pass changes the default, and `template` replaces it. Defaults are resolved when traps are built (at bootstrap), **not** when `.trap()` is called, so you may set them before or after declaring traps.
+`default_response` and `default_unauthenticated_response` (Go: `DefaultResponse` / `DefaultUnauthenticatedResponse`) set the responses used when a trap does not configure `respond` / `if_unauthenticated`. They take exactly the same arguments as those methods, `headers` included: only what you pass changes the default, and `template` replaces it. Defaults are resolved when traps are built (at bootstrap), **not** when `.trap()` is called, so you may set them before or after declaring traps.
+
+The default response for the auth state is also what a trap sends when its own body cannot be produced (a body function that fails, or a body that cannot be JSON-encoded). Set the defaults to the real 401 and 403 your app sends, so even that failure looks like a real route. If the default's body is a function that fails too, the body is empty; the default's status and headers are kept.
 
 <div class="lang-content" data-lang="python" markdown="1">
 
@@ -856,7 +950,7 @@ Webhook and Slack delivery is asynchronous. Events go to a bounded in-memory que
 
 ## Callback safety
 
-Every callback you provide (`identify_user`, `override_source_ip`, callable defaults, dynamic response bodies, webhook `template`) must be synchronous and runs in a try/catch. A callback that returns a promise or coroutine is treated as failed: trappsec logs once that it must be synchronous (and, in Node, catches the promise so a rejection can never crash the process). On failure trappsec logs the error and falls back: identity becomes "no user", the IP falls back to the default extractor, a failing callable default is treated as "no default" (presence is a violation), a failing dynamic body becomes `{}`, and a failing webhook template drops that event for that handler (the raw event is never sent instead).
+Every callback you provide (`identify_user`, `override_source_ip`, callable defaults, dynamic response bodies, webhook `template`) must be synchronous and runs in a try/catch. A callback that returns a promise or coroutine is treated as failed: trappsec logs once that it must be synchronous (and, in Node, catches the promise so a rejection can never crash the process). On failure trappsec logs the error and falls back: identity becomes "no user", the IP falls back to the default extractor, a failing callable default is treated as "no default" (presence is a violation), a failing `respond_with` hook sends the trap's static response, a failing dynamic body sends the [default response](#default-responses) for the auth state (status, body and headers; never `{}`), and a failing webhook template drops that event for that handler (the raw event is never sent instead).
 
 ## Go request body limit
 

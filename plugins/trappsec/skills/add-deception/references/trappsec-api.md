@@ -110,8 +110,10 @@ app.Trap("/api/v2/workspaces/:workspaceId/<decoy>").
 - **Path syntax** is the framework's own: `{id}` (FastAPI/Starlette/Litestar), `<id>` (Flask), `<str:id>` (Django), `:id` (Express/Koa/Hono/Fastify/NestJS/Gin/Echo), `{id}` (Hapi and Go net/http). Use the full public path, including mount prefixes.
 - **Methods** default to `["GET", "POST"]`. Set them explicitly.
 - **Body** is a dict/object, a string, or a function of the request returning one of those (Python `lambda r: {...}`, Node `(req) => ({...})`, Go `func(any) any`; Echo also accepts `func(*echo.Context) any`). String bodies are sent raw. Set `mime_type` / `MIMEType` for anything that isn't `application/json`.
-- **Failing bodies.** A function body that throws falls back to `{}`. Keep it simple and deterministic.
-- **Headers.** Responses cannot set custom headers (see backend-traps.md §3).
+- **Failing bodies.** A function body that throws sends the default response for the auth state (§5); 0.2.0 sent `{}`. Keep it simple and deterministic.
+- **Headers** (releases after 0.2.0). `headers={"WWW-Authenticate": "Bearer"}` (Node `headers: {...}`, Go `Headers: map[string]string{...}`) on `respond`, `if_unauthenticated`, the defaults and templates. Copy the per-handler headers a real sibling sends (backend-traps.md §3).
+- **Per-request status** (releases after 0.2.0). `.respond_with(lambda req, ctx: ...)` (Node `.respond_with((req, ctx) => ...)`, Go `.RespondWith(func(req any, ctx trappsec.TrapRequest) *trappsec.TrapResponse)`) runs on every hit with `ctx` = authenticated, user, role. Return nothing for the static response, or `{"status": 404, "body": ..., "headers": {...}}` to mirror a real sibling's existence or role check from data already on the request. It must be synchronous; if it fails, the static response is sent.
+- **Exact bytes.** trappsec JSON-encodes dict/object/map bodies itself (Python: compact, ASCII-escaped; Go: sorted keys, no trailing newline), which may differ from the framework's encoder. Pass the captured real body as a **string** to match byte for byte.
 
 ## 4. Watches (honey fields)
 
@@ -153,7 +155,7 @@ app.Watch("/api/v2/me").
 
 ## 5. Default responses and templates
 
-Set both defaults to the app's real shapes, so no trap ever emits trappsec's defaults (`401 {}` and `200 {}`):
+Set both defaults to the app's real shapes, so no trap ever emits trappsec's defaults (`401 {}` and `200 {}`). Use the captured body as a string so the bytes match, and (after 0.2.0) add the real headers with `default_unauthenticated_response(status=401, body=REAL_401_BODY, headers={"WWW-Authenticate": "Bearer"})` (Go: `DefaultUnauthenticatedResponse(trappsec.ResponseConfig{..., Headers: ...})`). The defaults are also what a trap sends when its body function fails.
 
 ```python
 ts.default_responses["unauthenticated"] = {"status_code": 401, "response_body": REAL_401_BODY, "mime_type": "application/json"}
@@ -216,6 +218,7 @@ Defaults resolve at bootstrap, so the order of calls doesn't matter. A template 
 
 Releases after 0.2.0 add consistent aliases alongside the portable forms used in this sheet. The portable forms keep working.
 - **Default-response setters:** `default_response(...)` and `default_unauthenticated_response(...)`, with the same arguments as `respond` (Go: `DefaultResponse` / `DefaultUnauthenticatedResponse`).
+- **Response headers and hooks:** `headers` on every response config and template (Go: `TemplateResponse` for templates), and `respond_with` / `RespondWith`. A failing body function sends the default response instead of `{}`.
 - **Node:** `{ default, intent }` on watch fields, and `close(seconds)`.
 - **Go:** option helpers such as `trappsec.Default(x)` and `trappsec.Intent(s)`.
 

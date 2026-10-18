@@ -23,14 +23,14 @@ Columns: Fl Flask · FA FastAPI · St Starlette · Li Litestar · Dj Django · S
 | R13 O(1) lookups | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | N/A |
 | R14 traps are real routes | e2e | e2e | e2e | e2e | e2e | e2e | ✅ | e2e | e2e | e2e | e2e | e2e | e2e | e2e | e2e | e2e | N/A |
 | R15 bootstrap public, idempotent, lazy | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ / ✅ / N/A |
-| R16 async delivery; callbacks never throw | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ / ✅ / ✅ |
+| R16 async delivery; callbacks never throw | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ / ✅ / ✅ (trap fallbacks: shared fixtures) |
 | R17 canonical value matching | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | e2e | ✅ | e2e | e2e | ✅ | ✅ | ✅ | ✅ / ✅ / ✅ (shared fixtures) |
 | R18 multi-valued fields | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ / ✅ / ✅ (shared fixtures) |
 | R19 sanitized values, event shape | e2e | e2e | e2e | e2e | e2e | e2e | e2e | e2e | e2e | e2e | e2e | e2e | e2e | e2e | e2e | e2e | ✅ / ✅ / ✅ (shared fixtures) |
 | R20 duplicate trap fails loud | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅³ | ✅ | ✅ | ✅ | N/A |
 | R21 no spoofable IP by default | e2e | e2e | e2e | e2e | e2e | e2e | e2e | e2e | e2e | e2e | e2e | ✅ | e2e | ✅ | ✅ | ✅ | N/A |
 | R22 traps exempt from CSRF | ✅ | N/A⁴ | ✅⁶ | ✅ | ✅ | N/A⁴ | ✅ | ✅⁶ | ✅⁶ | N/A⁴ | N/A⁴ | ✅⁷ | N/A⁴ | ✅⁶ | N/A⁴ | ✅⁵ | N/A |
-| R23 trap responses | e2e | e2e | e2e | ✅ | e2e | e2e | e2e | ✅ | ✅ | e2e | e2e | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ / ✅ / ✅ |
+| R23 trap responses (headers, response hook) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ / ✅ / ✅ (shared fixtures) |
 
 1. A sub-mux mounted with `Handle("/prefix/", sub)` is opaque to the adapter: a watch on a route inside it cannot fire. Bootstrap logs a warning naming the mount pattern to watch instead (`TestUnreachableWatchIsLogged`). Gin and Echo log the same warning for any watch that matches no route.
 2. Go has no runtime framework detection; each adapter has its own typed `InstallSentry`.

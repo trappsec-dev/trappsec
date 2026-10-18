@@ -4,6 +4,20 @@ All notable changes to trappsec are documented here. The format follows [Keep a 
 
 ## Unreleased
 
+### Added: trap responses can match their real sibling routes
+
+Probing found that a trap configured with the app's real 401/403 bodies could still be told from a real route with one or two requests in every framework. The trap response API now covers the gaps, in Python, Node and Go:
+
+- **Response headers.** `respond`, `if_unauthenticated`, `default_response`, `default_unauthenticated_response` and `template` take optional `headers` (Go: `ResponseConfig.Headers`, `ResponseTemplate.Headers` and the new `Sentry.TemplateResponse`), applied by every integration. Copy what your framework adds, such as FastAPI's `WWW-Authenticate: Bearer` on 401 or Django REST framework's `Allow` and `Vary: Accept`. A `Content-Type` header replaces `mime_type`; invalid headers (non-string, CR/LF) fail at configuration time.
+- **Per-request responses.** `trap.respond_with(hook)` (Go: `RespondWith(func(req any, ctx trappsec.TrapRequest) *trappsec.TrapResponse)`) is called on every hit with the request and `{authenticated, user, role}`, and may override status, body, MIME type and headers, for example 404 for a foreign project ID or 201 for its owner. It must be synchronous; if it fails, the static response is sent.
+- **Docs:** [Matching the real response bytes](https://trappsec.dev/api/#matching-the-real-response-bytes) explains how trappsec's own JSON encoding differs per framework and that string bodies are the way to match real bytes.
+
+### Changed: a failing trap body no longer sends `{}`
+
+- When a body callback raises (Go: panics), returns a promise or coroutine, or its value cannot be JSON-encoded, the trap now sends the **default response for the auth state** (its status, body and headers) instead of a `{}` body with the trap's status. If the default's body is a failing callback too, the body is empty. `docs/threat-model.md` no longer claims callback failures never change a trap's response. `tests/conformance/trap_response.json` pins the behavior across the three SDKs.
+- **Python:** non-string bodies are JSON-encoded whatever the `mime_type`, as Node and Go already did (a dict body with `text/plain` used to reach the framework as a dict, and failed in Starlette and FastAPI).
+- **Go:** `ResponseTemplate` and `ResponseConfig` now contain a map, so they can no longer be compared with `==`; use `reflect.DeepEqual`. The internal `normalizePayload` helper became `encodePayload`.
+
 ### Changed: minimum supported versions raised
 
 Runtimes and frameworks that are past end of life, or several majors behind, are no longer supported. Each new floor is the oldest release CI runs the integration tests against.

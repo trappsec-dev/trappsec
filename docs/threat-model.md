@@ -46,12 +46,16 @@ A determined attacker may try to tell traps from real routes. trappsec reduces t
 
 *   **Traps are real framework routes**, not middleware shortcuts, so routing behavior (405 vs 404, trailing slashes, HEAD/OPTIONS handling) matches your real endpoints. Shadowing and CSRF protection never change the decoy response.
 *   **Unauthenticated requests get the decoy's `if_unauthenticated` response** (default `401`). This looks like any protected route and nudges the attacker to authenticate, which turns a `signal` into an `alert`.
-*   **Make responses plausible.** Use realistic status codes, bodies and headers. Empty `{}` on every trap is a tell; use [templates](/api/#template) and dynamic bodies.
-*   **Keep latency comparable.** Delivery is asynchronous so webhooks never add latency; avoid slow dynamic bodies.
+*   **Make responses plausible.** Compare each trap byte for byte with a real sibling route and copy what differs. Empty `{}` on every trap is a tell.
+    *   **Headers.** Frameworks add headers a trap must copy: FastAPI's `HTTPBearer` and `OAuth2PasswordBearer` send `WWW-Authenticate: Bearer` on every 401; Django REST framework sends `Allow`, `Vary: Accept` and `WWW-Authenticate` on every APIView response. Set them with `headers` on `respond`, `if_unauthenticated`, the [default responses](/api/#default-responses) or a [template](/api/#template).
+    *   **Bytes.** trappsec JSON-encodes object bodies itself, which can differ from your framework's encoder (key order, ASCII escaping, a trailing newline). Use a string body captured from the real route to match exactly; see [Matching the real response bytes](/api/#matching-the-real-response-bytes).
+    *   **Status per request.** A real route answers 404 for an unknown or foreign parent ID, 201 to the owner of a project (the most privileged role a self-signup attacker holds) and 422 or 400 for a malformed body. A static decoy cannot; mirror those checks from data already on the request with [`respond_with`](/api/#respond_with).
+    *   **Validation order** is not reproduced: FastAPI parses a JSON body, and Fastify runs its body schema, before authentication, so a real route can answer 422 or 400 to an unauthenticated malformed request where a trap answers 401. Mirror it in `respond_with` if your attackers can reach it.
+*   **Keep latency comparable.** Delivery is asynchronous so webhooks never add latency; avoid slow dynamic bodies and `respond_with` hooks.
 *   **Do not give traps away by naming.** Names like `/admin/honeypot` defeat the purpose. See [Best Practices](/best-practices/).
 *   **Honey fields must be stripped.** trappsec removes every occurrence of a watched field before your handler runs, so it can never change real behavior and cannot be used to probe your logic.
 *   **Source is public.** trappsec is open source; assume attackers know the technique. Detection value comes from realistic, application-specific decoys, not secrecy of the library.
-*   **Error behavior.** Callback failures never change the response; the request proceeds as if trappsec were not there.
+*   **Error behavior.** On watched routes, callback failures never change the response; the request proceeds as if trappsec were not there. On traps, a failing `respond_with` hook sends the trap's static response, and a failing body callback (or a body that cannot be encoded) sends the default response for the auth state, never `{}`. Set the defaults to your real 401 and 403 so a failure is indistinguishable from a regular hit.
 
 ## Security of the alert channel
 
