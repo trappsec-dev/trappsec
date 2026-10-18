@@ -5,13 +5,34 @@ export interface ResponseConfig {
     body?: any | ((req: any) => any);
     mime_type?: string;
     template?: string;
+    /** Extra response headers. A Content-Type header replaces `mime_type`; Content-Length and Transfer-Encoding are ignored. */
+    headers?: Record<string, string>;
 }
 
 export interface ResolvedResponse {
     status_code: number;
     response_body: any;
     mime_type: string;
+    headers?: Record<string, string>;
 }
+
+/** What a response hook knows about the request, besides the request itself. */
+export interface TrapResponseContext {
+    authenticated: boolean;
+    user: string | null;
+    role: string | null;
+}
+
+/** Overrides a response hook may return; `headers` are merged into the static ones. */
+export interface TrapResponseOverride {
+    status?: number;
+    body?: any;
+    mime_type?: string;
+    headers?: Record<string, string>;
+}
+
+/** Called on every trap hit; must be synchronous. Return null/undefined for the static response. */
+export type TrapResponseHook = (req: any, ctx: TrapResponseContext) => TrapResponseOverride | null | undefined;
 
 export interface TrapConfig {
     path: string;
@@ -19,6 +40,9 @@ export interface TrapConfig {
     intent: string | null;
     "response.authenticated": ResolvedResponse;
     "response.unauthenticated": ResolvedResponse;
+    "fallback.authenticated": ResolvedResponse;
+    "fallback.unauthenticated": ResolvedResponse;
+    response_hook: TrapResponseHook | null;
 }
 
 export interface FieldRule {
@@ -46,6 +70,7 @@ export class TrapBuilder {
     intent(intent: string | null): this;
     respond(config?: ResponseConfig): this;
     if_unauthenticated(config?: ResponseConfig): this;
+    respond_with(hook: TrapResponseHook | null): this;
     build(): TrapConfig;
 }
 
@@ -148,7 +173,7 @@ export class Sentry {
     default_response(config?: ResponseConfig): this;
     /** Default response for unauthenticated requests to traps without `if_unauthenticated`. */
     default_unauthenticated_response(config?: ResponseConfig): this;
-    template(name: string, statusCode: number, responseBody: any, mimeType?: string): this;
+    template(name: string, statusCode: number, responseBody: any, mimeType?: string, headers?: Record<string, string>): this;
     trap(path: string): TrapBuilder;
     watch(path: string): WatchBuilder;
     add_webhook(url: string, options?: WebhookOptions): this;

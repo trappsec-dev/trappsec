@@ -4,7 +4,7 @@ const { AsyncLocalStorage } = require('node:async_hooks');
 
 const {
     normalizePath, buildWatchMap, hasFields, trapMethods, inspectQuery, inspectBody,
-    finishPending, resolveTrap, emitWatch, warnOnce, bodyLooksUnparsed, stripRawQuery
+    finishPending, resolveTrap, applyHeaders, emitWatch, warnOnce, bodyLooksUnparsed, stripRawQuery
 } = require('./_common');
 
 const PENDING = Symbol('trappsec.pendingWatch');
@@ -238,6 +238,7 @@ class ExpressIntegration {
         const { response_body, response_config } = resolveTrap(this.ts, decoy, req, 'Express');
         try {
             res.status(response_config.status_code);
+            applyHeaders(this.ts, response_config.headers, (k, v) => res.set(k, v), 'Express');
             if (response_config.mime_type) res.type(response_config.mime_type);
             res.send(response_body);
         } catch (e) {

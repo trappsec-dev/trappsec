@@ -2,7 +2,7 @@
 
 const {
     normalizePath, hasFields, buildWatchMap, trapMethods, inspectQuery, inspectBody,
-    finishPending, resolveTrap, emitWatch, bodyLooksUnparsed
+    finishPending, resolveTrap, applyHeaders, emitWatch, bodyLooksUnparsed
 } = require('./_common');
 
 // Watch paths are the FULL registered pattern, including any router prefix
@@ -155,6 +155,7 @@ class KoaIntegration {
             ctx.status = response_config.status_code;
             ctx.body = response_body;
             if (response_config.mime_type) ctx.type = response_config.mime_type;
+            applyHeaders(this.ts, response_config.headers, (k, v) => ctx.set(k, v), 'Koa');
         } catch (e) {
             this.ts.logger.error('Trappsec error sending Koa trap response: ', e);
         }

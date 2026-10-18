@@ -74,7 +74,7 @@ test("async callbacks are not awaited, never crash, and use the fallback", async
   };
   ts._trigger = () => {};
   ts._base_event = () => ({ type: "signal" });
-  assert.equal(ts._trigger_trap_event({}, trap).response_body, "{}");
+  assert.equal(ts._trigger_trap_event({}, trap).response_body, ""); // never "{}"
 });
 
 test("async webhook template drops the event", async () => {

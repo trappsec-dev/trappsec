@@ -2,7 +2,7 @@
 
 const {
     normalizePath, hasFields, replaceInPlace, createWatchLookup, trapMethods,
-    inspectQuery, inspectBody, resolveTrap, emitWatch, stripRawQuery
+    inspectQuery, inspectBody, resolveTrap, applyHeaders, emitWatch, stripRawQuery
 } = require('./_common');
 
 // Watches run in `onPostAuth`: the payload is parsed and credentials are set (so
@@ -82,6 +82,7 @@ class HapiIntegration {
                 handler: (request, h) => {
                     const { response_body, response_config } = resolveTrap(this.ts, decoy, request, 'Hapi');
                     const response = h.response(response_body).code(response_config.status_code);
+                    applyHeaders(this.ts, response_config.headers, (k, v) => response.header(k, v), 'Hapi');
                     if (response_config.mime_type) response.type(response_config.mime_type);
                     return response;
                 }

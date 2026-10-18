@@ -1,5 +1,5 @@
 const os = require('os');
-const { mergeResponse, TrapBuilder, WatchBuilder, NO_DEFAULT } = require('./builders');
+const { checkHeaders, mergeHeaders, responseHead, mergeResponse, TrapBuilder, WatchBuilder, NO_DEFAULT } = require('./builders');
 const { LogHandler, WebhookHandler, SlackHandler, OTELHandler, safeStringify, isAsyncResult } = require('./handlers');
 const { normalizePath } = require('./integrations/_common');
 
@@ -168,7 +168,8 @@ class Sentry {
     /**
      * Default response for authenticated requests to traps that do not call
      * `respond`. Same options as `TrapBuilder.respond`: only the options you
-     * pass change the default, and `template` replaces it.
+     * pass change the default, and `template` replaces it. It is also the
+     * response a trap falls back to when its own body callback fails.
      */
     default_response(opts = {}) {
         return this._set_default("authenticated", opts || {});
@@ -184,8 +185,10 @@ class Sentry {
         return this;
     }
 
-    template(name, status_code, response_body, mime_type = "application/json") {
-        this._templates[name] = { "status_code": status_code, "response_body": response_body, "mime_type": mime_type };
+    template(name, status_code, response_body, mime_type = "application/json", headers = undefined) {
+        const tmpl = { "status_code": status_code, "response_body": response_body, "mime_type": mime_type };
+        if (headers !== undefined && headers !== null) tmpl.headers = checkHeaders("template", headers);
+        this._templates[name] = tmpl;
         return this;
     }
 
@@ -392,35 +395,109 @@ class Sentry {
         }
     }
 
+    /**
+     * Emits trap_hit and returns `{ response_body, response_config }`: the body
+     * as a string or Buffer, and `{ status_code, mime_type, headers }` (headers
+     * without Content-Type or framing headers). A failing response hook falls
+     * back to the trap's static response; a body that cannot be produced falls
+     * back to the default response for the auth state (R16).
+     */
     _trigger_trap_event(req, trap) {
         let authenticated = false;
+        let user = null, role = null;
         try {
             const ctx = this._base_event(req, "trappsec.trap_hit");
             ctx.intent = trap.intent === undefined ? null : trap.intent;
             authenticated = ctx.type === "alert";
+            user = ctx.user;
+            role = ctx.role;
             this._trigger(ctx);
         } catch (e) {
             this.logger.error("error triggering trap_hit:", e);
         }
 
-        const response_config = trap[authenticated ? "response.authenticated" : "response.unauthenticated"];
-        let response_body = response_config["response_body"];
+        const key = authenticated ? "authenticated" : "unauthenticated";
+        const stat = trap["response." + key];
+        const override = this._run_response_hook(req, trap.response_hook, { authenticated, user, role });
 
-        if (typeof response_body === 'function') {
+        let cfg = { ...stat };
+        let headers = stat.headers;
+        if (override) {
+            if (Object.hasOwn(override, "status")) cfg.status_code = override.status;
+            if (Object.hasOwn(override, "mime_type")) cfg.mime_type = override.mime_type;
+            if (Object.hasOwn(override, "body")) cfg.response_body = override.body;
+            if (Object.hasOwn(override, "headers")) headers = mergeHeaders(headers, override.headers);
+        }
+
+        let out = this._encode_body(req, cfg);
+        if (!out.ok) {
+            cfg = trap["fallback." + key] || (this.default_responses && this.default_responses[key])
+                || { status_code: stat.status_code, mime_type: stat.mime_type, response_body: stat.response_body };
+            headers = cfg.headers;
+            if (typeof cfg.response_body === 'function' && cfg.response_body === stat.response_body) {
+                out = { ok: false }; // the default's own callback just failed
+            } else {
+                out = this._encode_body(req, cfg);
+            }
+            if (!out.ok) out = { ok: true, body: "" };
+        }
+
+        return { response_body: out.body, response_config: responseHead(cfg, headers) };
+    }
+
+    /** The validated result of a trap's response hook, or null (use the static response). */
+    _run_response_hook(req, hook, ctx) {
+        if (typeof hook !== 'function') return null;
+        try {
+            const result = hook(req, ctx);
+            if (result === null || result === undefined || this._async_result(result, "trap response hook")) return null;
+            if (typeof result !== 'object' || Array.isArray(result)) {
+                throw new TypeError("must return an object or null");
+            }
+            const out = {};
+            for (const k of ["status", "body", "mime_type", "headers"]) {
+                if (Object.hasOwn(result, k) && result[k] !== undefined && result[k] !== null) out[k] = result[k];
+            }
+            if (Object.hasOwn(out, "status") && !(Number.isInteger(out.status) && out.status >= 100 && out.status <= 599)) {
+                throw new TypeError(`invalid status ${String(out.status)}`);
+            }
+            if (typeof out.body === 'function') throw new TypeError("`body` must not be a function");
+            if (Object.hasOwn(out, "mime_type") && typeof out.mime_type !== 'string') {
+                throw new TypeError("`mime_type` must be a string");
+            }
+            if (Object.hasOwn(out, "headers")) out.headers = checkHeaders("trap response hook", out.headers);
+            return out;
+        } catch (e) {
+            this.logger.error("trap response hook failed:", e);
+            return null;
+        }
+    }
+
+    /**
+     * `{ ok, body }` for a response config: function bodies are called and
+     * non-string bodies JSON-encoded. `ok` is false when the callback or the
+     * encoding fails.
+     */
+    _encode_body(req, cfg) {
+        let body = cfg.response_body;
+        if (typeof body === 'function') {
             try {
-                response_body = response_body(req);
-                if (this._async_result(response_body, "dynamic trap body")) response_body = {};
+                body = body(req);
+                if (this._async_result(body, "dynamic trap body")) return { ok: false };
             } catch (e) {
                 this.logger.error("dynamic trap response body failed:", e);
-                response_body = {};
+                return { ok: false };
             }
         }
-
-        if (typeof response_body !== 'string' && response_config["mime_type"] === "application/json") {
-            response_body = safeStringify(response_body === undefined ? {} : response_body);
+        if (typeof body === 'string' || Buffer.isBuffer(body)) return { ok: true, body };
+        if (body === undefined) body = {};
+        try {
+            const text = JSON.stringify(body);
+            return { ok: true, body: text === undefined ? "" : text };
+        } catch (e) {
+            this.logger.error("failed to encode trap response body:", e);
+            return { ok: false };
         }
-
-        return { response_body, response_config };
     }
 
     /**

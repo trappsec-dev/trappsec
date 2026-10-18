@@ -2,7 +2,7 @@
 
 const {
     normalizePath, hasFields, replaceInPlace, createWatchLookup, trapMethods,
-    inspectQuery, inspectBody, finishPending, resolveTrap, emitWatch, stripRawQuery
+    inspectQuery, inspectBody, finishPending, resolveTrap, applyHeaders, emitWatch, stripRawQuery
 } = require('./_common');
 
 const PENDING = Symbol('trappsec.pendingWatch');
@@ -90,6 +90,7 @@ class FastifyIntegration {
                 handler: (req, reply) => {
                     const { response_body, response_config } = resolveTrap(this.ts, decoy, req, 'Fastify');
                     try {
+                        applyHeaders(this.ts, response_config.headers, (k, v) => reply.header(k, v), 'Fastify');
                         if (response_config.mime_type) reply.type(response_config.mime_type);
                         return reply.code(response_config.status_code).send(response_body);
                     } catch (e) {

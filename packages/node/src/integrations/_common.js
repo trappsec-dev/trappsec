@@ -1,5 +1,7 @@
 'use strict';
 
+const { responseHead } = require('../builders');
+
 // Helpers shared by every trappsec Node integration.
 
 // Canonical form used for every watch/trap lookup key, in every integration:
@@ -150,21 +152,23 @@ function serializeBody(body, mimeType) {
 
 // The response a trap gives when its own machinery fails. It is the same
 // unauthenticated decoy a scanner would normally get, so a failure inside
-// trappsec is indistinguishable from a regular trap hit.
+// trappsec is indistinguishable from a regular trap hit. A function body is
+// replaced by the default unauthenticated response (never `{}`).
 function decoyFallback(ts, decoy, req) {
-    const cfg = (decoy && decoy['response.unauthenticated']) || ts.default_responses.unauthenticated;
-    let body = cfg.response_body;
-    if (typeof body === 'function') {
+    const candidates = [
+        decoy && decoy['response.unauthenticated'],
+        (decoy && decoy['fallback.unauthenticated']) || ts.default_responses.unauthenticated,
+    ];
+    for (const cfg of candidates) {
         try {
-            body = body(req);
-        } catch (e) {
-            body = {};
-        }
+            if (!cfg || typeof cfg.response_body === 'function') continue;
+            return {
+                response_body: serializeBody(cfg.response_body, cfg.mime_type),
+                response_config: responseHead(cfg, cfg.headers),
+            };
+        } catch (e) { /* try the next one */ }
     }
-    return {
-        response_body: serializeBody(body, cfg.mime_type),
-        response_config: cfg
-    };
+    return { response_body: '', response_config: { status_code: 401, mime_type: 'application/json', headers: {} } };
 }
 
 // Fires the trap event and returns the response to send. Never throws.
@@ -178,6 +182,17 @@ function resolveTrap(ts, decoy, req, label) {
     } catch (e) {
         ts.logger.error('Trappsec error in ' + label + ' trap handler: ', e);
         return decoyFallback(ts, decoy, req);
+    }
+}
+
+// Sets the trap's configured headers through `set(name, value)`. Never throws.
+function applyHeaders(ts, headers, set, label) {
+    for (const [name, value] of Object.entries(headers || {})) {
+        try {
+            set(name, value);
+        } catch (e) {
+            ts.logger.error(`Trappsec error setting ${label} trap response header ${name}: `, e);
+        }
     }
 }
 
@@ -257,6 +272,7 @@ module.exports = {
     serializeBody,
     decoyFallback,
     resolveTrap,
+    applyHeaders,
     emitWatch,
     warnOnce,
     BODY_METHODS

@@ -136,3 +136,47 @@ if (isTrapFx) {
     });
   }
 }
+
+// Trap response resolution: headers, response hook and fallback (R16, R23).
+class BareSentry extends Sentry {
+  _register() {}
+}
+
+function fixtureBody(v) {
+  if (v !== null && typeof v === "object" && "$callable" in v) {
+    if (v.$callable === "throws") return () => { throw new Error("boom"); };
+    return () => v.value;
+  }
+  return v;
+}
+
+function fixtureResponse(spec) {
+  return Object.fromEntries(Object.entries(spec || {}).map(([k, v]) => [k, k === "body" ? fixtureBody(v) : v]));
+}
+
+for (const c of load("trap_response.json")) {
+  test(`trap_response: ${c.name}`, () => {
+    const ts = new BareSentry({}, "svc", "test");
+    ts.logger = quiet;
+    ts._handlers = [];
+    ts.request = { path: () => "/t", user_agent: () => null, method: () => "GET" };
+    ts.identify_user(() => (c.authenticated ? { user: "u1", role: "member" } : null));
+
+    let builder;
+    if (c.authenticated) {
+      ts.default_response(fixtureResponse(c.default));
+      builder = ts.trap("/t").respond(fixtureResponse(c.trap));
+    } else {
+      ts.default_unauthenticated_response(fixtureResponse(c.default));
+      builder = ts.trap("/t").if_unauthenticated(fixtureResponse(c.trap));
+    }
+    if (c.hook === "throws") builder.respond_with(() => { throw new Error("hook"); });
+    else if (c.hook !== undefined) builder.respond_with(() => c.hook.returns);
+
+    const { response_body, response_config } = ts._trigger_trap_event({}, builder.build());
+    assert.deepEqual(
+      { status: response_config.status_code, body: String(response_body), mime_type: response_config.mime_type, headers: response_config.headers },
+      c.expect,
+    );
+  });
+}

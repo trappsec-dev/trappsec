@@ -1,7 +1,7 @@
 'use strict';
 
 const {
-    normalizePath, hasFields, createWatchLookup, trapMethods, detect, resolveTrap,
+    normalizePath, hasFields, createWatchLookup, trapMethods, detect, resolveTrap, applyHeaders,
     emitWatch, stripRawQuery, warnOnce, BODY_METHODS
 } = require('./_common');
 
@@ -185,7 +185,9 @@ class HonoIntegration {
 
     _respondTrap(c, decoy) {
         const { response_body, response_config } = resolveTrap(this.ts, decoy, c, 'Hono');
-        const headers = response_config.mime_type ? { 'Content-Type': response_config.mime_type } : undefined;
+        const headers = {};
+        applyHeaders(this.ts, response_config.headers, (k, v) => { headers[k] = v; }, 'Hono');
+        if (response_config.mime_type) headers['Content-Type'] = response_config.mime_type;
         return c.body(response_body, response_config.status_code, headers);
     }
 
