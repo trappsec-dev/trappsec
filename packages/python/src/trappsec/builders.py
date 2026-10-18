@@ -97,7 +97,7 @@ class TrapBuilder:
         if key in self._templates:
             return _copy(self._templates[key])
         cfg = _copy(self.ts.default_responses[key])
-        cfg.update(_copy(self._specs[key]))
+        cfg.update(self._specs[key])
         return cfg
 
     def build(self):
