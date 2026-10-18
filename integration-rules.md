@@ -33,6 +33,7 @@ The requirement differs based on how the framework resolves route conflicts:
 - Hono composes every matching route and middleware in registration order, so it is order-based too: trap routes are added at bootstrap and its router's match results are reordered so traps sit after middleware (`app.use()`, or an `app.all()` handler that takes `next`) and before the first route.
 - Express, Koa and NestJS-Express insert trap routes **immediately before the first route layer**, i.e. after ordinary middleware (auth, session, body parsers) so `identify_user` can see the user, but before any application route so traps are never shadowed. Never prepend ahead of middleware, and never append after routes.
 - If a trap path+method exactly duplicates an existing app route, fail loud (throw/panic with a clear message); never silently replace or shadow either side (see R20).
+- Django URL patterns are method-agnostic, so a prepended trap would answer every method on its URL. Traps are compared with every real route by shape (converters and parameter names ignored); a trap overlapping a real route that is not a genuine wildcard matches only its declared methods (others fall through to the real view), and fails loud when the real view serves one of them or its methods cannot be read.
 - Sanic, Gin, Echo, Hapi, net/http: native `add_route()` / `engine.Handle()` / `app.route()` registration is sufficient — specificity-based routing provides the guarantee implicitly
 
 ---

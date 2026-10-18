@@ -375,7 +375,7 @@ def test_asgi_handler_with_watches_and_traps(env):
 
     name = "urlconf_%s" % uuid.uuid4().hex
     mod = types.ModuleType(name)
-    mod.urlpatterns = [path("items", items)]
+    mod.urlpatterns = [path("items", items), path("members/<int:pk>", MemberDetail.as_view())]
     sys.modules[name] = mod
     ctx = override_settings(ROOT_URLCONF=name)
     ctx.enable()
@@ -386,6 +386,7 @@ def test_asgi_handler_with_watches_and_traps(env):
         cap = Capture()
         s._handlers.append(cap)
         s.trap("/admin/debug")
+        s.trap("/members/<id>").methods("DELETE")
         s.watch("/items").query("debug")
 
         def call(method, target, query=b""):
@@ -413,6 +414,203 @@ def test_asgi_handler_with_watches_and_traps(env):
         status, body = call("GET", "/items", b"debug=1&x=2")
         assert status == 200 and json.loads(body)["get"] == {"x": ["2"]}
         assert len(watch_events(cap)) == 1
+        assert call("GET", "/members/3")[0] == 200  # falls through to the real view
+        assert call("DELETE", "/members/3")[0] == 401
     finally:
         ctx.disable()
         clear_url_caches()
+
+
+# --------------------------------------------- traps overlapping real routes
+
+from django.urls import include, re_path  # noqa: E402
+from django.views import View  # noqa: E402
+
+
+class MemberDetail(View):
+    def get(self, request, *args, **kwargs):
+        return JsonResponse({"real": True, "kwargs": {k: str(v) for k, v in kwargs.items()}})
+
+
+def trap_hits(cap):
+    return [e for e in cap.events if e["event"] == "trappsec.trap_hit"]
+
+
+def test_trap_on_real_route_with_other_method_falls_through(env):
+    """A DELETE trap on a GET-only URL must not take the GET endpoint down."""
+    h, s, cap = env(urlpatterns=[
+        path("api/v1/projects/<int:pk>/members/<int:member_id>/", MemberDetail.as_view()),
+    ])
+    s.trap("/api/v1/projects/<str:project_id>/members/<str:member_id>/").methods("DELETE")
+    s.bootstrap()
+    c = client(h)
+    r = c.get("/api/v1/projects/1/members/2/")
+    assert r.status_code == 200 and r.get_json() == {"real": True, "kwargs": {"pk": "1", "member_id": "2"}}
+    assert c.head("/api/v1/projects/1/members/2/").status_code == 200
+    assert c.options("/api/v1/projects/1/members/2/").status_code == 200
+    # Other methods reach the real view through every middleware: CSRF still applies.
+    assert c.post("/api/v1/projects/1/members/2/").status_code == 403
+    assert trap_hits(cap) == []
+    assert c.delete("/api/v1/projects/1/members/2/").status_code == 401
+    assert len(trap_hits(cap)) == 1
+
+
+def test_trap_on_real_route_with_same_method_fails_loud(env):
+    h, s, cap = env(urlpatterns=[
+        path("api/v1/projects/<int:pk>/members/<int:member_id>/", MemberDetail.as_view()),
+    ])
+    s.trap("/api/v1/projects/<str:project_id>/members/<str:member_id>/").methods("GET", "DELETE")
+    with pytest.raises(RuntimeError, match="duplicates .*for GET"):
+        s.bootstrap()
+
+
+@pytest.mark.parametrize("real", [
+    "api/<int:pk>/secret/",
+    "api/<str:pk>/secret/",
+    "api/<slug:pk>/secret/",
+    "api/<uuid:pk>/secret/",
+    "api/<path:pk>/secret/",
+    r"^api/(?P<pk>[0-9]+)/secret/$",
+    r"^api/([^/.]+)/secret/$",
+])
+@pytest.mark.parametrize("trap", ["/api/<int:id>/secret/", "/api/<str:id>/secret/",
+                                  "/api/<slug:id>/secret/", "/api/<uuid:id>/secret/"])
+def test_parameterized_duplicates_are_detected(env, real, trap):
+    route = re_path if real.startswith("^") else path
+    h, s, cap = env(urlpatterns=[route(real, items)])
+    s.trap(trap)
+    with pytest.raises(RuntimeError, match="duplicates"):
+        s.bootstrap()
+
+    h, s, cap = env(urlpatterns=[route(real, MemberDetail.as_view())])
+    s.trap(trap).methods("DELETE")
+    s.bootstrap()
+    uuid_value = "00000000-0000-4000-8000-000000000000"
+    c = client(h)
+    assert c.get("/api/%s/secret/" % (uuid_value if "uuid" in real else "1")).status_code == 200
+    if "int" not in trap and "[0-9]" not in real and "int" not in real:
+        assert c.delete("/api/%s/secret/" % uuid_value).status_code == 401
+
+
+def test_parameterized_duplicate_through_include(env):
+    h, s, cap = env(urlpatterns=[path("api/<int:org>/", include([path("users/<int:pk>", items)]))])
+    s.trap("/api/<id>/users/<uid>")
+    with pytest.raises(RuntimeError, match="duplicates"):
+        s.bootstrap()
+
+
+def test_trap_parameter_swallowing_a_real_literal_is_an_overlap(env):
+    h, s, cap = env(urlpatterns=[path("api/users", MemberDetail.as_view())])
+    s.trap("/api/<name>").methods("DELETE")
+    s.bootstrap()
+    c = client(h)
+    assert c.get("/api/users").status_code == 200
+    assert c.delete("/api/users").status_code == 401
+    assert c.delete("/api/other").status_code == 401
+
+    h, s, cap = env(urlpatterns=[path("api/users", items)])
+    s.trap("/api/<name>").methods("DELETE")
+    with pytest.raises(RuntimeError, match="duplicates"):
+        s.bootstrap()
+
+
+def test_unrelated_and_catch_all_routes_still_lose_to_the_trap(env):
+    """R2: a trap wins over genuine wildcards, for every method."""
+    h, s, cap = env(urlpatterns=[
+        path("<slug:slug>/<path:rest>", items),
+        re_path(r"^files/.*$", items),
+        path("api/<int:pk>/secret/", items),
+    ])
+    s.trap("/admin/backup").methods("POST")
+    s.trap("/files/backup.tar").methods("POST")
+    s.trap("/api/abc/secret/")  # <int:pk> never matches "abc"
+    s.bootstrap()
+    c = client(h)
+    assert c.get("/admin/backup").status_code == 405
+    assert c.post("/files/backup.tar").status_code == 401
+    assert c.get("/api/abc/secret/").status_code == 401
+    assert c.get("/api/1/secret/").status_code == 200
+
+
+@pytest.fixture
+def _drf_settings():
+    # No django.contrib.auth here: DRF's anonymous user needs it.
+    with override_settings(REST_FRAMEWORK={"UNAUTHENTICATED_USER": None}):
+        yield
+
+
+def _drf():
+    pytest.importorskip("rest_framework")
+    from rest_framework import routers, viewsets
+    from rest_framework.response import Response
+
+    class ProjectViewSet(viewsets.ViewSet):
+        authentication_classes = []
+        permission_classes = []
+
+        def list(self, request):
+            return Response([{"id": 1}])
+
+        def retrieve(self, request, pk=None):
+            return Response({"id": pk})
+
+    return routers, ProjectViewSet
+
+
+@pytest.mark.parametrize("trailing_slash", ["/", "/?"])
+def test_drf_router_route(env, _drf_settings, trailing_slash):
+    routers, ProjectViewSet = _drf()
+    router = routers.SimpleRouter(trailing_slash=trailing_slash)
+    router.register("projects", ProjectViewSet, basename="project")
+
+    h, s, cap = env(urlpatterns=[path("api/", include(router.urls))])
+    s.trap("/api/projects/<int:pk>/").methods("GET")
+    with pytest.raises(RuntimeError, match="duplicates .*for GET"):
+        s.bootstrap()
+
+    h, s, cap = env(urlpatterns=[path("api/", include(router.urls))])
+    s.trap("/api/projects/<int:pk>/").methods("DELETE")
+    s.bootstrap()
+    c = client(h)
+    r = c.get("/api/projects/7/", headers={"accept": "application/json"})
+    assert r.status_code == 200 and r.get_json() == {"id": "7"}
+    assert c.delete("/api/projects/7/").status_code == 401
+    assert len(trap_hits(cap)) == 1
+
+
+def test_drf_default_router_conflict(env, _drf_settings):
+    routers, ProjectViewSet = _drf()
+    router = routers.DefaultRouter()
+    router.register("projects", ProjectViewSet, basename="project")
+    h, s, cap = env(urlpatterns=[path("", include(router.urls))])
+    s.trap("/projects/")
+    with pytest.raises(RuntimeError, match="duplicates"):
+        s.bootstrap()
+
+
+def test_conflict_on_first_request_is_logged_not_a_500(env, caplog):
+    """Without an explicit bootstrap() the conflict surfaces on the first request:
+    the conflicting trap is skipped and logged, and the app keeps serving."""
+    h, s, cap = env()
+    s.trap("/items")
+    s.trap("/admin/backup")
+    c = client(h)
+    with caplog.at_level("ERROR"):
+        assert c.get("/items").status_code == 200
+        assert c.get("/items").status_code == 200
+    assert [r.getMessage() for r in caplog.records if "duplicates" in r.getMessage()] == [
+        "trappsec error: trap /items duplicates the existing route /items, whose view does not "
+        "say which methods it serves; move the trap or use a class-based view. "
+        "The trap is not installed."
+    ]
+    assert c.get("/admin/backup").status_code == 401
+
+
+def test_failed_strict_bootstrap_does_not_install_watches_twice(env):
+    h, s, cap = env()
+    s.trap("/items")
+    s.watch("/items").query("debug")
+    with pytest.raises(RuntimeError):
+        s.bootstrap()
+    assert client(h).get("/items?debug=1").status_code == 200
+    assert len(watch_events(cap)) == 1

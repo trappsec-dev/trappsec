@@ -1,18 +1,210 @@
+from contextvars import ContextVar
 from importlib import import_module
 import io
+import itertools
+import re
 import threading
 import uuid
 from urllib.parse import urlencode
 
 from django.http import HttpResponse, HttpResponseNotAllowed, QueryDict
+from django.urls import URLPattern, URLResolver, get_resolver
+from django.urls.resolvers import RoutePattern
 from django.utils.datastructures import MultiValueDict
+from django.utils.regex_helper import normalize
 from django.views.decorators.csrf import csrf_exempt
 
 from . import _jsonbody
 
 
 class TrapConflictError(RuntimeError):
-    """A trap path exactly duplicates an existing application route."""
+    """A trap would answer a method that an existing application route serves."""
+
+
+# Method of the request being routed: Django URL patterns are method-agnostic, so
+# a trap overlapping a real route reads it to decline the methods it does not own.
+_request_method = ContextVar("trappsec_request_method", default=None)
+
+
+class _TrapURLPattern(URLPattern):
+    """A trap route. With ``only_methods`` set it matches only those methods."""
+
+    def __init__(self, pattern, callback, only_methods=None):
+        super().__init__(pattern, callback)
+        self.only_methods = only_methods
+
+    def resolve(self, path):
+        if self.only_methods is not None:
+            method = _request_method.get()
+            if method is not None and method.upper() not in self.only_methods:
+                return None
+        return super().resolve(path)
+
+
+def _walk_routes(resolver, prefix="", _ids=None):
+    """Yield (full regex, callback) for every endpoint below ``resolver``."""
+    ids = _ids if _ids is not None else itertools.count()
+    for entry in resolver.url_patterns:
+        try:
+            part = entry.pattern.regex.pattern
+        except Exception:
+            continue
+        part = part[1:] if part.startswith("^") else part
+        # Group names repeat across include() levels; make them unique.
+        part = re.sub(r"\(\?P<(\w+)>", lambda m: "(?P<%s_%d>" % (m.group(1), next(ids)), part)
+        if isinstance(entry, URLResolver):
+            yield from _walk_routes(entry, prefix + part, ids)
+        elif isinstance(entry, URLPattern):
+            yield "^" + prefix + part, entry.callback
+
+
+_PLACEHOLDER = re.compile(r"%\(\w+\)s")
+_PROBE = "trappsec-probe-" + uuid.uuid4().hex
+_SAMPLES = ("1", "trappsec", "00000000-0000-4000-8000-000000000000")
+
+
+def _shapes(regex):
+    """Structural shapes of a route regex: lists of segments where a segment is
+    ("lit", text), ("param",) for a whole-segment parameter, or ("mixed", text)."""
+    try:
+        possibilities = normalize(regex)
+    except Exception:
+        return []
+    shapes = []
+    for fmt, _params in possibilities:
+        segments = []
+        for seg in fmt.split("/"):
+            bare = _PLACEHOLDER.sub("\0", seg).replace("%%", "%")
+            if bare == "\0":
+                segments.append(("param",))
+            elif "\0" in bare:
+                segments.append(("mixed", bare))
+            else:
+                segments.append(("lit", bare))
+        shapes.append(segments)
+    return shapes
+
+
+def _mixed_matches(mixed, text):
+    pattern = ".+?".join(re.escape(part) for part in mixed.split("\0"))
+    return re.fullmatch(pattern, text) is not None
+
+
+def _samples(shape, limit=4):
+    """Parameter values to try: every combination for the first ``limit`` parameters."""
+    n = sum(seg[0] == "param" for seg in shape)
+    for combo in itertools.product(_SAMPLES, repeat=min(n, limit)):
+        yield combo + (_SAMPLES[0],) * (n - len(combo))
+
+
+def _matches(compiled, path):
+    return compiled.search(path) is not None
+
+
+def _concrete(shape, values, probe_at=None):
+    """A concrete path (no leading slash) for ``shape``, parameters taken from
+    ``values`` and the segment at ``probe_at`` replaced by a random probe."""
+    values = iter(values)
+    out = []
+    for i, seg in enumerate(shape):
+        if seg[0] == "param":
+            value = next(values)
+        else:
+            value = seg[1] if seg[0] == "lit" else seg[1].replace("\0", "1")
+        out.append(_PROBE if i == probe_at else value)
+    return "/".join(out)
+
+
+def _is_wildcard_over(trap, route_rx, positions):
+    """Whether the route accepts the trap's URL, and any other value at one of the
+    trap's literal ``positions`` too (a genuine wildcard/catch-all, R2). None when
+    the route never accepts the trap's URL."""
+    for values in _samples(trap):
+        if _matches(route_rx, _concrete(trap, values)):
+            return any(_matches(route_rx, _concrete(trap, values, i)) for i in positions)
+    return None
+
+
+def _overlap(trap, trap_rx, route, route_rx):
+    """Whether the real route ``route`` (a shape) shares URLs with the trap without
+    being a wildcard/catch-all over it. Converters and parameter names are ignored:
+    ``<int:pk>`` and ``<str:id>`` in the same place are the same route."""
+    if len(trap) != len(route):
+        # Different segment counts: a multi-segment parameter (``<path:>``, ``.*``)
+        # or an optional trailing slash (``/?``). A real catch-all loses to the trap
+        # (R2); a trap whose own path parameter swallows the real route shadows it.
+        literals = [i for i, seg in enumerate(trap) if seg[0] != "param"]
+        wildcard = _is_wildcard_over(trap, route_rx, literals)
+        if wildcard is not None:
+            return not wildcard
+        return any(_matches(trap_rx, _concrete(route, s)) for s in _samples(route))
+
+    trap_wider, route_wider = False, []
+    for i, (t, r) in enumerate(zip(trap, route)):
+        if t == r or (t[0] == r[0] == "param"):
+            continue
+        if t[0] == "param":
+            trap_wider = True                     # the trap swallows this literal
+        elif r[0] == "param":
+            route_wider.append(i)
+        elif t[0] == "lit" and r[0] == "mixed":
+            if not _mixed_matches(r[1], t[1]):
+                return False
+            route_wider.append(i)
+        elif t[0] == "mixed" and r[0] == "lit":
+            if not _mixed_matches(t[1], r[1]):
+                return False
+            trap_wider = True
+        else:
+            return False                          # different literals: disjoint
+    if trap_wider or not route_wider:
+        return True                               # trap shadows (part of) the route
+
+    # The route has a parameter where the trap has a literal. It is a genuine
+    # wildcard (the trap wins, R2) only if it also accepts any other value there;
+    # a narrow converter (``<int:pk>`` for a trap at ``/x/5``) means the trap
+    # would take over a real URL. A route that never accepts the literal is disjoint.
+    return _is_wildcard_over(trap, route_rx, route_wider) is False
+
+
+def _overlapping_routes(trap_path, routes):
+    """The real routes (display, callback) a trap at ``trap_path`` would shadow."""
+    trap_regex = RoutePattern(trap_path.lstrip("/"), is_endpoint=True).regex
+    trap_shapes = _shapes(trap_regex.pattern)
+    found = []
+    for regex, callback in routes:
+        try:
+            route_rx = re.compile(regex)
+        except re.error:
+            continue
+        for shape in _shapes(regex):
+            if any(_overlap(t, trap_regex, shape, route_rx) for t in trap_shapes):
+                found.append((_display(shape), callback))
+                break
+    return found
+
+
+def _display(shape):
+    return "/".join(
+        seg[1].replace("\0", "<param>") if seg[0] != "param" else "<param>" for seg in shape)
+
+
+def _served_methods(callback):
+    """Upper-case HTTP methods a class-based view (Django or DRF) answers, or None."""
+    cls = getattr(callback, "view_class", None) or getattr(callback, "cls", None)
+    if cls is None:
+        return None
+    actions = getattr(callback, "actions", None)  # DRF ViewSet: {"get": "list", ...}
+    if actions:
+        served = {m for m in actions}
+        if hasattr(cls, "options"):
+            served.add("options")
+    else:
+        names = getattr(cls, "http_method_names", ())
+        served = {m for m in names if hasattr(cls, m)}
+    if "get" in served:
+        served.add("head")                        # View.setup() maps HEAD to GET
+    return {m.upper() for m in served}
 
 
 def _scalar_dict(multi):
@@ -27,6 +219,7 @@ class DjangoIntegration:
         self.watch_map = {}
         self._is_async = False
         self._bootstrapped = False
+        self._watches_installed = False
         self._init_lock = threading.RLock()
 
         if not self.ts.identity.ip:
@@ -40,15 +233,23 @@ class DjangoIntegration:
 
     # ------------------------------------------------------------------ public
 
-    def bootstrap(self):
-        """Install traps and watches. Idempotent and thread-safe."""
+    def bootstrap(self, strict=True):
+        """Install traps and watches. Idempotent and thread-safe.
+
+        Raises ``TrapConflictError`` (installing no trap) when a trap would shadow
+        a real route; call it after declaring traps (e.g. at the end of wsgi.py /
+        asgi.py) so a conflict stops the server at startup. The lazy first-request
+        bootstrap passes ``strict=False``: it logs each conflict and keeps serving.
+        """
         if self._bootstrapped:
             return
         with self._init_lock:
             if self._bootstrapped:
                 return
-            self.setup_watches()
-            self._register_traps()
+            if not self._watches_installed:
+                self.setup_watches()
+                self._watches_installed = True
+            self._register_traps(strict)
             self._bootstrapped = True
 
     def setup_watches(self):
@@ -70,77 +271,89 @@ class DjangoIntegration:
 
     # ------------------------------------------------------------------- traps
 
-    @staticmethod
-    def _conflicting_route(urlconf, trap_path):
-        """The existing route a trap path would exactly duplicate, or None.
+    def _register_traps(self, strict=True):
+        """Prepend trap patterns to the root URLconf.
 
-        The path is resolved against the URLconf, which covers re_path, converters
-        and include(). A route that also matches a different value in the trap's
-        last segment is a wildcard/catch-all (the trap simply takes priority over
-        it, R2) and not a duplicate.
+        A trap overlapping a real route (``_overlapping_routes``) only matches the
+        methods it declares, so every other method falls through to the real view.
+        It fails loud (R20) when the real view serves one of the trap's methods, or
+        when its methods cannot be read (a plain function view). With ``strict``
+        false (lazy first-request bootstrap) conflicting traps are logged and
+        skipped instead, so a bad trap never takes the application down.
         """
-        from django.urls import Resolver404, resolve
-
-        def lookup(p):
-            try:
-                return resolve(p, urlconf=urlconf)
-            except Resolver404:
-                return None
-
-        match = lookup("/" + trap_path.lstrip("/"))
-        if match is None or getattr(match.func, "_trappsec_trap", False):
-            return None
-        segments = trap_path.strip("/").split("/")
-        segments[-1] = "trappsec-probe-" + uuid.uuid4().hex
-        probe = lookup("/" + "/".join(segments))
-        if probe is not None and probe.func is match.func and probe.route == match.route:
-            return None
-        return match
-
-    def _register_traps(self):
         from django.conf import settings
-        from django.urls import path, clear_url_caches
+        from django.urls import clear_url_caches
 
         urlconf = import_module(settings.ROOT_URLCONF)
-        traps = self.ts.traps
+        installed = [
+            route for route in _walk_routes(get_resolver(settings.ROOT_URLCONF))
+            if not getattr(route[1], "_trappsec_trap", False)
+        ]
 
-        for trap in traps:
-            if self._conflicting_route(settings.ROOT_URLCONF, trap["path"]) is not None:
-                raise TrapConflictError(
-                    "trappsec error: trap %s duplicates an existing route." % trap["path"]
-                )
+        plan, errors = [], []
+        for trap in self.ts.traps:
+            methods = {m.upper() for m in trap["methods"]}
+            overlaps = _overlapping_routes(trap["path"], installed)
+            problem = None
+            for display, callback in overlaps:
+                served = _served_methods(callback)
+                if served is None:
+                    problem = (
+                        "trap %s duplicates the existing route /%s, whose view does not say "
+                        "which methods it serves; move the trap or use a class-based view"
+                        % (trap["path"], display))
+                elif served & methods:
+                    problem = (
+                        "trap %s duplicates the existing route /%s for %s"
+                        % (trap["path"], display, ", ".join(sorted(served & methods))))
+                if problem:
+                    break
+            if problem:
+                errors.append("trappsec error: " + problem + ".")
+            else:
+                plan.append((trap, methods if overlaps else None))
 
-        trap_patterns = []
-        for trap in traps:
-            def make_view(trap_config):
-                @csrf_exempt
-                def trap_view(request, *_args, **_kwargs):  # path arguments are ignored
-                    if request.method not in trap_config["methods"]:
-                        return HttpResponseNotAllowed(trap_config["methods"])
-                    try:
-                        body, cfg = self.ts._trigger_trap_event(request, trap_config)
-                    except Exception as e:
-                        self.ts.logger.error("trappsec trap handling failed: %s", e)
-                        body, cfg = self.ts._trap_fallback(trap_config)
-                    if isinstance(body, str):
-                        body = body.encode("utf-8")
-                    return HttpResponse(
-                        body,
-                        status=cfg["status_code"],
-                        content_type=cfg["mime_type"],
-                    )
-                trap_view.__name__ = "trappsec_trap"
-                trap_view._trappsec_trap = True
-                return trap_view
-            trap_patterns.append(
-                path(trap["path"].lstrip("/"), make_view(trap))
+        if errors:
+            if strict:
+                raise TrapConflictError(" ".join(errors))
+            for message in errors:
+                self.ts.logger.error("%s The trap is not installed.", message)
+
+        trap_patterns = [
+            _TrapURLPattern(
+                RoutePattern(trap["path"].lstrip("/"), is_endpoint=True),
+                self._make_trap_view(trap),
+                only_methods,
             )
+            for trap, only_methods in plan
+        ]
 
         # Prepend so traps take priority over application routes
         urlconf.urlpatterns = trap_patterns + list(urlconf.urlpatterns)
 
         # Invalidate Django's cached URL resolver so the new patterns are picked up
         clear_url_caches()
+
+    def _make_trap_view(self, trap_config):
+        @csrf_exempt
+        def trap_view(request, *_args, **_kwargs):  # path arguments are ignored
+            if request.method not in trap_config["methods"]:
+                return HttpResponseNotAllowed(trap_config["methods"])
+            try:
+                body, cfg = self.ts._trigger_trap_event(request, trap_config)
+            except Exception as e:
+                self.ts.logger.error("trappsec trap handling failed: %s", e)
+                body, cfg = self.ts._trap_fallback(trap_config)
+            if isinstance(body, str):
+                body = body.encode("utf-8")
+            return HttpResponse(
+                body,
+                status=cfg["status_code"],
+                content_type=cfg["mime_type"],
+            )
+        trap_view.__name__ = "trappsec_trap"
+        trap_view._trappsec_trap = True
+        return trap_view
 
     # ----------------------------------------------------------------- startup
 
@@ -155,9 +368,7 @@ class DjangoIntegration:
         def ensure_bootstrapped():
             if not self._bootstrapped:
                 try:
-                    self.bootstrap()
-                except TrapConflictError:
-                    raise
+                    self.bootstrap(strict=False)
                 except Exception as e:
                     self.ts.logger.error("trappsec bootstrap failed: %s", e)
                     self._bootstrapped = True
@@ -171,7 +382,11 @@ class DjangoIntegration:
         if self._is_async:
             async def wrapped_chain(request):
                 ensure_bootstrapped()
-                return await original_chain(request)
+                token = _request_method.set(request.method)
+                try:
+                    return await original_chain(request)
+                finally:
+                    _request_method.reset(token)
             try:
                 markcoroutinefunction(wrapped_chain)
             except Exception:
@@ -179,7 +394,11 @@ class DjangoIntegration:
         else:
             def wrapped_chain(request):
                 ensure_bootstrapped()
-                return original_chain(request)
+                token = _request_method.set(request.method)
+                try:
+                    return original_chain(request)
+                finally:
+                    _request_method.reset(token)
 
         self.app._middleware_chain = wrapped_chain
 

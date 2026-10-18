@@ -99,7 +99,7 @@ The API is the same in every framework; these are the places where the framework
 | Flask | `flask.request` | by trappsec | Flask-WTF `CSRFProtect`: exempt automatically | |
 | FastAPI / Starlette | `starlette.requests.Request` | by trappsec | starlette-csrf: route traps around it with `ts.is_trap` ([example](/api/#is_trap--istrap)) | |
 | Litestar | `litestar.Request` | by trappsec | `CSRFConfig`: exempt automatically | bodies over 10 MiB pass uninspected; 2.13+ |
-| Django | `django.http.HttpRequest` | by trappsec | `CsrfViewMiddleware`: exempt automatically | WSGI and ASGI |
+| Django | `django.http.HttpRequest` | by trappsec | `CsrfViewMiddleware`: exempt automatically | WSGI and ASGI; traps on URLs a real route serves: [see below](#django-traps-on-real-urls) |
 | Sanic | `sanic.Request` | by trappsec | no built-in CSRF; skip third-party middleware with `ts.is_trap` | 24.6+ |
 | Tornado | `tornado.httputil.HTTPServerRequest` (`self.request`) | by trappsec | `xsrf_cookies`: exempt automatically | |
 | Express | `req` | your parser (`express.json()`, multer, …), app- or route-level | csurf / csrf-csrf: skip with `ts.is_trap(req)`, registered at app level | sub-routers (also under parameterised mounts) are covered; mounted sub-apps (`app.use('/x', express())`) are not, and a warning names them: install trappsec on the sub-app |
@@ -114,5 +114,16 @@ The API is the same in every framework; these are the places where the framework
 | Echo | `*echo.Context` | by trappsec (up to `SetMaxBodyBytes`, 1 MiB) | `middleware.CSRF`: `Skipper: app.IsTrap` | serve through `app` (`app.Start`, `echo.StartConfig{...}.Start(ctx, app)`, or `app` as the handler); requests rejected by earlier middleware are reported but not stripped; Echo v4 is not supported, and Echo before 5.2 has a route-protection bypass (GO-2026-6293) |
 
 In Go, every adapter's `App.IsTrap` takes that framework's request type, as in the table; `app.Sentry.IsTrap(req any)` accepts any of them. Every adapter has `InstallSentry(router, service, environment)` and `Use(sentry, router)` (to wire a Sentry you created with `trappsec.NewSentry`).
+
+### Django: traps on real URLs
+
+Django URL patterns match paths, not methods, so a trap on a URL that a real route also serves would answer that URL for every method. trappsec compares each trap with every route in `ROOT_URLCONF` (including `include()`, `re_path` and DRF routers) by shape, ignoring converters and parameter names: `/projects/<str:id>/` and `path("projects/<int:pk>/", ...)` are the same URL. A trap that overlaps a real route:
+
+* answers only the methods it declares; every other method falls through to the real view, with all middleware (CSRF included) applied as usual. A `DELETE` trap on a `GET` endpoint leaves `GET`, `HEAD` and `OPTIONS` untouched.
+* fails at bootstrap with `TrapConflictError` when the real view serves one of the trap's methods (for a class-based view, the methods it defines; for a DRF viewset, its action map; `HEAD` with `GET`, and `OPTIONS` when the view defines it), or when the real view is a plain function view, whose methods trappsec cannot read.
+
+A trap still wins over a genuine wildcard or catch-all (`<slug:slug>`, `<path:rest>`, `re_path(r"^.*$")`) for every method. A route with a narrower converter that accepts the trap's literal (a trap at `/legacy/5` and `legacy/<int:pk>`) is an overlap, not a wildcard.
+
+Call `ts.bootstrap()` after declaring traps (at the end of `wsgi.py` or `asgi.py`) so a conflict stops the server at startup. Without it, bootstrap runs on the first request: a conflicting trap is then logged as an error and not installed, and the application keeps serving.
 
 > Missing your favorite framework? [Raise a request here](https://github.com/trappsec-dev/trappsec/discussions/new?category=feature-requests).
