@@ -1,3 +1,5 @@
+// Test fixture for the trappsec e2e suite, not a lure pattern to copy.
+// See examples/README.md.
 
 const API_BASE = '';
 
@@ -5,7 +7,7 @@ const getHeaders = () => {
     const headers = {
         'Content-Type': 'application/json'
     };
-    const userId = localStorage.getItem('trappsec_user_id');
+    const userId = localStorage.getItem('session_user');
     if (userId) {
         headers['x-user-id'] = userId;
     }
@@ -15,7 +17,7 @@ const getHeaders = () => {
 const handleResponse = async (response) => {
     if (!response.ok) {
         if (response.status === 401) {
-            localStorage.removeItem('trappsec_user_id');
+            localStorage.removeItem('session_user');
             window.location.reload();
             throw new Error('Session expired');
         }
@@ -72,8 +74,7 @@ export const api = {
     },
 
     /**
-     * INTERNAL DEBUG: Get system deployment config
-     * @deprecated Should be removed in prod
+     * Get deployment config
      */
     async getSystemConfig() {
         const response = await fetch(`${API_BASE}/deployment/config`, {
@@ -84,8 +85,7 @@ export const api = {
     },
 
     /**
-     * INTERNAL DEBUG: Get system performance metrics
-     * @deprecated Should be removed in prod
+     * Get deployment metrics
      */
     async getSystemMetrics() {
         const response = await fetch(`${API_BASE}/deployment/metrics`, {

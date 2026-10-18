@@ -44,14 +44,19 @@ Hits with an identified user are `alert`s; hits without one are `signal`s (see [
 
 A determined attacker may try to tell traps from real routes. trappsec reduces the signals, but you control the rest:
 
-*   **Traps are real framework routes**, not middleware shortcuts, so routing behavior (405 vs 404, trailing slashes, HEAD/OPTIONS handling) matches your real endpoints. Shadowing and CSRF protection never change the decoy response.
+*   **Traps are framework routes where the framework allows it**, not middleware shortcuts, so most routing behavior follows your framework. It is not identical to your real endpoints in every case; probe your decoys with wrong methods, trailing slashes, `HEAD` and `OPTIONS` and compare them with real siblings. Known differences:
+    *   **Go `handler` package (chi, gorilla/mux, any `http.Handler`)**: traps are not router routes, so a method the trap does not declare gets the router's 404 where a real route would answer 405. Declare every method a real route at that path would plausibly accept ([Supported Frameworks](/supported-frameworks/)).
+    *   **Django**: a method the trap does not declare gets an empty 405 (and fires no event), whereas a real view behind authentication would usually answer 401 or 403 first.
+    *   **A trap that adds a method to an existing real path**: the framework's 405 answer can reveal it. In Starlette and FastAPI the `allow` header of a 405 lists only the trap's methods. In Express, when the real routes live in a mounted router, the automatic `OPTIONS` answer's `Allow` header lists only the trap's methods.
+
+    Shadowing and CSRF protection never change the decoy response.
 *   **Unauthenticated requests get the decoy's `if_unauthenticated` response** (default `401`). This looks like any protected route and nudges the attacker to authenticate, which turns a `signal` into an `alert`.
-*   **Make responses plausible.** Use realistic status codes, bodies and headers. Empty `{}` on every trap is a tell; use [templates](/api/#template) and dynamic bodies.
+*   **Make responses plausible.** Use realistic status codes, bodies and headers. Empty `{}` on every trap is a tell, and so is a body that changes on every call or looks too good to be true; copy the shapes your real endpoints return, using [templates](/api/#template) and dynamic bodies derived deterministically from the request.
 *   **Keep latency comparable.** Delivery is asynchronous so webhooks never add latency; avoid slow dynamic bodies.
-*   **Do not give traps away by naming.** Names like `/admin/honeypot` defeat the purpose. See [Best Practices](/best-practices/).
+*   **Do not give traps away by naming.** Names like `/admin/honeypot` defeat the purpose, and so do names copied from docs or examples, which many deployments share. See [Baiting & Lures](/baiting-and-lures/) and [Best Practices](/best-practices/).
 *   **Honey fields must be stripped.** trappsec removes every occurrence of a watched field before your handler runs, so it can never change real behavior and cannot be used to probe your logic.
 *   **Source is public.** trappsec is open source; assume attackers know the technique. Detection value comes from realistic, application-specific decoys, not secrecy of the library.
-*   **Error behavior.** Callback failures never change the response; the request proceeds as if trappsec were not there.
+*   **Error behavior.** A failing `identify_user`, `override_source_ip` or callable default falls back without breaking the request ([Callback safety](/api/#callback-safety)): an attacker who is not identified gets the unauthenticated decoy response. A failing dynamic trap body is different: the trap answers `{}` with its configured status, which is easy to spot. Keep dynamic bodies simple, test them, and watch your logs for the error trappsec writes when one fails.
 
 ## Security of the alert channel
 

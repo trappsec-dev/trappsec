@@ -55,7 +55,7 @@ Ghost endpoints that sit outside your real logic but mirror your authentic API s
 
 ### Honey Fields
 
-Non-functional parameters embedded within legitimate API payloads. You bait attackers by including them as read-only attributes in GET responses — for example, `"is_admin": false`. If an attacker tries to flip that field in a POST, trappsec silently fires an alert while the application logic continues normally.
+Non-functional parameters embedded within legitimate API payloads. You bait attackers by watching values the real client already reads in GET responses, so the field looks like ordinary mass-assignment bait rather than something planted. If an attacker tries to flip that field in a POST, trappsec silently fires an alert while the application logic continues normally.
 
 ### Identity Attribution
 

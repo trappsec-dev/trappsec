@@ -27,8 +27,8 @@ const app = {
 };
 
 const state = {
-    isAuthenticated: () => !!localStorage.getItem('trappsec_user_id'),
-    currentUser: () => localStorage.getItem('trappsec_user_id')
+    isAuthenticated: () => !!localStorage.getItem('session_user'),
+    currentUser: () => localStorage.getItem('session_user')
 };
 
 const showToast = (message, type = 'success') => {
@@ -78,7 +78,7 @@ const ui = {
             e.preventDefault();
             const username = app.inputs.loginUsername.value.trim();
             if (username) {
-                localStorage.setItem('trappsec_user_id', username);
+                localStorage.setItem('session_user', username);
                 this.showDashboard();
                 showToast(`Welcome back, ${username}!`);
             }
@@ -98,7 +98,7 @@ const ui = {
         });
 
         app.buttons.logout.addEventListener('click', () => {
-            localStorage.removeItem('trappsec_user_id');
+            localStorage.removeItem('session_user');
             this.showAuth();
         });
         // Dashboard Actions
@@ -111,7 +111,7 @@ const ui = {
                 await api.updateProfile({ name: username });
 
                 // Update stored identity and UI
-                localStorage.setItem('trappsec_user_id', username);
+                localStorage.setItem('session_user', username);
                 app.display.headerUsername.textContent = username;
 
                 showToast('Profile updated successfully');
