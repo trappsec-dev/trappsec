@@ -28,6 +28,7 @@ class FastAPIIntegration(StarletteIntegration):
 
                 return Response(response_body,
                     status_code=response_config["status_code"],
+                    headers=response_config.get("headers"),
                     media_type=response_config["mime_type"])
 
             return endpoint

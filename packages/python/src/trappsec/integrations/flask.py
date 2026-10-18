@@ -75,6 +75,7 @@ class FlaskIntegration:
                 return Response(
                     response_body,
                     status=response_config["status_code"],
+                    headers=response_config.get("headers"),
                     mimetype=response_config["mime_type"])
             return endpoint
 

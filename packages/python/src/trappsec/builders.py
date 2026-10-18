@@ -3,6 +3,19 @@ import copy
 
 NO_DEFAULT = object()
 
+def _check_headers(label: str, headers) -> dict:
+    """Validated copy of a response ``headers`` mapping (str names and values, no CR/LF)."""
+    if not isinstance(headers, typing.Mapping):
+        raise TypeError(f"{label}: `headers` must be a mapping of header name to value.")
+    out = {}
+    for name, value in headers.items():
+        if not isinstance(name, str) or not isinstance(value, str):
+            raise TypeError(f"{label}: header names and values must be strings, got {name!r}: {value!r}.")
+        if not name or any(c in name for c in "\r\n:") or any(c in value for c in "\r\n"):
+            raise ValueError(f"{label}: invalid header {name!r}.")
+        out[name] = value
+    return out
+
 
 def _copy(value):
     try:
@@ -22,6 +35,7 @@ class TrapBuilder:
         # order of configuration calls does not matter.
         self._specs = {"authenticated": {}, "unauthenticated": {}}
         self._templates = {}
+        self._hook = None
 
     def methods(self, *args):
         self._methods = list(args)
@@ -32,10 +46,10 @@ class TrapBuilder:
         self._intent = intent
         return self
 
-    def _respond(self, key: str, status: int = None, body: typing.Union[dict, str, typing.Callable] = None, mime_type: str = None, template: str = None):
+    def _respond(self, key: str, status: int = None, body: typing.Union[dict, str, typing.Callable] = None, mime_type: str = None, template: str = None, headers: typing.Mapping[str, str] = None):
         if template is not None:
-            if any(arg is not None for arg in (status, body, mime_type)):
-                raise TypeError("response_builder: `template` cannot be used together with `status`, `body`, or `mime_type`.")
+            if any(arg is not None for arg in (status, body, mime_type, headers)):
+                raise TypeError("response_builder: `template` cannot be used together with `status`, `body`, `mime_type`, or `headers`.")
 
             tmpl = self.ts._templates.get(template)
             if tmpl is None:
@@ -52,22 +66,38 @@ class TrapBuilder:
                 spec["response_body"] = body
             if mime_type is not None:
                 spec["mime_type"] = mime_type
+            if headers is not None:
+                spec["headers"] = _check_headers("response_builder", headers)
 
         return self
 
-    def respond(self, status: int = None, body: typing.Union[dict, str, typing.Callable] = None, mime_type: str = None, template: str = None):
-        self._respond("authenticated", status, body, mime_type, template)
+    def respond(self, status: int = None, body: typing.Union[dict, str, typing.Callable] = None, mime_type: str = None, template: str = None, headers: typing.Mapping[str, str] = None):
+        self._respond("authenticated", status, body, mime_type, template, headers)
         return self
 
-    def if_unauthenticated(self, status: int = None, body: typing.Union[dict, str, typing.Callable] = None, mime_type: str = None, template: str = None):
-        self._respond("unauthenticated", status, body, mime_type, template)
+    def if_unauthenticated(self, status: int = None, body: typing.Union[dict, str, typing.Callable] = None, mime_type: str = None, template: str = None, headers: typing.Mapping[str, str] = None):
+        self._respond("unauthenticated", status, body, mime_type, template, headers)
+        return self
+
+    def respond_with(self, hook: typing.Callable):
+        """Per-request response hook, called as ``hook(request, ctx)`` on every hit.
+
+        ``ctx`` is ``{"authenticated", "user", "role"}``. Return ``None`` to send
+        the static response for that auth state, or a dict with any of
+        ``status``, ``body``, ``mime_type`` and ``headers`` to override it
+        (``headers`` are merged into the static ones). The hook must be
+        synchronous; if it fails, the static response is sent.
+        """
+        if hook is not None and not callable(hook):
+            raise TypeError("respond_with: `hook` must be callable or None.")
+        self._hook = hook
         return self
 
     def _resolve(self, key: str) -> dict:
         if key in self._templates:
             return _copy(self._templates[key])
         cfg = _copy(self.ts.default_responses[key])
-        cfg.update(self._specs[key])
+        cfg.update(_copy(self._specs[key]))
         return cfg
 
     def build(self):
@@ -77,6 +107,10 @@ class TrapBuilder:
             "intent": self._intent,
             "response.authenticated": self._resolve("authenticated"),
             "response.unauthenticated": self._resolve("unauthenticated"),
+            # Sent when the trap's own body cannot be produced (R16).
+            "fallback.authenticated": _copy(self.ts.default_responses["authenticated"]),
+            "fallback.unauthenticated": _copy(self.ts.default_responses["unauthenticated"]),
+            "response_hook": self._hook,
         }
 
 

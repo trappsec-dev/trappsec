@@ -421,3 +421,20 @@ class TestTrapFailureDoesNotDisableWatches(SentryCase):
         integ.inject_traps = boom
         assert json.loads(self.fetch("/echo?x=evil&a=1").body)["x_arg"] is None
         assert integ._bootstrapped and len(self.hits("trappsec.watch_hit")) == 1
+
+
+class TestTrapHeadersResponseHookAndFallback(SentryCase):
+    watches = None
+
+    @staticmethod
+    def traps(s):
+        from _trap_mirror import configure_mirror
+        configure_mirror(s)
+
+    def test_mirror(self):
+        from _trap_mirror import check_mirror
+
+        def get(path, headers):
+            r = self.fetch(path, headers=headers)
+            return r.code, r.headers, r.body
+        check_mirror(get)

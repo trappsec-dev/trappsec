@@ -333,3 +333,13 @@ def test_failing_trap_event_answers_with_the_traps_own_unauthenticated_response(
     s._trigger_trap_event = boom
     _, r = app.test_client.get("/t403")
     assert r.status == 403 and r.json == {"no": 1}
+
+
+def test_trap_headers_response_hook_and_fallback():
+    from _trap_mirror import configure_mirror, check_mirror
+    app, s, cap = make_app(configure_mirror)
+
+    def get(path, headers):
+        _, r = app.test_client.get(path, headers=headers)
+        return r.status, r.headers, r.body
+    check_mirror(get)

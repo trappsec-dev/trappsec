@@ -356,3 +356,15 @@ def test_single_occurrence_fields_are_scalars():
     # a list default does not match a field that occurred once (as in Go/Node/Litestar)
     fields = [f["field"] for f in watch_events(cap)[0]["found_fields"]]
     assert fields == ["role"]
+
+
+def test_trap_headers_response_hook_and_fallback():
+    from _trap_mirror import configure_mirror, check_mirror
+    app, sentry, cap = make()
+    configure_mirror(sentry)
+    c = TestClient(app)
+
+    def get(path, headers):
+        r = c.get(path, headers=headers)
+        return r.status_code, r.headers, r.content
+    check_mirror(get)

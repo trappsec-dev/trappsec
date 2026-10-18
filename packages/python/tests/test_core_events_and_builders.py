@@ -18,6 +18,10 @@ class _Ctx:
         self.events = []
         self.service, self.environment, self.hostname = "svc", "dev", "h"
         self._base_event = lambda name, req: Sentry._base_event(self, name, req)
+        self.logger = Sentry.__init__.__globals__["_logger"]
+        self._run_response_hook = lambda req, hook, c: Sentry._run_response_hook(self, req, hook, c)
+        self._encode_body = lambda req, cfg: Sentry._encode_body(self, req, cfg)
+        self._response = Sentry._response
 
     def _trigger(self, event):
         self.events.append(event)

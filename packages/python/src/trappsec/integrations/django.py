@@ -124,11 +124,14 @@ class DjangoIntegration:
                         body, cfg = self.ts._trap_fallback(trap_config)
                     if isinstance(body, str):
                         body = body.encode("utf-8")
-                    return HttpResponse(
+                    response = HttpResponse(
                         body,
                         status=cfg["status_code"],
                         content_type=cfg["mime_type"],
                     )
+                    for name, value in (cfg.get("headers") or {}).items():
+                        response[name] = value
+                    return response
                 trap_view.__name__ = "trappsec_trap"
                 trap_view._trappsec_trap = True
                 return trap_view

@@ -416,3 +416,15 @@ def test_asgi_handler_with_watches_and_traps(env):
     finally:
         ctx.disable()
         clear_url_caches()
+
+
+def test_trap_headers_response_hook_and_fallback(env):
+    from _trap_mirror import configure_mirror, check_mirror
+    h, s, cap = env()
+    configure_mirror(s)
+    c = client(h)
+
+    def get(path, headers):
+        r = c.get(path, headers=headers)
+        return r.status_code, r.headers, r.get_data()
+    check_mirror(get)

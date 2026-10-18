@@ -133,7 +133,8 @@ class LitestarIntegration:
                     body = json.dumps(body, default=str, separators=(",", ":"))
                 if isinstance(body, str):
                     body = body.encode("utf-8")  # bytes are sent verbatim for any media type
-                return Response(content=body, status_code=cfg["status_code"], media_type=cfg["mime_type"])
+                return Response(content=body, status_code=cfg["status_code"], media_type=cfg["mime_type"],
+                                headers=cfg.get("headers") or None)
 
             return trap_handler
 

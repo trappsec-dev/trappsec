@@ -82,6 +82,8 @@ def _make_trap_handler(trap, methods, ts):
                 body, cfg = ts._trap_fallback(trap)
             self.set_status(cfg["status_code"])
             self.set_header("Content-Type", cfg["mime_type"])
+            for name, value in (cfg.get("headers") or {}).items():
+                self.set_header(name, value)
             if not isinstance(body, (str, bytes)):
                 body = json.dumps(body, default=str, separators=(",", ":"))
             self.write(body)

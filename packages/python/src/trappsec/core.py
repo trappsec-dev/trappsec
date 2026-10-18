@@ -9,7 +9,7 @@ import logging
 from collections.abc import Mapping, MutableMapping
 
 from .handlers import LogHandler, _truncate_text, _reject_awaitable
-from .builders import TrapBuilder, WatchBuilder, NO_DEFAULT
+from .builders import TrapBuilder, WatchBuilder, NO_DEFAULT, _check_headers
 
 _logger = logging.getLogger("trappsec")
 
@@ -17,6 +17,9 @@ _MAX_STR = 1024
 _MAX_LIST = 20
 _MAX_DEPTH = 32  # containers deeper than this never match and are clipped
 _NESTED = "<nested>"
+# Never taken from configured headers: the framework computes them.
+_FRAMING_HEADERS = ("content-length", "transfer-encoding")
+_HOOK_KEYS = ("status", "body", "mime_type", "headers")
 
 
 def _is_number(v) -> bool:
@@ -172,6 +175,16 @@ def safe_value(v, _depth=1):
     return "<%s>" % type(v).__name__
 
 
+def _merge_headers(base, extra):
+    """``base`` with ``extra`` applied; names compare case-insensitively."""
+    out = dict(base or {})
+    for name, value in extra.items():
+        for existing in [k for k in out if k.lower() == name.lower()]:
+            del out[existing]
+        out[name] = value
+    return out
+
+
 class IdentityContext:
     def __init__(self):
         self.ip = None
@@ -279,23 +292,24 @@ class Sentry:
                 except Exception as e:
                     self.logger.error("error closing handler: %s", e)
     
-    def default_response(self, status: int = None, body: typing.Union[dict, str, typing.Callable] = None, mime_type: str = None, template: str = None):
+    def default_response(self, status: int = None, body: typing.Union[dict, str, typing.Callable] = None, mime_type: str = None, template: str = None, headers: typing.Mapping[str, str] = None):
         """Default response for authenticated requests to traps that do not call ``respond``.
 
         Same arguments as ``TrapBuilder.respond``: only the arguments you pass
         change the default, and ``template`` replaces it. Resolved at bootstrap,
-        so it may be called before or after declaring traps.
+        so it may be called before or after declaring traps. It is also the
+        response a trap falls back to when its own body callback fails.
         """
-        return self._set_default("authenticated", status, body, mime_type, template)
+        return self._set_default("authenticated", status, body, mime_type, template, headers)
 
-    def default_unauthenticated_response(self, status: int = None, body: typing.Union[dict, str, typing.Callable] = None, mime_type: str = None, template: str = None):
+    def default_unauthenticated_response(self, status: int = None, body: typing.Union[dict, str, typing.Callable] = None, mime_type: str = None, template: str = None, headers: typing.Mapping[str, str] = None):
         """Default response for unauthenticated requests to traps that do not call ``if_unauthenticated``."""
-        return self._set_default("unauthenticated", status, body, mime_type, template)
+        return self._set_default("unauthenticated", status, body, mime_type, template, headers)
 
-    def _set_default(self, key, status, body, mime_type, template):
+    def _set_default(self, key, status, body, mime_type, template, headers=None):
         if template is not None:
-            if any(arg is not None for arg in (status, body, mime_type)):
-                raise TypeError("default_response: `template` cannot be used together with `status`, `body`, or `mime_type`.")
+            if any(arg is not None for arg in (status, body, mime_type, headers)):
+                raise TypeError("default_response: `template` cannot be used together with `status`, `body`, `mime_type`, or `headers`.")
             tmpl = self._templates.get(template)
             if tmpl is None:
                 raise ValueError(f"default_response: template '{template}' not found.")
@@ -308,11 +322,16 @@ class Sentry:
             current["response_body"] = body
         if mime_type is not None:
             current["mime_type"] = mime_type
+        if headers is not None:
+            current["headers"] = _check_headers("default_response", headers)
         self.default_responses[key] = current
         return self
 
-    def template(self, name: str, status_code: int, response_body: dict, mime_type: str = "application/json"):
-        self._templates[name] = {"status_code": status_code, "response_body": response_body, "mime_type": mime_type}
+    def template(self, name: str, status_code: int, response_body: dict, mime_type: str = "application/json", headers: typing.Mapping[str, str] = None):
+        tmpl = {"status_code": status_code, "response_body": response_body, "mime_type": mime_type}
+        if headers is not None:
+            tmpl["headers"] = _check_headers("template", headers)
+        self._templates[name] = tmpl
         return self
 
     def trap(self, path: str):
@@ -415,17 +434,29 @@ class Sentry:
 
     def _trap_fallback(self, trap):
         """(body, config) of a trap's unauthenticated response, for integrations that
-        cannot run the trap pipeline (R20). The body is text; never raises."""
+        cannot run the trap pipeline (R20). A callable body is replaced by the
+        default unauthenticated response. The body is text; never raises."""
+        for cfg in self._fallback_configs(trap):
+            try:
+                body = cfg["response_body"]
+                if callable(body):
+                    continue
+                if not isinstance(body, (str, bytes)):
+                    body = json.dumps(body, default=str, separators=(",", ":"))
+                return body, self._response(cfg, cfg.get("headers"))
+            except Exception:
+                continue
+        return "", {"status_code": 401, "mime_type": "application/json", "headers": {}}
+
+    def _fallback_configs(self, trap):
         try:
-            cfg = trap["response.unauthenticated"]
-            body = cfg["response_body"]
-            if callable(body):
-                body = {}
-            if not isinstance(body, (str, bytes)):
-                body = json.dumps(body, default=str, separators=(",", ":"))
-            return body, cfg
+            yield trap["response.unauthenticated"]
         except Exception:
-            return "{}", {"status_code": 401, "mime_type": "application/json"}
+            pass
+        try:
+            yield trap.get("fallback.unauthenticated") or self.default_responses["unauthenticated"]
+        except Exception:
+            yield self.default_responses["unauthenticated"]
 
     def is_trap(self, request) -> bool:
         """True when the request targets a trap (method and path).
@@ -493,38 +524,111 @@ class Sentry:
         self._trigger(trigger_ctx)
 
     def _trigger_trap_event(self, req, trap):
+        """Emit trap_hit and return ``(body, config)`` for the response to send.
+
+        ``config`` holds ``status_code``, ``mime_type`` and ``headers`` (a dict
+        without Content-Type or framing headers). A failing response hook falls
+        back to the trap's static response; a body that cannot be produced falls
+        back to the default response for the auth state (R16).
+        """
         trigger_ctx = self._base_event("trappsec.trap_hit", req)
         trigger_ctx["intent"] = trap.get("intent")
 
-        response_key = "response.unauthenticated"
-        if trigger_ctx["type"] == "alert":
-            response_key = "response.authenticated"
+        key = "authenticated" if trigger_ctx["type"] == "alert" else "unauthenticated"
 
         self._trigger(trigger_ctx)
 
-        response_config = trap[response_key]
-        response_body = response_config["response_body"]
+        static = trap["response." + key]
+        override = self._run_response_hook(req, trap.get("response_hook"), {
+            "authenticated": key == "authenticated",
+            "user": trigger_ctx["user"],
+            "role": trigger_ctx["role"],
+        })
 
-        if callable(response_body):
+        cfg = dict(static)
+        headers = static.get("headers")
+        if override:
+            if "status" in override:
+                cfg["status_code"] = override["status"]
+            if "mime_type" in override:
+                cfg["mime_type"] = override["mime_type"]
+            if "body" in override:
+                cfg["response_body"] = override["body"]
+            if "headers" in override:
+                headers = _merge_headers(headers, override["headers"])
+
+        ok, body = self._encode_body(req, cfg)
+        if not ok:
+            cfg = trap.get("fallback." + key) or self.default_responses[key]
+            headers = cfg.get("headers")
+            if cfg["response_body"] is static["response_body"] and callable(cfg["response_body"]):
+                body = ""  # the default's own callback just failed
+            else:
+                ok, body = self._encode_body(req, cfg)
+                if not ok:
+                    body = ""
+
+        return body, self._response(cfg, headers)
+
+    def _run_response_hook(self, req, hook, ctx):
+        """The validated result of a trap's response hook, or None (use the static response)."""
+        if hook is None:
+            return None
+        try:
+            out = hook(req, ctx)
+            if _reject_awaitable(out, "trap response hook", self.logger) or out is None:
+                return None
+            if not isinstance(out, Mapping):
+                raise TypeError("must return a dict or None, got %s" % type(out).__name__)
+            out = {k: out[k] for k in _HOOK_KEYS if k in out and out[k] is not None}
+            status = out.get("status")
+            if status is not None and (not isinstance(status, int) or isinstance(status, bool) or not 100 <= status <= 599):
+                raise ValueError("invalid status %r" % (status,))
+            if callable(out.get("body")):
+                raise TypeError("`body` must not be callable")
+            if "mime_type" in out and not isinstance(out["mime_type"], str):
+                raise TypeError("`mime_type` must be a string")
+            if "headers" in out:
+                out["headers"] = _check_headers("trap response hook", out["headers"])
+            return out
+        except Exception as e:
+            self.logger.error("trap response hook failed: %s", e)
+            return None
+
+    def _encode_body(self, req, cfg):
+        """(ok, body) for a response config: callable bodies are called, and
+        non-string bodies JSON-encoded whatever the mime type (as in Node and
+        Go). ok is False when the callback or the encoding fails."""
+        body = cfg["response_body"]
+        if callable(body):
             try:
-                response_body = response_body(req)
-                if _reject_awaitable(response_body, "trap response body", self.logger):
-                    response_body = {}
+                body = body(req)
+                if _reject_awaitable(body, "trap response body", self.logger):
+                    return False, None
             except Exception as e:
                 self.logger.error("trap response body callback failed: %s", e)
-                response_body = {}
+                return False, None
 
-        mime = str(response_config.get("mime_type") or "").split(";")[0].strip().lower()
-        if isinstance(response_body, (str, bytes)):
-            pass  # strings are sent raw regardless of mime type
-        elif mime == "application/json":
+        if not isinstance(body, (str, bytes)):  # strings are sent raw regardless of mime type
             try:
-                response_body = json.dumps(response_body, default=str, separators=(",", ":"))
+                body = json.dumps(body, default=str, separators=(",", ":"))
             except Exception as e:
                 self.logger.error("failed to encode trap response body: %s", e)
-                response_body = "{}"
+                return False, None
+        return True, body
 
-        return response_body, response_config
+    @staticmethod
+    def _response(cfg, headers):
+        """Status, mime type and headers to send. A configured Content-Type
+        header replaces mime_type; framing headers are dropped."""
+        out = {"status_code": cfg.get("status_code"), "mime_type": cfg.get("mime_type"), "headers": {}}
+        for name, value in (headers or {}).items():
+            lower = name.lower()
+            if lower == "content-type":
+                out["mime_type"] = value
+            elif lower not in _FRAMING_HEADERS:
+                out["headers"][name] = value
+        return out
 
     def _detect_honey_fields(self, data, rules, request_obj=None, source="body"):
         """Detect and strip watched keys. Returns (data, found_fields, touched)."""

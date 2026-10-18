@@ -354,3 +354,15 @@ def test_single_occurrence_scalar_for_list_default():
     sentry.watch("/items").query("role", default=["1"]).query("mode", default="1")
     app.test_client().get("/items?role=1&mode=1")
     assert [f["field"] for f in watch_events(cap)[0]["found_fields"]] == ["role"]
+
+
+def test_trap_headers_response_hook_and_fallback():
+    from _trap_mirror import configure_mirror, check_mirror
+    app, sentry, cap = make()
+    configure_mirror(sentry)
+    c = app.test_client()
+
+    def get(path, headers):
+        r = c.get(path, headers=headers)
+        return r.status_code, r.headers, r.data
+    check_mirror(get)

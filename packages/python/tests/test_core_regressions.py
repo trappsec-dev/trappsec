@@ -80,11 +80,12 @@ def test_callable_default_that_raises_is_violation_and_still_strips():
     assert data == {"a": 1} and touched and len(found) == 1
 
 
-def test_dynamic_body_raising_falls_back_to_empty_object():
+def test_dynamic_body_raising_falls_back_to_the_default_response():
     ts = make_sentry()
-    trap = ts.trap("/t").respond(body=lambda r: 1 / 0).if_unauthenticated(body=lambda r: 1 / 0).build()
+    ts.default_unauthenticated_response(status=401, body="real 401", mime_type="text/plain")
+    trap = ts.trap("/t").respond(body=lambda r: 1 / 0).if_unauthenticated(status=403, body=lambda r: 1 / 0).build()
     body, cfg = ts._trigger_trap_event(object(), trap)
-    assert body == "{}"
+    assert (body, cfg["status_code"], cfg["mime_type"]) == ("real 401", 401, "text/plain")
 
 
 # ---- events (C3/C4) ------------------------------------------------------

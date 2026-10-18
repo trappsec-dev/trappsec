@@ -1,0 +1,107 @@
+{
+  "description": "How a trap's response is resolved (R16, R23). Each case configures the Sentry default response and the trap's own response for one auth state, optionally a response hook, and expects the status, body (as sent), mime type and headers. Body values: a literal (strings raw, anything else JSON-encoded compactly), or {\"$callable\": \"throws\"} / {\"$callable\": \"returns\", \"value\": v} for a body callback. \"default\" with a callable body that is the trap's own (the trap does not set a body) is the same callback. hook: absent (no hook), \"throws\", or {\"returns\": r} where r is null or the override. Header names are compared as configured; Content-Type and framing headers never appear in headers.",
+  "cases": [
+    {
+      "name": "default headers are inherited by a trap",
+      "authenticated": false,
+      "default": {"status": 401, "body": {"detail": "Not authenticated"}, "headers": {"WWW-Authenticate": "Bearer"}},
+      "expect": {"status": 401, "body": "{\"detail\":\"Not authenticated\"}", "mime_type": "application/json", "headers": {"WWW-Authenticate": "Bearer"}}
+    },
+    {
+      "name": "trap headers replace default headers",
+      "authenticated": true,
+      "default": {"headers": {"X-A": "1"}},
+      "trap": {"status": 403, "body": "denied", "mime_type": "text/plain", "headers": {"X-B": "2"}},
+      "expect": {"status": 403, "body": "denied", "mime_type": "text/plain", "headers": {"X-B": "2"}}
+    },
+    {
+      "name": "a Content-Type header sets the mime type and framing headers are dropped",
+      "authenticated": false,
+      "trap": {"body": "{}", "headers": {"Content-Type": "application/problem+json", "Content-Length": "99", "Transfer-Encoding": "chunked", "Vary": "Accept"}},
+      "expect": {"status": 401, "body": "{}", "mime_type": "application/problem+json", "headers": {"Vary": "Accept"}}
+    },
+    {
+      "name": "a successful body callback is used",
+      "authenticated": true,
+      "trap": {"body": {"$callable": "returns", "value": {"id": 7}}},
+      "expect": {"status": 200, "body": "{\"id\":7}", "mime_type": "application/json", "headers": {}}
+    },
+    {
+      "name": "hook returning null sends the static response",
+      "authenticated": true,
+      "trap": {"status": 201, "body": {"ok": true}, "headers": {"Allow": "GET, POST"}},
+      "hook": {"returns": null},
+      "expect": {"status": 201, "body": "{\"ok\":true}", "mime_type": "application/json", "headers": {"Allow": "GET, POST"}}
+    },
+    {
+      "name": "hook overrides status and body and merges headers case-insensitively",
+      "authenticated": true,
+      "trap": {"status": 403, "body": {"detail": "Forbidden"}, "headers": {"Allow": "GET, POST", "Vary": "Accept"}},
+      "hook": {"returns": {"status": 404, "body": {"detail": "Not found."}, "headers": {"vary": "Accept, Cookie"}}},
+      "expect": {"status": 404, "body": "{\"detail\":\"Not found.\"}", "mime_type": "application/json", "headers": {"Allow": "GET, POST", "vary": "Accept, Cookie"}}
+    },
+    {
+      "name": "hook overriding only the status keeps the static body",
+      "authenticated": false,
+      "trap": {"status": 401, "body": {"detail": "Not authenticated"}},
+      "hook": {"returns": {"status": 422}},
+      "expect": {"status": 422, "body": "{\"detail\":\"Not authenticated\"}", "mime_type": "application/json", "headers": {}}
+    },
+    {
+      "name": "hook string body is sent raw with its mime type",
+      "authenticated": true,
+      "trap": {"status": 403, "body": {"detail": "Forbidden"}},
+      "hook": {"returns": {"status": 201, "body": "{\"id\": 1}\n", "mime_type": "application/vnd.api+json"}},
+      "expect": {"status": 201, "body": "{\"id\": 1}\n", "mime_type": "application/vnd.api+json", "headers": {}}
+    },
+    {
+      "name": "a throwing hook sends the static response",
+      "authenticated": true,
+      "trap": {"status": 403, "body": "denied", "mime_type": "text/plain", "headers": {"X-B": "2"}},
+      "hook": "throws",
+      "expect": {"status": 403, "body": "denied", "mime_type": "text/plain", "headers": {"X-B": "2"}}
+    },
+    {
+      "name": "a hook returning an invalid status sends the static response",
+      "authenticated": false,
+      "trap": {"status": 401, "body": "nope", "mime_type": "text/plain"},
+      "hook": {"returns": {"status": 99, "body": "hook"}},
+      "expect": {"status": 401, "body": "nope", "mime_type": "text/plain", "headers": {}}
+    },
+    {
+      "name": "a hook returning an invalid header sends the static response",
+      "authenticated": false,
+      "trap": {"status": 401, "body": "nope", "mime_type": "text/plain"},
+      "hook": {"returns": {"status": 404, "headers": {"X-Bad": "a\r\nSet-Cookie: x=1"}}},
+      "expect": {"status": 401, "body": "nope", "mime_type": "text/plain", "headers": {}}
+    },
+    {
+      "name": "a throwing body callback sends the default response, never {}",
+      "authenticated": false,
+      "default": {"status": 401, "body": {"detail": "Not authenticated"}, "headers": {"WWW-Authenticate": "Bearer"}},
+      "trap": {"status": 403, "body": {"$callable": "throws"}, "mime_type": "text/plain", "headers": {"X-B": "2"}},
+      "expect": {"status": 401, "body": "{\"detail\":\"Not authenticated\"}", "mime_type": "application/json", "headers": {"WWW-Authenticate": "Bearer"}}
+    },
+    {
+      "name": "a throwing body callback discards the hook's overrides",
+      "authenticated": true,
+      "default": {"status": 403, "body": "forbidden", "mime_type": "text/plain"},
+      "trap": {"body": {"$callable": "throws"}},
+      "hook": {"returns": {"status": 201, "headers": {"X-Hook": "1"}}},
+      "expect": {"status": 403, "body": "forbidden", "mime_type": "text/plain", "headers": {}}
+    },
+    {
+      "name": "a throwing default body callback sends an empty body with the default status and headers",
+      "authenticated": false,
+      "default": {"status": 401, "body": {"$callable": "throws"}, "headers": {"WWW-Authenticate": "Bearer"}},
+      "expect": {"status": 401, "body": "", "mime_type": "application/json", "headers": {"WWW-Authenticate": "Bearer"}}
+    },
+    {
+      "name": "trap and default body callbacks both throwing send an empty body",
+      "authenticated": true,
+      "default": {"status": 403, "body": {"$callable": "throws"}, "mime_type": "text/html"},
+      "trap": {"status": 201, "body": {"$callable": "throws"}},
+      "expect": {"status": 403, "body": "", "mime_type": "text/html", "headers": {}}
+    }
+  ]
+}

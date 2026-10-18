@@ -142,3 +142,44 @@ def test_is_trap(fx):
     ts.request.path = lambda r: r[1]
     for case in fx["cases"]:
         assert ts.is_trap((case["method"], case["path"])) is case["is_trap"], case
+
+
+def _fixture_body(v):
+    if isinstance(v, dict) and "$callable" in v:
+        if v["$callable"] == "throws":
+            return lambda r: 1 / 0
+        return lambda r, value=v["value"]: value
+    return v
+
+
+def _fixture_response(spec):
+    return {k: _fixture_body(v) if k == "body" else v for k, v in (spec or {}).items()}
+
+
+@pytest.mark.parametrize("case", _load("trap_response.json"), ids=lambda c: c["name"] if c else "missing")
+def test_trap_response(case):
+    with mock.patch.object(Sentry, "_register", lambda self, app: None):
+        ts = Sentry(object(), "svc", "test")
+    ts._handlers = []
+    user = "u1" if case["authenticated"] else None
+    ts.identify_user(lambda r: {"user": user, "role": "member"})
+
+    if case["authenticated"]:
+        ts.default_response(**_fixture_response(case.get("default")))
+        builder = ts.trap("/t").respond(**_fixture_response(case.get("trap")))
+    else:
+        ts.default_unauthenticated_response(**_fixture_response(case.get("default")))
+        builder = ts.trap("/t").if_unauthenticated(**_fixture_response(case.get("trap")))
+
+    hook = case.get("hook")
+    if hook == "throws":
+        builder.respond_with(lambda r, ctx: 1 / 0)
+    elif hook is not None:
+        builder.respond_with(lambda r, ctx: hook["returns"])
+
+    body, cfg = ts._trigger_trap_event(None, builder.build())
+    if isinstance(body, bytes):
+        body = body.decode()
+    want = case["expect"]
+    assert (cfg["status_code"], body, cfg["mime_type"], cfg["headers"]) == (
+        want["status"], want["body"], want["mime_type"], want["headers"])

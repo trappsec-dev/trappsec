@@ -324,3 +324,15 @@ def test_failing_trap_event_answers_with_the_traps_own_unauthenticated_response(
         with TestClient(app) as client:
             r = client.get("/decoy")
         assert (r.status_code, r.json()) == (403, {"no": 1}), type(app).__name__
+
+
+def test_trap_headers_response_hook_and_fallback():
+    from _trap_mirror import configure_mirror, check_mirror
+    app, sentry, cap = make()
+    configure_mirror(sentry)
+    c = TestClient(app)
+
+    def get(path, headers):
+        r = c.get(path, headers=headers)
+        return r.status_code, r.headers, r.content
+    check_mirror(get)
