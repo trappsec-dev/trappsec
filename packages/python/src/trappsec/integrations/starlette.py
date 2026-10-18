@@ -177,8 +177,41 @@ class StarletteIntegration:
     def inject_traps(self):
         traps = self.ts.traps
         self._check_conflicts(traps)
+        trap_routes = self._build_trap_routes(traps)
+        for route in trap_routes:
+            self._defer_method_mismatch(route)
         # Prepend: Starlette routing is order based, traps must not be shadowed.
-        self.app.router.routes = self._build_trap_routes(traps) + list(self.app.router.routes)
+        self.app.router.routes = trap_routes + list(self.app.router.routes)
+
+    def _defer_method_mismatch(self, route):
+        """Let a real route answer a method the trap does not declare.
+
+        Starlette answers a path with no route for the method from the first route
+        that matches the path (``405`` with that route's ``allow``). Traps come first,
+        so a trap would put its own methods in ``allow`` for a real route's path. When
+        any real route matches the request, the trap steps aside, as if it had been
+        registered after it.
+        """
+        from starlette.routing import Match
+
+        router = self.app.router
+        original = route.matches
+
+        def matches(scope):
+            match, child_scope = original(scope)
+            if match is Match.PARTIAL:
+                for other in router.routes:
+                    if getattr(other, "_trappsec_trap", False):
+                        continue
+                    try:
+                        if other.matches(scope)[0] is not Match.NONE:
+                            return Match.NONE, {}
+                    except Exception:
+                        continue
+            return match, child_scope
+
+        route.matches = matches
+        route._trappsec_trap = True
 
     # ----------------------------------------------------------------- watches
 

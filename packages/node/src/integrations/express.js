@@ -15,12 +15,14 @@ const TRAP_METHODS = ['get', 'post', 'put', 'delete', 'patch', 'head', 'options'
 
 // The part of `path` that a mount layer (app.use / router.use) consumes, or null
 // when the layer does not match it. Works on Express 4 and 5 layers; the layer's
-// per-request match state is restored.
-function mountPrefix(layer, path) {
+// per-request match state is restored. With `onMatch`, it is also called with the
+// params the mount captured.
+function mountPrefix(layer, path, onMatch) {
     if (typeof layer.match !== 'function') return null;
     const saved = [layer.path, layer.params, layer.keys];
     try {
         if (!layer.match(path)) return null;
+        if (onMatch) onMatch(layer.params || {});
         return layer.path || '';
     } finally {
         [layer.path, layer.params, layer.keys] = saved;
@@ -184,26 +186,85 @@ class ExpressIntegration {
             }
         }
 
-        // Express is order-based: trap layers go in front of the first layer holding a
-        // route (R2) but behind ordinary middleware such as auth and body parsers (C6),
-        // so identify_user can see the user.
+        // Each trap goes into the router that serves its path: the mounted router whose
+        // routes are its siblings, or the app router. There it answers like those routes
+        // (R14): the router's strict and caseSensitive options apply, Express 4's mount
+        // absorbs a doubled slash, and an OPTIONS request is answered by that router with
+        // an Allow header listing the trap's methods next to the real routes' methods.
+        const mounts = new Map();
+        this._countMounts(stack, mounts);
+        const groups = new Map();
+        for (const decoy of traps) {
+            const found = this._trapRouter(stack, normalizePath(decoy.path), mounts, new Set());
+            const key = found ? found.router : null;
+            if (!groups.has(key)) groups.set(key, []);
+            groups.get(key).push({ decoy, path: found ? found.path : decoy.path });
+        }
+        for (const [router, entries] of groups) {
+            if (router) this._insertTraps(router, router.stack, entries, false);
+            else this._insertTraps(this.app, stack, entries, true);
+        }
+    }
+
+    // How many mount layers reference each sub-router, across the whole tree.
+    _countMounts(stack, counts) {
+        for (const layer of stack) {
+            if (!layer || !isSubRouter(layer)) continue;
+            const n = counts.get(layer.handle) || 0;
+            counts.set(layer.handle, n + 1);
+            if (n === 0) this._countMounts(layer.handle.stack, counts);
+        }
+    }
+
+    // The deepest mounted router holding real routes that serves `path` (relative to
+    // `stack`), with the path relative to it; null when no mounted router does. A
+    // router mounted more than once, or under a mount parameter the trap path fills
+    // with a literal, is not used: the trap would also answer at its other paths.
+    // The longest mount prefix wins (`/api/v1` over a router mounted at `/`), then the
+    // first registered.
+    _trapRouter(stack, path, mounts, ancestors) {
+        const seen = new Set();
+        let best = null;
+        for (const layer of stack) {
+            if (!layer || !isSubRouter(layer) || layer.__trappsecTrap) continue;
+            if (ancestors.has(layer.handle.stack) || mounts.get(layer.handle) !== 1) continue;
+            if (!this._containsRoute(layer, seen)) continue;
+            let literalParam = false;
+            const prefix = mountPrefix(layer, path, (params) => {
+                literalParam = Object.values(params).some(v => typeof v !== 'string' || !/^:\w+$/.test(v));
+            });
+            if (prefix === null || literalParam) continue;
+            if (!best || prefix.length > best.prefix.length) best = { layer, prefix };
+        }
+        if (!best) return null;
+        const router = best.layer.handle;
+        const rel = afterMount(path, best.prefix);
+        ancestors.add(router.stack);
+        const deeper = this._trapRouter(router.stack, rel, mounts, ancestors);
+        ancestors.delete(router.stack);
+        return deeper || { router, path: rel };
+    }
+
+    // Express is order-based: trap layers go in front of the first layer holding a
+    // route (R2) but behind ordinary middleware such as auth and body parsers (C6),
+    // so identify_user can see the user.
+    _insertTraps(target, stack, entries, isApp) {
         const seen = new Set();
         let idx = stack.findIndex(l => this._containsRoute(l, seen));
         if (idx === -1) idx = stack.length;
 
-        // Traps answer OPTIONS like the app's real routes (R14). Routes on the app
-        // router fall through to the app's later handlers (a 404 catch-all, or the
-        // router's own OPTIONS response); routes in a mounted router are answered by
-        // that router with an Allow header. So when real routes live in a mounted
-        // router, traps get their own router too.
-        const nested = idx < stack.length && !stack[idx].route && isSubRouter(stack[idx]);
-        const target = nested ? this._newRouter() : this.app;
+        // Routes on the app router fall through to the app's later handlers (a 404
+        // catch-all, or the router's own OPTIONS response); routes in a mounted router
+        // are answered by that router with an Allow header. So when a trap fits no
+        // mounted router but the app's real routes live in one, the trap gets its own.
+        const nested = isApp && idx < stack.length && !stack[idx].route && isSubRouter(stack[idx]);
+        if (nested) target = this._newRouter();
         const before = stack.length;
-        for (const decoy of traps) {
+        for (const { decoy, path } of entries) {
             const methods = trapMethods(decoy).map(m => m.toLowerCase());
             const handler = (req, res) => this._respondTrap(req, res, decoy);
             for (const method of TRAP_METHODS) {
-                if (methods.includes(method)) target[method](decoy.path, handler);
+                if (methods.includes(method)) target[method](path, handler);
             }
         }
 

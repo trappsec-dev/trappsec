@@ -28,7 +28,9 @@
 //
 // Because the App runs before the router, IdentifyUser sees the request as it
 // arrives (headers, cookies), not values that the router's middleware adds to
-// its context.
+// its context, and middleware registered on the router (r.Use: CORS, request
+// IDs, security headers) never runs for traps. Wrap such middleware around the
+// App instead, or traps stand out by the headers they lack.
 //
 // Traps are not routes on the router, so a trap path requested with a method
 // the trap does not declare gets the router's answer for an unknown path
@@ -105,10 +107,15 @@ func requestOf(req any) *http.Request {
 }
 
 // MatchRoutes tells the App how to ask the router which route a request
-// matches. Call it before the first request (or Bootstrap). For chi:
+// matches. Call it before the first request (or Bootstrap). For chi, which
+// routes on the escaped path (see UseRawPath):
 //
-//	app.MatchRoutes(func(req *http.Request) string {
-//		return r.Find(chi.NewRouteContext(), req.Method, req.URL.Path)
+//	app.UseRawPath().MatchRoutes(func(req *http.Request) string {
+//		path := req.URL.RawPath
+//		if path == "" {
+//			path = req.URL.Path
+//		}
+//		return r.Find(chi.NewRouteContext(), req.Method, path)
 //	})
 //
 // For gorilla/mux:
@@ -126,6 +133,20 @@ func (a *App) MatchRoutes(m RouteMatcher) *App {
 		panic("trappsec: MatchRoutes called after Bootstrap; call it before serving")
 	}
 	a.integration.match = m
+	return a
+}
+
+// UseRawPath makes traps and watches match the request path as sent, with
+// percent-escapes kept (r.URL.RawPath when set), as chi routes. By default they
+// match the decoded r.URL.Path, as gorilla/mux does unless you call its
+// Router.UseEncodedPath. With the wrong setting, /users/%74ransfers or
+// /users/a%2Fb reach a trap where the router itself would answer 404 or 405.
+// Call it before the first request (or Bootstrap).
+func (a *App) UseRawPath() *App {
+	if a.integration.once.Done() {
+		panic("trappsec: UseRawPath called after Bootstrap; call it before serving")
+	}
+	a.integration.rawPath = true
 	return a
 }
 
@@ -208,6 +229,7 @@ func (a *App) ServeTLS(l net.Listener, certFile, keyFile string) error {
 type handlerIntegration struct {
 	ts      *core.Sentry
 	match   RouteMatcher
+	rawPath bool
 	traps   []trapRoute
 	watches []watchRoute
 
@@ -303,11 +325,12 @@ func (in *handlerIntegration) trapFor(r *http.Request) (core.TrapConfig, bool) {
 	// Routers that report their routes (chi, gorilla/mux by default) treat a
 	// trailing slash as a different path and answer it with 404, so a trap must
 	// not answer it either: that difference would give the trap away.
-	if in.match != nil && len(r.URL.Path) > 1 && strings.HasSuffix(r.URL.Path, "/") {
+	path := in.path(r)
+	if in.match != nil && len(path) > 1 && strings.HasSuffix(path, "/") {
 		return core.TrapConfig{}, false
 	}
 	method := strings.ToUpper(r.Method)
-	segs := splitPath(r.URL.Path)
+	segs := splitPath(path)
 	// A literal trap is more specific than any pattern matching the same path.
 	best, ok := in.trapExact[pathKey(segs)][method]
 	if !ok {
@@ -330,6 +353,14 @@ func (in *handlerIntegration) trapFor(r *http.Request) (core.TrapConfig, bool) {
 	return in.traps[best].cfg, true
 }
 
+// path is the request path traps and watches are matched against.
+func (in *handlerIntegration) path(r *http.Request) string {
+	if in.rawPath && r.URL.RawPath != "" {
+		return r.URL.RawPath
+	}
+	return r.URL.Path
+}
+
 // watchFor returns the watch for r: with a RouteMatcher, the watch on the
 // route the router matched; otherwise the most specific watch whose path
 // matches the request path.
@@ -345,7 +376,7 @@ func (in *handlerIntegration) watchFor(r *http.Request) (core.WatchConfig, bool)
 		}
 		return in.watches[i].cfg, true
 	}
-	segs := splitPath(r.URL.Path)
+	segs := splitPath(in.path(r))
 	best, ok := in.watchByShape[pathKey(segs)]
 	if !ok || !in.watches[best].pat.literal() {
 		best = -1

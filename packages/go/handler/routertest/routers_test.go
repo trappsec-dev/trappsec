@@ -80,9 +80,17 @@ func chiApp(sv *served) *trappsechandler.App {
 		}())
 	})
 	app := trappsechandler.InstallSentry(r, "svc", "test")
-	return app.MatchRoutes(func(req *http.Request) string {
-		return r.Find(chi.NewRouteContext(), req.Method, req.URL.Path)
-	})
+	return app.UseRawPath().MatchRoutes(chiMatcher(r))
+}
+
+func chiMatcher(r chi.Router) trappsechandler.RouteMatcher {
+	return func(req *http.Request) string {
+		path := req.URL.RawPath
+		if path == "" {
+			path = req.URL.Path
+		}
+		return r.Find(chi.NewRouteContext(), req.Method, path)
+	}
 }
 
 func gorillaApp(sv *served) *trappsechandler.App {
@@ -170,6 +178,52 @@ func TestTrailingSlashFallsThroughToRouter(t *testing.T) {
 			app.ServeHTTP(rec, httptest.NewRequest("GET", "/deployment/config/", nil))
 			if rec.Code != http.StatusNotFound {
 				t.Fatalf("GET /deployment/config/ = %d, want the router's 404", rec.Code)
+			}
+		})
+	}
+}
+
+// Escaped paths reach a trap exactly when the router would route them to a real
+// route at the trap's path: chi routes the escaped path (UseRawPath), gorilla/mux
+// the decoded one (the default).
+func TestEscapedPathsMatchLikeTheRouter(t *testing.T) {
+	ok := func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusUnauthorized) }
+	chiRouter := func(withReal bool) http.Handler {
+		r := chi.NewRouter()
+		r.Get("/projects/{id}", ok)
+		if withReal {
+			r.Post("/projects/{id}/transfers", ok)
+		}
+		return r
+	}
+	gorillaRouter := func(withReal bool) http.Handler {
+		r := mux.NewRouter()
+		r.HandleFunc("/projects/{id}", ok).Methods("GET")
+		if withReal {
+			r.HandleFunc("/projects/{id}/transfers", ok).Methods("POST")
+		}
+		return r
+	}
+	for name, tc := range map[string]struct {
+		router func(bool) http.Handler
+		raw    bool
+	}{"chi": {chiRouter, true}, "gorilla": {gorillaRouter, false}} {
+		t.Run(name, func(t *testing.T) {
+			real := tc.router(true)
+			app := trappsechandler.InstallSentry(tc.router(false), "svc", "test")
+			if tc.raw {
+				app.UseRawPath()
+			}
+			app.Logger().SetOutput(io.Discard)
+			app.Trap("/projects/{id}/transfers").Methods("POST")
+			for _, target := range []string{"/projects/p1/transfers", "/projects/p1/%74ransfers", "/projects/prj_x%2Ftransfers"} {
+				want, got := httptest.NewRecorder(), httptest.NewRecorder()
+				real.ServeHTTP(want, httptest.NewRequest("POST", target, nil))
+				app.ServeHTTP(got, httptest.NewRequest("POST", target, nil))
+				if got.Code != want.Code || got.Header().Get("Allow") != want.Header().Get("Allow") {
+					t.Errorf("POST %s: trap app %d (Allow %q), real route %d (Allow %q)", target,
+						got.Code, got.Header().Get("Allow"), want.Code, want.Header().Get("Allow"))
+				}
 			}
 		})
 	}

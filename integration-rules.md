@@ -31,7 +31,8 @@ The requirement differs based on how the framework resolves route conflicts:
 **Reference:**
 - FastAPI prepends `APIRoute` objects: `app.router.routes = new_routes + app.router.routes` — required because Starlette is order-based
 - Hono composes every matching route and middleware in registration order, so it is order-based too: trap routes are added at bootstrap and its router's match results are reordered so traps sit after middleware (`app.use()`, or an `app.all()` handler that takes `next`) and before the first route.
-- Express, Koa and NestJS-Express insert trap routes **immediately before the first route layer**, i.e. after ordinary middleware (auth, session, body parsers) so `identify_user` can see the user, but before any application route so traps are never shadowed. Never prepend ahead of middleware, and never append after routes.
+- Express, Koa and NestJS-Express insert trap routes **immediately before the first route layer**, i.e. after ordinary middleware (auth, session, body parsers) so `identify_user` can see the user, but before any application route so traps are never shadowed. Never prepend ahead of middleware, and never append after routes. Express does this in the router that serves the trap's path: the deepest mounted router holding real routes whose mount matches it (mounted once, with no mount parameter the trap fills with a literal), so its router-level middleware, `strict`/`caseSensitive` options, mount matching and OPTIONS `Allow` header apply to the trap as to its siblings; otherwise the app router.
+- Starlette and FastAPI prepend traps, but a trap that matches only the path (not the method) steps aside when a real route matches the request, so the `405` and its `allow` header come from the real route, as if the trap were registered after it. FastAPI traps carry the app-level `dependencies`.
 - If a trap path+method exactly duplicates an existing app route, fail loud (throw/panic with a clear message); never silently replace or shadow either side (see R20).
 - Sanic, Gin, Echo, Hapi, net/http: native `add_route()` / `engine.Handle()` / `app.route()` registration is sufficient — specificity-based routing provides the guarantee implicitly
 
@@ -217,13 +218,27 @@ observable behavioral differences that allow attackers to identify traps.
   patterns, called from `*App.ListenAndServe*()` / `Serve*()` wrappers returned by
   `InstallSentry`; `App.ServeHTTP` is shadowed to inject watch inspection before dispatch
 
+A trap must answer every probe the way a real route next to it would: wrong methods
+(status and `Allow`), `HEAD`/`OPTIONS`, trailing slashes, case, doubled slashes, escaped
+paths, the middleware and hooks that run, and the response headers and their order (Gin
+traps write through the same path as `c.JSON`, without setting `Content-Length`). Each
+integration test compares a trap with a real sibling route on the same probe. A difference
+that cannot be fixed in the adapter is listed in `docs/supported-frameworks.md` ("Where a
+trap can still differ from a real route") with the app-side fix.
+
 **Documented exception:** Go `handler` (chi, gorilla/mux, any `http.Handler`) cannot add
 routes to a router it knows only as an `http.Handler`, so it intercepts traps in
 `App.ServeHTTP` before the router. R2's explicit priority comes from `MatchRoutes`
 (a real route at least as specific as a trap wins; an exact duplicate panics). The
-observable difference: a trap path requested with a method the trap does not declare gets
-the router's answer for an unknown path (usually 404), where a real route would answer
-405. Prefer a framework-specific adapter where one exists.
+observable differences:
+- a trap path requested with a method the trap does not declare (including `HEAD` and
+  `OPTIONS`) gets the router's answer for an unknown path (usually 404), where a real
+  route would answer 405 with `Allow`;
+- middleware registered on the router (`r.Use`: CORS, request IDs, security headers)
+  never runs for traps; the docs tell users to wrap such middleware around the App;
+- traps match the decoded `r.URL.Path` unless `App.UseRawPath()` is called, which makes
+  them match `r.URL.RawPath` when set, as chi routes.
+Prefer a framework-specific adapter where one exists.
 
 ---
 

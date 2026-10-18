@@ -994,3 +994,43 @@ func BenchmarkBareEngineBaseline(b *testing.B) {
 	engine.GET("/plain", func(c *gin.Context) { c.Status(200) })
 	benchServe(b, engine, "/plain")
 }
+
+// rawHeaderNames sends a request over a raw connection and returns the response
+// header names in the order they arrive on the wire.
+func rawHeaderNames(t *testing.T, addr, method, path string) []string {
+	t.Helper()
+	conn, err := net.Dial("tcp", addr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	fmt.Fprintf(conn, "%s %s HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n", method, path)
+	raw, _ := io.ReadAll(conn)
+	head, _, _ := strings.Cut(string(raw), "\r\n\r\n")
+	lines := strings.Split(head, "\r\n")
+	names := make([]string, 0, len(lines))
+	for _, l := range lines[1:] {
+		name, _, _ := strings.Cut(l, ":")
+		names = append(names, name)
+	}
+	return names
+}
+
+func TestTrapResponseHeadersMatchARealJSONRoute(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	engine := gin.New()
+	engine.GET("/api/me", func(c *gin.Context) { c.JSON(401, gin.H{"error": "unauthorized"}) })
+	app := InstallSentry(engine, "svc", "test")
+	app.Logger().SetOutput(io.Discard)
+	app.Sentry.SetDefaultUnauthenticated(401, map[string]any{"error": "unauthorized"}, "application/json; charset=utf-8")
+	app.Trap("/api/admin").Methods("GET")
+	srv := httptest.NewServer(app)
+	defer srv.Close()
+	addr := strings.TrimPrefix(srv.URL, "http://")
+
+	real := rawHeaderNames(t, addr, "GET", "/api/me")
+	trap := rawHeaderNames(t, addr, "GET", "/api/admin")
+	if strings.Join(trap, ",") != strings.Join(real, ",") {
+		t.Fatalf("header order differs: real %v, trap %v", real, trap)
+	}
+}

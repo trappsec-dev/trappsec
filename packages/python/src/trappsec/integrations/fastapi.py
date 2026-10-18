@@ -32,9 +32,15 @@ class FastAPIIntegration(StarletteIntegration):
 
             return endpoint
 
+        # App-level dependencies (``FastAPI(dependencies=[...])``) run for traps as
+        # they do for every real route.
+        router = self.app.router
+        dependencies = list(getattr(router, "dependencies", None) or [])
+        overrides = getattr(router, "dependency_overrides_provider", None)
         return [
             APIRoute(trap["path"], make_endpoint(trap),
-                methods=trap["methods"], name="trappsec_%d" % idx, include_in_schema=False)
+                methods=trap["methods"], name="trappsec_%d" % idx, include_in_schema=False,
+                dependencies=dependencies, dependency_overrides_provider=overrides)
             for idx, trap in enumerate(traps)
         ]
 

@@ -101,6 +101,85 @@ for (const [label, pkg] of [['express4', 'express4'], ['express5', 'express']]) 
         assert.equal((await request(server, { path: '/nope' })).status, 404);
     });
 
+    test(`${label}: a trap next to a real route in a mounted router keeps that route's OPTIONS answer`, async (t) => {
+        const app = express();
+        const { sentry, events } = makeSentry(app);
+        const member = '/api/v1/projects/:projectId/members/:memberId';
+        sentry.trap(member).methods('DELETE');
+        sentry.trap('/api/v1/projects/:projectId/archive').methods('POST');
+        const api = express.Router();
+        api.get('/projects/:projectId/members/:memberId', (req, res) => res.json({ id: req.params.memberId }));
+        api.post('/projects/:projectId/transfer', (req, res) => res.json({ ok: 1 }));
+        app.use('/api/v1', api);
+        const { server, close } = await serve(app);
+        t.after(close);
+
+        // A real DELETE route at that path would add DELETE to the router's Allow header
+        // (first, as the trap is registered ahead of the real routes).
+        const opts = await request(server, { method: 'OPTIONS', path: '/api/v1/projects/p1/members/m1' });
+        assert.equal(opts.status, 200);
+        assert.deepEqual(opts.headers.allow.split(/, ?/).sort(), ['DELETE', 'GET', 'HEAD']);
+        assert.equal((await request(server, { path: '/api/v1/projects/p1/members/m1' })).status, 200);
+        assert.equal((await request(server, { method: 'DELETE', path: '/api/v1/projects/p1/members/m1' })).status, 401);
+
+        // A trap with no real route at its path answers OPTIONS like a real sibling route.
+        const real = await request(server, { method: 'OPTIONS', path: '/api/v1/projects/p1/transfer' });
+        const trap = await request(server, { method: 'OPTIONS', path: '/api/v1/projects/p1/archive' });
+        assert.equal(trap.status, real.status);
+        assert.equal(trap.headers.allow, real.headers.allow);
+        assert.equal(trap.text, real.text);
+        assert.equal(events.length, 1);
+    });
+
+    test(`${label}: a trap in a mounted router follows its double-slash, strict and caseSensitive behavior`, async (t) => {
+        const app = express();
+        const { sentry, events } = makeSentry(app);
+        sentry.trap('/api/v1/projects/:id/transfers').methods('POST');
+        const site = express.Router(); // mounted at '/': the longer /api/v1 mount wins
+        site.get('/login', (req, res) => res.send('login'));
+        app.use(site);
+        const api = express.Router({ strict: true, caseSensitive: true });
+        api.post('/projects/:id/members', (req, res) => res.json({ ok: 1 }));
+        app.use('/api/v1', api);
+        app.use((req, res) => res.status(404).send('nf'));
+        const { server, close } = await serve(app);
+        t.after(close);
+
+        for (const [realPath, trapPath] of [
+            ['/api/v1//projects/p1/members', '/api/v1//projects/p1/transfers'],
+            ['/api/v1/projects/p1/members/', '/api/v1/projects/p1/transfers/'],
+            ['/api/v1/projects/p1/Members', '/api/v1/projects/p1/Transfers'],
+        ]) {
+            const real = await request(server, { method: 'POST', path: realPath });
+            const trap = await request(server, { method: 'POST', path: trapPath });
+            assert.equal(trap.status === 401, real.status === 200, `${trapPath}: real ${real.status}, trap ${trap.status}`);
+            if (real.status !== 200) assert.equal(trap.text, real.text);
+        }
+        assert.equal((await request(server, { method: 'POST', path: '/api/v1/projects/p1/transfers' })).status, 401);
+    });
+
+    test(`${label}: a trap is not placed in a router mounted twice or under a parameter it fills`, async (t) => {
+        const app = express();
+        const { sentry, events } = makeSentry(app);
+        sentry.trap('/a/secret').methods('GET');
+        sentry.trap('/users/me/secret').methods('GET');
+        const shared = express.Router();
+        shared.get('/x', (req, res) => res.send('x'));
+        app.use('/a', shared);
+        app.use('/b', shared);
+        const byUser = express.Router({ mergeParams: true });
+        byUser.get('/x', (req, res) => res.send('x'));
+        app.use('/users/:id', byUser);
+        const { server, close } = await serve(app);
+        t.after(close);
+
+        assert.equal((await request(server, { path: '/a/secret' })).status, 401);
+        assert.equal((await request(server, { path: '/b/secret' })).status, 404);
+        assert.equal((await request(server, { path: '/users/me/secret' })).status, 401);
+        assert.equal((await request(server, { path: '/users/5/secret' })).status, 404);
+        assert.equal(events.length, 2);
+    });
+
     test(`${label}: OPTIONS on a trap matches real app-level routes behind a 404 catch-all`, async (t) => {
         const app = express();
         const { sentry, events } = makeSentry(app);

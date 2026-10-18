@@ -44,7 +44,7 @@ Hits with an identified user are `alert`s; hits without one are `signal`s (see [
 
 A determined attacker may try to tell traps from real routes. trappsec reduces the signals, but you control the rest:
 
-*   **Traps are real framework routes**, not middleware shortcuts, so routing behavior (405 vs 404, trailing slashes, HEAD/OPTIONS handling) matches your real endpoints. Shadowing and CSRF protection never change the decoy response.
+*   **Traps are real framework routes**, not middleware shortcuts, registered next to your real routes, so routing behavior (405 vs 404, trailing slashes, HEAD/OPTIONS handling) follows the same rules as your real endpoints. The exceptions are listed, each with the app-side fix, under [where a trap can still differ from a real route](/supported-frameworks/#where-a-trap-can-still-differ-from-a-real-route): middleware or hooks scoped to a router, group or plugin (Fastify, Gin, chi and gorilla/mux), validation that runs before auth (Fastify), wrong-method answers (chi, gorilla/mux, Django REST framework) and schema listings (FastAPI). Shadowing and CSRF protection never change the decoy response.
 *   **Unauthenticated requests get the decoy's `if_unauthenticated` response** (default `401`). This looks like any protected route and nudges the attacker to authenticate, which turns a `signal` into an `alert`.
 *   **Make responses plausible.** Use realistic status codes, bodies and headers. Empty `{}` on every trap is a tell; use [templates](/api/#template) and dynamic bodies.
 *   **Keep latency comparable.** Delivery is asynchronous so webhooks never add latency; avoid slow dynamic bodies.

@@ -299,8 +299,27 @@ var probePool = sync.Pool{New: func() any { return &probeWriter{h: http.Header{}
 func ginTrapHandler(ts *core.Sentry, trap core.TrapConfig) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		body, cfg := adapter.TriggerTrapEvent(ts, c, trap)
-		c.Data(cfg.StatusCode, cfg.MIMEType, body)
+		// Not c.Data: it sets Content-Length itself, which net/http then writes
+		// before Date, unlike the c.JSON / c.String responses of real routes.
+		c.Status(cfg.StatusCode)
+		if h := c.Writer.Header(); len(h["Content-Type"]) == 0 {
+			h["Content-Type"] = []string{cfg.MIMEType}
+		}
+		if !bodyAllowedForStatus(cfg.StatusCode) {
+			c.Writer.WriteHeaderNow()
+			return
+		}
+		_, _ = c.Writer.Write(body)
 	}
+}
+
+// bodyAllowedForStatus mirrors Gin's rule for c.Render.
+func bodyAllowedForStatus(status int) bool {
+	switch {
+	case status >= 100 && status <= 199, status == http.StatusNoContent, status == http.StatusNotModified:
+		return false
+	}
+	return true
 }
 
 type inspectedKey struct{}

@@ -324,3 +324,54 @@ def test_failing_trap_event_answers_with_the_traps_own_unauthenticated_response(
         with TestClient(app) as client:
             r = client.get("/decoy")
         assert (r.status_code, r.json()) == (403, {"no": 1}), type(app).__name__
+
+
+def test_trap_on_a_real_routes_path_keeps_the_real_routes_405_allow():
+    def build(with_trap):
+        app = FastAPI()
+
+        @app.get("/projects/{pid}/members/{mid}")
+        def member(pid: str, mid: str):
+            return {"id": mid}
+
+        ts = Sentry(app, "svc", "test")
+        if with_trap:
+            ts.trap("/projects/{pid}/members/{mid}").methods("DELETE")
+        return app
+
+    with TestClient(build(False)) as plain, TestClient(build(True)) as trapped:
+        for method in ("PUT", "PATCH", "OPTIONS"):
+            want = plain.request(method, "/projects/p1/members/m1")
+            got = trapped.request(method, "/projects/p1/members/m1")
+            assert (got.status_code, got.headers.get("allow"), got.content) == \
+                (want.status_code, want.headers.get("allow"), want.content), method
+        assert trapped.delete("/projects/p1/members/m1").status_code == 401
+
+
+def test_app_level_dependencies_run_for_traps_like_real_routes():
+    from fastapi import Depends, HTTPException, Header
+
+    calls = []
+
+    def require_client(x_client: Optional[str] = Header(default=None)):
+        calls.append(x_client)
+        if x_client is None:
+            raise HTTPException(status_code=400, detail="missing client")
+
+    app = FastAPI(dependencies=[Depends(require_client)])
+
+    @app.get("/projects")
+    def projects():
+        return []
+
+    ts = Sentry(app, "svc", "test")
+    cap = Capture()
+    ts._handlers.append(cap)
+    ts.trap("/projects/export").methods("GET")
+    with TestClient(app) as client:
+        real, trap = client.get("/projects"), client.get("/projects/export")
+        assert (trap.status_code, trap.json()) == (real.status_code, real.json()) == (400, {"detail": "missing client"})
+        assert cap.events == []
+        assert client.get("/projects/export", headers={"x-client": "web"}).status_code == 401
+        assert len(cap.events) == 1
+    assert calls == [None, None, "web"]

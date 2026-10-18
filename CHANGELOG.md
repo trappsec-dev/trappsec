@@ -4,6 +4,16 @@ All notable changes to trappsec are documented here. The format follows [Keep a 
 
 ## Unreleased
 
+### Fixed: traps answer like the real routes next to them
+
+Measured with a raw-socket client against a real sibling route on the same router.
+
+- **Express:** a trap now goes into the mounted router that serves its path (`app.use('/api/v1', api)`), not into a separate router at `/`. OPTIONS keeps the real routes' methods in `Allow` (it was `Allow: DELETE` for a DELETE trap on the path of a real GET route), Express 4's doubled slash (`/api/v1//projects/...`) reaches the trap as it reaches real routes, and the router's own `strict` / `caseSensitive` options apply. Router-level middleware in that router now runs before the trap, as it does for the real routes.
+- **Starlette / FastAPI:** a trap on the path of a real route no longer replaces the real route's `allow` header in `405` answers to PUT, PATCH or OPTIONS. FastAPI traps now run app-level `dependencies=[...]`.
+- **Gin:** trap responses no longer set `Content-Length` themselves, so the response headers arrive in the same order as from a real `c.JSON` route.
+- **chi (`handler`):** new `app.UseRawPath()` matches traps and watches on the escaped path, as chi routes, so `/%74ransfers` or `prj_x%2Ftransfers` no longer reach a trap where chi answers 404 or 405. The chi docs and `examples/go-chi` use it.
+- **Documented** what remains, each with the app-side fix, under "Where a trap can still differ from a real route" in the supported-frameworks page: Fastify plugin-scoped hooks and schema-before-auth, Gin group middleware, `r.Use` middleware and wrong-method `404`s with chi and gorilla/mux, FastAPI's OpenAPI listing, and Django REST framework's wrong-method and OPTIONS answers. The threat model no longer claims routing always matches.
+
 ### Changed: minimum supported versions raised
 
 Runtimes and frameworks that are past end of life, or several majors behind, are no longer supported. Each new floor is the oldest release CI runs the integration tests against.

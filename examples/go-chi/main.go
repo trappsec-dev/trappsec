@@ -34,9 +34,14 @@ func main() {
 	r := chi.NewRouter()
 	app := trappsec.InstallSentry(r, "GoChiApp", "Development")
 	// Let trappsec ask chi which route a request matches, so real routes beat
-	// look-alike traps and watches follow chi's route patterns.
-	app.MatchRoutes(func(req *http.Request) string {
-		return r.Find(chi.NewRouteContext(), req.Method, req.URL.Path)
+	// look-alike traps and watches follow chi's route patterns. chi routes the
+	// escaped path, so traps match it too.
+	app.UseRawPath().MatchRoutes(func(req *http.Request) string {
+		path := req.URL.RawPath
+		if path == "" {
+			path = req.URL.Path
+		}
+		return r.Find(chi.NewRouteContext(), req.Method, path)
 	})
 
 	if *otelFlag {

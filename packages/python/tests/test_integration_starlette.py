@@ -356,3 +356,35 @@ def test_single_occurrence_fields_are_scalars():
     # a list default does not match a field that occurred once (as in Go/Node/Litestar)
     fields = [f["field"] for f in watch_events(cap)[0]["found_fields"]]
     assert fields == ["role"]
+
+
+def test_trap_on_a_real_routes_path_keeps_the_real_routes_405_allow():
+    async def member(request):
+        return JSONResponse({"id": request.path_params["mid"]})
+
+    async def project(request):
+        return JSONResponse({})
+
+    def build(with_trap):
+        app = Starlette(routes=[
+            Route("/projects/{pid}/members/{mid}", member, methods=["GET"]),
+            Route("/projects/{pid}", project, methods=["GET"]),
+        ])
+        ts = Sentry(app, "svc", "test")
+        if with_trap:
+            ts.trap("/projects/{pid}/members/{mid}").methods("DELETE")
+            ts.trap("/projects/{pid}/export").methods("DELETE")
+        return app
+
+    with TestClient(build(False)) as plain, TestClient(build(True)) as trapped:
+        for method in ("PUT", "PATCH", "OPTIONS", "POST"):
+            want = plain.request(method, "/projects/p1/members/m1")
+            got = trapped.request(method, "/projects/p1/members/m1")
+            assert (got.status_code, got.headers.get("allow"), got.content) == \
+                (want.status_code, want.headers.get("allow"), want.content), method
+            assert want.status_code == 405
+        assert trapped.get("/projects/p1/members/m1").status_code == 200
+        assert trapped.delete("/projects/p1/members/m1").status_code == 401
+        # With no real route at its path, the trap still answers 405 with its own methods.
+        r = trapped.put("/projects/p1/export")
+        assert (r.status_code, r.headers.get("allow")) == (405, "DELETE")

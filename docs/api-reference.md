@@ -43,8 +43,13 @@ The `handler` adapter wraps the router and answers traps before it. Tell it how 
 r := chi.NewRouter()
 // ... real routes ...
 app := trappsechandler.InstallSentry(r, "svc", "prod")
-app.MatchRoutes(func(req *http.Request) string {
-    return r.Find(chi.NewRouteContext(), req.Method, req.URL.Path)
+// chi routes the escaped path (/users/%74ransfers is not /users/transfers), so match traps on it too.
+app.UseRawPath().MatchRoutes(func(req *http.Request) string {
+    path := req.URL.RawPath
+    if path == "" {
+        path = req.URL.Path
+    }
+    return r.Find(chi.NewRouteContext(), req.Method, path)
 })
 http.ListenAndServe(":8080", app)
 ```
@@ -62,7 +67,9 @@ app.MatchRoutes(func(req *http.Request) string {
 })
 ```
 
-Without `MatchRoutes`, traps and watches match the request path alone, like `Sentry.IsTrap`. With it, a trap does not answer its path with a trailing slash, since chi and gorilla/mux answer those with 404. See `examples/go-chi` for a complete app.
+Without `MatchRoutes`, traps and watches match the request path alone, like `Sentry.IsTrap`. With it, a trap does not answer its path with a trailing slash, since chi and gorilla/mux answer those with 404. Traps match the decoded path (`r.URL.Path`), as gorilla/mux does by default; call `UseRawPath()` for chi, or for gorilla/mux with `Router.UseEncodedPath()`. See `examples/go-chi` for a complete app.
+
+**Router middleware does not run for traps.** The App answers traps before the router, so middleware added with chi's `r.Use` or gorilla's `r.Use` (CORS, request IDs, security headers, recoverers) never touches a trap response, and a trap is easy to tell apart by its missing headers. Wrap that middleware around the App instead of registering it with `r.Use`, for example `http.ListenAndServe(":8080", middleware.RequestID(corsHandler(app)))`. Middleware that authenticates and rejects should usually stay inside, on the router, so traps still see unauthenticated probes.
 
 Every adapter also has `Use(s *trappsec.Sentry, router) *App` to wire a Sentry you created with `NewSentry` from the core package. Each adapter package re-exports the core types and the `NoDefault`, `Default`, `Intent` and `Metadata` helpers, so one import is enough.
 
