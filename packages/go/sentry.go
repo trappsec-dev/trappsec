@@ -240,7 +240,8 @@ func (s *Sentry) DefaultResponses() map[string]ResponseTemplate {
 // DefaultResponse sets the response for authenticated requests to traps that
 // do not call Respond. It takes the same ResponseConfig as Respond: only the
 // fields you set change the default, and Template replaces it. Defaults are
-// resolved when traps are built, so the order of calls does not matter.
+// resolved when traps are built, so the order of calls does not matter. It is
+// also the response a trap falls back to when its own body callback fails.
 func (s *Sentry) DefaultResponse(cfg ResponseConfig) *Sentry {
 	s.setDefault("authenticated", cfg)
 	return s
@@ -298,6 +299,27 @@ func (s *Sentry) Template(name string, statusCode int, body any, mimeType ...str
 		mt = "application/json"
 	}
 	s.templates[name] = ResponseTemplate{StatusCode: statusCode, Body: body, MIMEType: mt}
+	return s
+}
+
+// TemplateResponse registers a named response, like Template, with every
+// ResponseTemplate field including Headers. An empty MIMEType means
+// "application/json"; invalid headers panic.
+func (s *Sentry) TemplateResponse(name string, t ResponseTemplate) *Sentry {
+	if t.Headers != nil {
+		h, err := checkHeaders(t.Headers)
+		if err != nil {
+			panic("trappsec: TemplateResponse: " + err.Error())
+		}
+		t.Headers = h
+	}
+	if t.MIMEType == "" {
+		t.MIMEType = "application/json"
+	}
+	t.Body = deepCopyValue(t.Body)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.templates[name] = t
 	return s
 }
 
@@ -692,29 +714,131 @@ func (s *Sentry) Trigger(req any, reason string, opts ...any) {
 	})
 }
 
-// triggerTrapEvent emits a trap_hit event and returns the response body and config.
-// Called by framework integration packages. It never panics: failures in
-// callbacks degrade to an empty `{}` body.
+// triggerTrapEvent emits a trap_hit event and returns the response body and
+// config, with Headers stripped of Content-Type (moved to MIMEType) and the
+// framing headers. Called by framework integration packages. It never panics:
+// a failing response hook sends the trap's static response, and a body that
+// cannot be produced sends the default response for the auth state (R16).
 func (s *Sentry) triggerTrapEvent(req any, trap TrapConfig) (payload []byte, cfg ResponseTemplate) {
-	cfg = trap.ResponseUnauthenticated
-	payload = []byte("{}")
+	fallback := trap.FallbackUnauthenticated
+	cfg = responseHead(trap.ResponseUnauthenticated, trap.ResponseUnauthenticated.Headers)
+	payload = []byte{}
 	defer func() {
 		if r := recover(); r != nil {
 			s.logger.Printf("trappsec: panic in triggerTrapEvent: %v", r)
-			payload = []byte("{}")
+			payload, cfg = s.fallbackResponse(req, fallback, "unauthenticated", nil)
 		}
 	}()
 
 	ctx, identity := s.newEvent(req, "trappsec.trap_hit")
 	ctx.Intent = trap.Intent
+	key, static := "unauthenticated", trap.ResponseUnauthenticated
 	if identity.User != "" {
-		cfg = trap.ResponseAuthenticated
+		key, static, fallback = "authenticated", trap.ResponseAuthenticated, trap.FallbackAuthenticated
 	}
 	s.emit(ctx, s.getContext(req))
 
-	bodyVal := s.resolveDynamicBody(cfg.Body, req)
-	payload = normalizePayload(bodyVal)
-	return payload, cfg
+	resp := static
+	headers := static.Headers
+	if o := s.runResponseHook(req, trap.ResponseHook, TrapRequest{
+		Authenticated: identity.User != "", User: identity.User, Role: identity.Role,
+	}); o != nil {
+		if o.Status != 0 {
+			resp.StatusCode = o.Status
+		}
+		if o.MIMEType != "" {
+			resp.MIMEType = o.MIMEType
+		}
+		if o.Body != nil {
+			resp.Body = o.Body
+		}
+		if o.Headers != nil {
+			headers = mergeHeaders(headers, o.Headers)
+		}
+	}
+
+	if body, ok := s.encodeBody(req, resp.Body); ok {
+		return body, responseHead(resp, headers)
+	}
+	return s.fallbackResponse(req, fallback, key, static.Body)
+}
+
+// fallbackResponse is the default response for the auth state (the trap's
+// resolved copy, or the Sentry's when the TrapConfig was built by hand). Its
+// body is empty when it cannot be produced either, or when it is failed, the
+// trap's own callback.
+func (s *Sentry) fallbackResponse(req any, fb ResponseTemplate, key string, failed any) ([]byte, ResponseTemplate) {
+	if fb.StatusCode == 0 {
+		fb = s.DefaultResponses()[key]
+	}
+	head := responseHead(fb, fb.Headers)
+	if failed != nil && sameFunc(fb.Body, failed) {
+		return []byte{}, head
+	}
+	body, ok := s.encodeBody(req, fb.Body)
+	if !ok {
+		body = []byte{}
+	}
+	return body, head
+}
+
+// sameFunc reports whether a and b are the same function value.
+func sameFunc(a, b any) bool {
+	va, vb := reflect.ValueOf(a), reflect.ValueOf(b)
+	return va.Kind() == reflect.Func && vb.Kind() == reflect.Func && va.Type() == vb.Type() && va.Pointer() == vb.Pointer()
+}
+
+// runResponseHook calls a trap's response hook and validates its result. It
+// returns nil (send the static response) when there is no hook, the hook
+// returns nil or panics, or its result is invalid.
+func (s *Sentry) runResponseHook(req any, hook TrapResponseHook, ctx TrapRequest) (out *TrapResponse) {
+	if hook == nil {
+		return nil
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			s.logger.Printf("trappsec: panic in trap response hook: %v", r)
+			out = nil
+		}
+	}()
+	res := hook(req, ctx)
+	if res == nil {
+		return nil
+	}
+	o := *res
+	if o.Status != 0 && (o.Status < 100 || o.Status > 599) {
+		s.logger.Printf("trappsec: trap response hook failed: invalid status %d", o.Status)
+		return nil
+	}
+	if reflect.ValueOf(o.Body).Kind() == reflect.Func {
+		s.logger.Printf("trappsec: trap response hook failed: Body must not be a function")
+		return nil
+	}
+	if o.Headers != nil {
+		h, err := checkHeaders(o.Headers)
+		if err != nil {
+			s.logger.Printf("trappsec: trap response hook failed: %v", err)
+			return nil
+		}
+		o.Headers = h
+	}
+	return &o
+}
+
+// encodeBody evaluates a callable body and encodes the result: []byte and
+// string bodies are sent raw regardless of MIME type, nil is {}, and
+// everything else is JSON-encoded. ok is false when the callback panics or
+// the value cannot be encoded.
+func (s *Sentry) encodeBody(req any, body any) ([]byte, bool) {
+	v, ok := s.resolveDynamicBody(body, req)
+	if !ok {
+		return nil, false
+	}
+	b, ok := encodePayload(v)
+	if !ok {
+		s.logger.Printf("trappsec: failed to encode trap response body of type %T", v)
+	}
+	return b, ok
 }
 
 // triggerWatchEvent emits a watch_hit event. Called by framework integration packages.
@@ -1313,6 +1437,7 @@ func (s *Sentry) emit(ctx TriggerContext, reqCtx context.Context) {
 func cloneTemplate(t ResponseTemplate) ResponseTemplate {
 	out := t
 	out.Body = deepCopyValue(t.Body)
+	out.Headers = cloneHeaders(t.Headers)
 	return out
 }
 
@@ -1357,32 +1482,33 @@ func deepCopyValue(v any) any {
 	}
 }
 
-// normalizePayload encodes a trap response body: []byte and string bodies are
-// sent raw regardless of MIME type; everything else is JSON-encoded.
-func normalizePayload(body any) []byte {
+// encodePayload encodes a trap response body: []byte and string bodies are
+// sent raw regardless of MIME type; nil is {}; everything else is
+// JSON-encoded. ok is false when encoding fails.
+func encodePayload(body any) ([]byte, bool) {
 	if body == nil {
 		body = map[string]any{}
 	}
 	switch v := body.(type) {
 	case []byte:
-		return v
+		return v, true
 	case string:
-		return []byte(v)
+		return []byte(v), true
 	}
 	b, err := json.Marshal(body)
 	if err != nil {
-		return []byte("{}")
+		return nil, false
 	}
-	return b
+	return b, true
 }
 
-// resolveDynamicBody evaluates callable bodies. A panicking callback is
-// logged and replaced by an empty object.
-func (s *Sentry) resolveDynamicBody(body any, req any) (out any) {
+// resolveDynamicBody evaluates callable bodies. ok is false when the
+// callback panics (logged).
+func (s *Sentry) resolveDynamicBody(body any, req any) (out any, ok bool) {
 	defer func() {
 		if r := recover(); r != nil {
 			s.logger.Printf("trappsec: panic in dynamic response body: %v", r)
-			out = map[string]any{}
+			out, ok = nil, false
 		}
 	}()
 	// Framework-specific resolver runs first (e.g. func(*gin.Context) any).
@@ -1397,7 +1523,70 @@ func (s *Sentry) resolveDynamicBody(body any, req any) (out any) {
 		body = resolver(body, req)
 	}
 	if fn, ok := body.(func(any) any); ok {
-		return fn(req)
+		return fn(req), true
 	}
-	return body
+	return body, true
+}
+
+// framingHeaders are never taken from configured headers: the framework
+// computes them.
+var framingHeaders = map[string]bool{"content-length": true, "transfer-encoding": true}
+
+// checkHeaders returns a copy of h, or an error naming the first header whose
+// name is empty or contains CR, LF or ':', or whose value contains CR or LF.
+func checkHeaders(h map[string]string) (map[string]string, error) {
+	out := make(map[string]string, len(h))
+	for name, value := range h {
+		if name == "" || strings.ContainsAny(name, "\r\n:") || strings.ContainsAny(value, "\r\n") {
+			return nil, fmt.Errorf("invalid response header %q", name)
+		}
+		out[name] = value
+	}
+	return out, nil
+}
+
+func cloneHeaders(h map[string]string) map[string]string {
+	if h == nil {
+		return nil
+	}
+	out := make(map[string]string, len(h))
+	for k, v := range h {
+		out[k] = v
+	}
+	return out
+}
+
+// mergeHeaders returns base with extra applied; names compare
+// case-insensitively.
+func mergeHeaders(base, extra map[string]string) map[string]string {
+	out := cloneHeaders(base)
+	if out == nil {
+		out = make(map[string]string, len(extra))
+	}
+	for name, value := range extra {
+		for k := range out {
+			if strings.EqualFold(k, name) {
+				delete(out, k)
+			}
+		}
+		out[name] = value
+	}
+	return out
+}
+
+// responseHead is the status, MIME type and headers to send for t with
+// headers: a Content-Type header replaces MIMEType and framing headers are
+// dropped. Body is left out: the payload is returned separately.
+func responseHead(t ResponseTemplate, headers map[string]string) ResponseTemplate {
+	out := ResponseTemplate{StatusCode: t.StatusCode, MIMEType: t.MIMEType, Headers: map[string]string{}}
+	for name, value := range headers {
+		lower := strings.ToLower(name)
+		switch {
+		case lower == "content-type":
+			out.MIMEType = value
+		case !framingHeaders[lower]:
+			out.Headers[name] = value
+		}
+	}
+	return out
 }

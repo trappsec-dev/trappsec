@@ -162,6 +162,9 @@ func (a *App) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if len(in.traps) > 0 {
 		if trap, ok := in.trapFor(r); ok {
 			body, cfg := adapter.TriggerTrapEvent(in.ts, r, trap)
+			for name, value := range cfg.Headers {
+				w.Header().Set(name, value)
+			}
 			if cfg.MIMEType != "" {
 				w.Header().Set("Content-Type", cfg.MIMEType)
 			}

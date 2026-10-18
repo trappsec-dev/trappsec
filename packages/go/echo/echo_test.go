@@ -857,3 +857,78 @@ func TestStartConfigServesApp(t *testing.T) {
 		t.Fatalf("trap answered %d, want the default 401", resp.StatusCode)
 	}
 }
+
+func TestTrapHeadersResponseHookAndFallback(t *testing.T) {
+	e := newEnv(t, nil)
+	configureMirror(e.s)
+	checkMirror(t, e.h)
+}
+
+// configureMirror sets up trap response headers, a response hook and a
+// failing body callback (R16, R23); checkMirror serves them through h.
+func configureMirror(s *core.Sentry) {
+	s.IdentifyUser(func(req any) *core.AuthContext {
+		r := httpReq(req)
+		if r == nil || r.Header.Get("x-user") == "" {
+			return nil
+		}
+		return &core.AuthContext{User: r.Header.Get("x-user"), Role: r.Header.Get("x-role")}
+	})
+	s.DefaultUnauthenticatedResponse(core.ResponseConfig{Status: 401, Body: map[string]any{"detail": "Not authenticated"},
+		Headers: map[string]string{"WWW-Authenticate": "Bearer"}})
+	s.DefaultResponse(core.ResponseConfig{Status: 403, Body: "forbidden", MIMEType: "text/plain",
+		Headers: map[string]string{"X-Default": "1"}})
+	s.Trap("/api/v1/projects/export").Methods("GET").
+		Respond(core.ResponseConfig{Status: 403, Body: map[string]any{"detail": "Forbidden"}, MIMEType: "application/json",
+			Headers: map[string]string{"Allow": "GET, POST", "Vary": "Accept"}}).
+		RespondWith(func(req any, ctx core.TrapRequest) *core.TrapResponse {
+			if httpReq(req) == nil {
+				panic("hook got no request")
+			}
+			switch ctx.Role {
+			case "owner":
+				return &core.TrapResponse{Status: 201, Body: map[string]any{"id": 1}}
+			case "ghost":
+				return &core.TrapResponse{Status: 404, Body: map[string]any{"detail": "Not found."}}
+			}
+			return nil
+		})
+	s.Trap("/api/v1/broken").Methods("GET").Respond(core.ResponseConfig{Status: 200,
+		Body: func(any) any { panic("boom") }, Headers: map[string]string{"X-Trap": "1"}})
+}
+
+func checkMirror(t *testing.T, h http.Handler) {
+	t.Helper()
+	get := func(path, user, role string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest("GET", path, nil)
+		if user != "" {
+			req.Header.Set("x-user", user)
+			req.Header.Set("x-role", role)
+		}
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		return rec
+	}
+	want := func(rec *httptest.ResponseRecorder, status int, body string, headers map[string]string) {
+		t.Helper()
+		if rec.Code != status || strings.TrimSpace(rec.Body.String()) != body {
+			t.Fatalf("got %d %q, want %d %q", rec.Code, rec.Body.String(), status, body)
+		}
+		for k, v := range headers {
+			if got := rec.Header().Get(k); got != v {
+				t.Fatalf("header %s = %q, want %q (all: %v)", k, got, v, rec.Header())
+			}
+		}
+	}
+	want(get("/api/v1/projects/export", "", ""), 401, `{"detail":"Not authenticated"}`, map[string]string{"WWW-Authenticate": "Bearer"})
+	want(get("/api/v1/projects/export", "bob", "member"), 403, `{"detail":"Forbidden"}`,
+		map[string]string{"Allow": "GET, POST", "Vary": "Accept", "WWW-Authenticate": ""})
+	want(get("/api/v1/projects/export", "bob", "owner"), 201, `{"id":1}`, map[string]string{"Allow": "GET, POST"})
+	want(get("/api/v1/projects/export", "bob", "ghost"), 404, `{"detail":"Not found."}`, nil)
+	// A failing body callback sends the default response, never "{}".
+	rec := get("/api/v1/broken", "bob", "member")
+	want(rec, 403, "forbidden", map[string]string{"X-Default": "1", "X-Trap": ""})
+	if ct := rec.Header().Get("Content-Type"); !strings.HasPrefix(ct, "text/plain") {
+		t.Fatalf("Content-Type = %q", ct)
+	}
+}

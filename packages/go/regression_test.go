@@ -370,9 +370,10 @@ func TestPanicInRequestExtractorsAndDynamicBody(t *testing.T) {
 		ResponseUnauthenticated: ResponseTemplate{StatusCode: 401, MIMEType: "application/json",
 			Body: func(any) any { panic("body exploded") }},
 	}
+	s.DefaultUnauthenticatedResponse(ResponseConfig{Status: 403, Body: "real", MIMEType: "text/plain"})
 	body, cfg := s.triggerTrapEvent(nil, trap)
-	if string(body) != "{}" || cfg.StatusCode != 401 {
-		t.Fatalf("expected {} fallback, got %q %d", body, cfg.StatusCode)
+	if string(body) != "real" || cfg.StatusCode != 403 || cfg.MIMEType != "text/plain" {
+		t.Fatalf("expected the default response, got %q %d %q", body, cfg.StatusCode, cfg.MIMEType)
 	}
 	if len(capture.events) != 1 {
 		t.Fatal("event should still be emitted")
@@ -396,14 +397,14 @@ func TestPanicInDefaultCallbackTreatedAsNoDefaultAndStillStrips(t *testing.T) {
 }
 
 func TestTrapBodyStringSentRawRegardlessOfMime(t *testing.T) {
-	if got := string(normalizePayload("plain")); got != "plain" {
+	if got, _ := encodePayload("plain"); string(got) != "plain" {
 		t.Fatalf("got %q", got)
 	}
-	if got := string(normalizePayload(map[string]any{"a": 1})); got != `{"a":1}` {
+	if got, _ := encodePayload(map[string]any{"a": 1}); string(got) != `{"a":1}` {
 		t.Fatalf("got %q", got)
 	}
-	if got := string(normalizePayload(make(chan int))); got != "{}" {
-		t.Fatalf("unmarshalable body should degrade to {}, got %q", got)
+	if _, ok := encodePayload(make(chan int)); ok {
+		t.Fatal("an unmarshalable body must report failure (the caller falls back to the default response)")
 	}
 }
 

@@ -140,6 +140,9 @@ func (in *netHTTPIntegration) install() {
 			trapIdx[pattern] = true
 			in.register(pattern, func(w http.ResponseWriter, r *http.Request) {
 				body, cfg := adapter.TriggerTrapEvent(in.ts, r, t)
+				for name, value := range cfg.Headers {
+					w.Header().Set(name, value)
+				}
 				if cfg.MIMEType != "" {
 					w.Header().Set("Content-Type", cfg.MIMEType)
 				}

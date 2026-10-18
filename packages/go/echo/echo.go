@@ -198,6 +198,9 @@ func (a *App) SetMaxBodyBytes(n int64) { a.integration.maxBody.Set(n) }
 func echoTrapHandler(ts *core.Sentry, trap core.TrapConfig) echo.HandlerFunc {
 	return func(c *echo.Context) error {
 		body, cfg := adapter.TriggerTrapEvent(ts, c, trap)
+		for name, value := range cfg.Headers {
+			c.Response().Header().Set(name, value)
+		}
 		return c.Blob(cfg.StatusCode, cfg.MIMEType, body)
 	}
 }

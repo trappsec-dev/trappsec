@@ -72,7 +72,7 @@ func TestDefaultResponseSetters(t *testing.T) {
 		cfg.ResponseAuthenticated.MIMEType != "application/json" {
 		t.Fatalf("authenticated = %+v", cfg.ResponseAuthenticated)
 	}
-	if cfg.ResponseUnauthenticated != (ResponseTemplate{StatusCode: 403, Body: "no", MIMEType: "text/plain"}) {
+	if !reflect.DeepEqual(cfg.ResponseUnauthenticated, ResponseTemplate{StatusCode: 403, Body: "no", MIMEType: "text/plain"}) {
 		t.Fatalf("unauthenticated = %+v", cfg.ResponseUnauthenticated)
 	}
 

@@ -299,6 +299,9 @@ var probePool = sync.Pool{New: func() any { return &probeWriter{h: http.Header{}
 func ginTrapHandler(ts *core.Sentry, trap core.TrapConfig) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		body, cfg := adapter.TriggerTrapEvent(ts, c, trap)
+		for name, value := range cfg.Headers {
+			c.Header(name, value)
+		}
 		c.Data(cfg.StatusCode, cfg.MIMEType, body)
 	}
 }
