@@ -1,12 +1,12 @@
 ---
 name: add-deception
-description: Design and add deception to an application the user owns, written natively in the app's own code. Adds decoy API routes, honey fields and frontend lures that blend into the app's real code, wired to identity-attributed alerts and verified never to affect legitimate users. Use this whenever the user wants to add decoys, honeypots, honey fields, canary endpoints, tripwires or lures to their own web app or API; wants to detect signed-in users probing business logic (hidden admin routes, mass assignment, privilege escalation, cross-tenant access); wants bait in their frontend that leads to decoys; or wants an existing deception setup reviewed, extended or made more convincing. Not for anti-spam form honeypots, UI focus traps, WAFs, rate limiting or vulnerability scanning.
+description: Design and add deception to an application the user owns: decoy API routes, honey fields and frontend lures that blend into the app's real code, wired to identity-attributed alerts and verified never to affect legitimate users. Use this whenever the user wants to add decoys, honeypots, honey fields, canary endpoints, tripwires or lures to their own web app or API; wants to detect signed-in users probing business logic (hidden admin routes, mass assignment, privilege escalation, cross-tenant access); wants bait in their frontend that leads to decoys; or wants an existing deception setup reviewed, extended or made more convincing. Not for anti-spam form honeypots, UI focus traps, WAFs, rate limiting or vulnerability scanning.
 license: MIT
 ---
 
-# Add deception natively
+# Add deception
 
-You are adding a detection layer to an application the user owns, written in the app's own code. No deception framework and no new dependency:
+You are adding a detection layer to an application the user owns, written in the app's own code:
 - decoy routes are real routes in the app's own router, built from the same authentication, loaders, validation, serializers and error helpers as the routes beside them;
 - honey fields are checks inside real handlers;
 - a small tripwire helper, written into the app, records each hit with the caller's identity.
@@ -67,7 +67,7 @@ Seven habits produce that:
    | A honey field or a value rule on a real endpoint | Never detected from behavior; best guesses 8–30% |
    | A decoy route | Ranked above every real endpoint in 4 of 4 apps, at 60–90% |
 
-   Native decoys gave nothing away in headers, timing or error handling. Testers found them by elimination instead: they wrote data and read it back, which clears every real endpoint, and whatever never works for any account is left over. Section 2 of the workflow designs around this.
+   Decoys built from their siblings' code gave nothing away in headers, timing or error handling. Testers found them by elimination instead: they wrote data and read it back, which clears every real endpoint, and whatever never works for any account is left over. Section 2 of the workflow designs around this.
 5. **Keep every layer consistent.** Frontend calls a decoy with POST → the decoy route accepts POST. There is a client method → there is a type. The app translates every string → the lure's strings are translated. Give a lure the care a real feature with the same stakes would get: one name across method, flag, handler and strings; its own place in the layout; a gate as strict as the value warrants; the states, copy and typed responses the real feature would have.
 6. **Chain the breadcrumbs.** Design at least one path where touching one tripwire leads to the next. Example: a decoy's 403 names a permission, a response field shows where permissions live, and sending that permission trips a honey field. Each step is another alert, and the second step removes doubt about intent.
 7. **Leave no fingerprints, including this skill's.** Names in this skill and its references only illustrate patterns. Never reuse them: a decoy path shared by many apps becomes a signature attackers learn.
@@ -86,11 +86,11 @@ If you cannot write a plausible Think, the tripwire is not believable. If the Do
 
 ### 0. Check fit and ask what you can't infer
 
-- **Any stack.** Decoys are written in the app's own language and framework, so there is nothing to install and no list of supported frameworks.
+- **Any stack.** Decoys are written in the app's own language and framework, so there is nothing to install.
 - **Ownership.** Confirm this is the user's own application. Deception belongs only in systems you operate.
 - **Layout.** Find which service is the public API, where the frontend lives (same repo, another repo, none), and how each is built and run.
 - **Questions.** Ask in one batch, and only what the code cannot tell you:
-  1. Is the source repository public? Native decoys in public source are visible to everyone (see references/native-implementation.md §9).
+  1. Is the source repository public? Decoys in public source are visible to everyone (see references/implementation.md §9).
   2. Where should alerts go: logs only, OpenTelemetry, the app's existing error tracker or SIEM?
   3. Do external testers (bug bounty, pentests) use this app? Their findings need a triage path.
   4. Do older clients (mobile builds, partner integrations, scripts) still call older API versions or paths?
@@ -121,7 +121,7 @@ If you cannot write a plausible Think, the tripwire is not believable. If the Do
   - Auth: mechanism, role/permission model, tenancy model, domain vocabulary, and the order in which a typical route authenticates, loads, authorizes and validates.
   - Frontend: HTTP client wrapper, folder layout, file naming, typing, i18n, role-gating idiom, feature-flag system, comment style.
 - **Story material.** Read the history: `git log --oneline`, deprecated folders, version migrations, TODOs, flags, renamed features. The best decoys continue a story the codebase already tells.
-- **Request pipeline.** Trace how a request gets authenticated and authorized: global middleware, per-route middleware, guards, dependencies, permission classes. Native decoys reuse this pipeline, so you need to know it exactly.
+- **Request pipeline.** Trace how a request gets authenticated and authorized: global middleware, per-route middleware, guards, dependencies, permission classes. Decoys reuse this pipeline, so you need to know it exactly.
 
 If there is a frontend, read references/frontend-lures.md now.
 
@@ -135,7 +135,7 @@ If there is a frontend, read references/frontend-lures.md now.
    - at least one breadcrumb chain linking two of the above.
 
    More is not better. Every decoy adds maintenance, false-positive risk and another chance of discovery. Reviewers judge the client as a whole, and three anomalies in a small client make each one look more deliberate. So in a small client, add something new and visible for one or two tripwires at most, each with a different pattern.
-3. **The final denial.** A native decoy runs its sibling's real checks, so a caller who passes them all reaches its end. That caller is often the owner of their own workspace, the most privileged account an attacker can create. End there with a denial every such caller would plausibly get, through the app's own error mechanism and with an error code the app already uses: a feature that isn't enabled for the account, or a function handled elsewhere. Don't use a plan gate if a self-serve trial of that plan exists. Don't end with a success: a created object implies follow-ups (fetching it, listing it) that the rest of the API won't corroborate.
+3. **The final denial.** A decoy runs its sibling's real checks, so a caller who passes them all reaches its end. That caller is often the owner of their own workspace, the most privileged account an attacker can create. End there with a denial every such caller would plausibly get, through the app's own error mechanism and with an error code the app already uses: a feature that isn't enabled for the account, or a function handled elsewhere. Don't use a plan gate if a self-serve trial of that plan exists. Don't end with a success: a created object implies follow-ups (fetching it, listing it) that the rest of the API won't corroborate.
 4. **Decoy routes that survive elimination.** A decoy route never works, so make sure that isn't what singles it out:
    - **Share a gate with real routes.** Deny through a check that real routes also apply and that the tester can see failing elsewhere: a role or permission the app already uses. A role or permission only the decoys mention is a tell; testers caught an invented "staff" role in three of four apps.
    - **Give it neighbors.** A route shape with no siblings stands out: a DELETE on an item that has no GET, a write method on a resource the API never writes.
@@ -165,7 +165,7 @@ Then list the files you will touch, your assumptions, and anything the user must
 
 ### 4. Implement
 
-Patterns, reference code and per-framework notes are in references/native-implementation.md.
+Patterns, reference code and per-framework notes are in references/implementation.md.
 
 **Backend.**
 - **Tripwire helper.** Add one small server-side module, in the app's style, that records a hit as one event in the event schema: through OpenTelemetry if the app already exports telemetry, otherwise through its own logger. It never raises, never blocks, does constant work per request, and never changes the request. If the user wants alerts beyond that, route it into the alerting the app already has.
@@ -222,7 +222,7 @@ Decoys only work if the people who maintain the app know about them. Otherwise s
   - add a short note to the repo's agent instructions (AGENTS.md, CLAUDE.md) naming the decoys and lure symbols and asking agents not to remove, call or complete them;
   - suggest CODEOWNERS entries so the security team reviews changes to those files.
 - Commit messages and PR descriptions describe the change accurately for reviewers.
-- In a public repository, decoy code and notes are visible to attackers too. Follow references/native-implementation.md §9 and tell the user what remains visible.
+- In a public repository, decoy code and notes are visible to attackers too. Follow references/implementation.md §9 and tell the user what remains visible.
 
 ## Ground rules
 
@@ -245,7 +245,7 @@ Propose fixes in the plan format, then extend. For a request about one specific 
 
 ## Reference files
 
-- **references/native-implementation.md**: anatomy of a native decoy, final denials, inferred decoys, honey fields, the tripwire helper with reference code, inventory, public repositories, framework notes, safety checklist.
+- **references/implementation.md**: anatomy of a decoy route, final denials, inferred decoys, honey fields, the tripwire helper with reference code, inventory, public repositories, framework notes, safety checklist.
 - **references/frontend-lures.md**: how attackers read frontends, lure patterns, build survival, false-positive hazards, tells, notes per framework.
 - **references/backend-traps.md**: cover stories, honey-field design and expected values, responses, breadcrumb chains, intents, directions by domain, infrastructure gotchas.
 - **references/verification.md**: verification commands, the bundled scripts, the false-positive audit, the report template.

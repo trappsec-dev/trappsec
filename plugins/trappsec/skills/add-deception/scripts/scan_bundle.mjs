@@ -15,7 +15,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 
-const STRONG = ['trappsec', 'decoy', 'honeypot', 'honeyfield', 'honeytoken', 'tripwire', 'lure', 'canarytoken', 'deception', 'deceptive'];
+const STRONG = ['decoy', 'honeypot', 'honeyfield', 'honeytoken', 'tripwire', 'lure', 'canarytoken', 'deception', 'deceptive'];
 const WEAK = ['trap', 'honey', 'bait', 'canary', 'fake', 'dummy', 'ghost', 'sensor', 'mock', 'bogus', 'sham', 'phony', 'snare'];
 // Phrases a teammate writes next to a deliberate lure; they reveal it as surely as a word.
 const PHRASES = [
@@ -225,7 +225,7 @@ function main() {
         return !best || d < best.d ? { d, lure: h.lure } : best;
       }, null);
       const highWindow = hit.strength === 'strong' ? opts.proximity : Math.min(120, opts.proximity);
-      const isHigh = hit.word === 'trappsec' || (nearest && nearest.d <= highWindow);
+      const isHigh = nearest && nearest.d <= highWindow;
       const isNear = nearest && nearest.d <= opts.proximity;
       if (isHigh || isNear) {
         result.findings.push({
@@ -233,9 +233,7 @@ function main() {
           file: rel,
           offset: hit.index,
           word: hit.word,
-          reason: nearest && nearest.d <= opts.proximity
-            ? `revealing word ${nearest.d} chars from lure "${result.lures[nearest.lure].lure}"`
-            : 'the server-side library name appears in client files',
+          reason: `revealing word ${nearest.d} chars from lure "${result.lures[nearest.lure].lure}"`,
           context: snippet(text, hit.index),
         });
       } else if (hit.strength === 'strong') {

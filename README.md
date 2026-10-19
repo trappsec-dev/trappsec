@@ -43,11 +43,11 @@ The `add-deception` agent skill turns your coding agent into a deception enginee
 
 * studies your API conventions and frontend code;
 * designs honey fields and decoy routes that match them;
-* writes them natively in your app's own code, as real routes and checks that run the same authentication, loaders and validation as the routes beside them, so they answer every probe the same way;
+* writes them in your app's own code, as real routes and checks that run the same authentication, loaders and validation as the routes beside them, so they answer every probe the same way;
 * plants lures in the frontend that look like your team wrote them;
 * verifies that every tripwire fires and that no real user can ever trigger one.
 
-The skill adds no dependency and works on any stack, including ones the trappsec library doesn't support.
+The skill adds no dependency and works on any stack.
 
 **Claude Code:**
 

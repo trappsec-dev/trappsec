@@ -1,7 +1,7 @@
 {
   "name": "trappsec",
   "version": "0.1.0",
-  "description": "Agent skills for adding deception (decoy routes, honey fields and frontend lures) to your own application, written natively in its own code.",
+  "description": "Agent skills for adding deception (decoy routes, honey fields and frontend lures) to your own application, written in its own code.",
   "author": {
     "name": "trappsec-dev",
     "url": "https://trappsec.dev"

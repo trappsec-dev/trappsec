@@ -151,7 +151,7 @@ Also consider: older app versions still in users' hands, partner integrations, i
 
 Before finishing, look at each lure the way an attacker would, and remove:
 
-- **Revealing words** anywhere that ships: trap, decoy, honey, honeypot, lure, bait, canary, tripwire, fake, dummy, sensor, deception, trappsec. Check identifiers, strings, comments, file and chunk names, CSS classes, `data-testid`, storage keys, flag names, locale keys.
+- **Revealing words** anywhere that ships: trap, decoy, honey, honeypot, lure, bait, canary, tripwire, fake, dummy, sensor, deception. Check identifiers, strings, comments, file and chunk names, CSS classes, `data-testid`, storage keys, flag names, locale keys.
 - **Style that differs from the neighbors:**
   - a different HTTP helper, quote style or casing;
   - missing types where everything else is typed;

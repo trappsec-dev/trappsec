@@ -9,7 +9,7 @@
     {
       "name": "trappsec",
       "source": "./plugins/trappsec",
-      "description": "Agent skills for adding deception (decoy routes, honey fields and frontend lures) to your own application, written natively in its own code.",
+      "description": "Agent skills for adding deception (decoy routes, honey fields and frontend lures) to your own application, written in its own code.",
       "category": "security",
       "tags": ["security", "deception", "honeypot", "detection", "api"]
     }

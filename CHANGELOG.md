@@ -4,7 +4,7 @@ All notable changes to trappsec are documented here. The format follows [Keep a 
 
 ## Unreleased
 
-### Changed: the `add-deception` skill writes deception natively
+### Changed: the `add-deception` skill writes deception into the app's own code
 
 - **No library needed.** The skill now builds decoy routes as real routes in the app's own router, copying the authentication, loaders, permission checks and validation of the route beside them, and adds honey-field checks inside real handlers. A small helper written into the app records each hit in the trappsec event schema, through OpenTelemetry or the app's logger. It works on any stack.
 - **Why.** Probing the same decoys built both ways in nine framework setups, trappsec traps still gave themselves away on 7–19 probes per framework after every workaround (unknown IDs, owner accounts, validation order, headers, body bytes, method handling), and native decoys on none. In end-to-end runs, native changes also carried fewer safety risks.

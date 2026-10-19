@@ -1,9 +1,9 @@
-# Native implementation
+# Implementation
 
-Decoys written in the app's own code, with no deception framework. Names below only illustrate patterns; never copy them into an app.
+How to build decoys in the app's own code. Names below only illustrate patterns; never copy them into an app.
 
 Contents
-1. Anatomy of a native decoy route
+1. Anatomy of a decoy route
 2. The final denial
 3. Inferred decoys
 4. Honey fields
@@ -15,7 +15,7 @@ Contents
 10. Framework notes
 11. Safety checklist
 
-## 1. Anatomy of a native decoy route
+## 1. Anatomy of a decoy route
 
 A decoy route is its sibling's route with two changes: a tripwire step after authentication, and a final denial where the real work would be.
 
@@ -88,7 +88,7 @@ The caller who reaches the end of a decoy has passed every real check, so the de
 
 ## 3. Inferred decoys
 
-An inferred decoy is a method or sub-resource the API's conventions imply but the app doesn't have (DELETE on items it lists, the previous version of a route). Natively it is a real handler:
+An inferred decoy is a method or sub-resource the API's conventions imply but the app doesn't have (DELETE on items it lists, the previous version of a route). It is a real handler:
 
 - **Same path, new method:** add the handler in the same router or view as the existing methods. The framework then lists it in `Allow` and answers OPTIONS for it like any real method. In method-agnostic routers (Django URL patterns), add a method to the existing view or viewset; never add a second pattern for the same URL.
 - **Same chain:** the sibling of an inferred method is the existing route on that path. For a DELETE beside a GET, use the GET's loaders (so an unknown item gets the same 404), then the permission check a destructive action would have, then the final denial.
@@ -96,7 +96,7 @@ An inferred decoy is a method or sub-resource the API's conventions imply but th
 
 ## 4. Honey fields
 
-A honey field is a parameter that real clients never send, or always send with one known value, on a real endpoint that would never honor it. Natively it is a check at the top of the real endpoint.
+A honey field is a parameter that real clients never send, or always send with one known value, on a real endpoint that would never honor it. It is a check at the top of the real endpoint.
 
 - **Where:** after authentication, before validation or any use of the body. Use the endpoint's own access to the parsed body: `req.body`, `request.data`, a dependency that reads `await request.json()`, a pre-handler hook.
 - **Detect:**
@@ -105,7 +105,7 @@ A honey field is a parameter that real clients never send, or always send with o
   - a per-user value the UI echoes back (their own role, their own org ID): compute the expected value from the authenticated caller and record only on a mismatch. For stale but legitimate values (a tab opened before a demotion), accept values that are plausible for this caller and record only impossible ones.
 - **Compare canonically.** Form and query values are strings, JSON values are typed. Compare `"true"` with `true` and `"5"` with `5` as equal, compare arrays element by element, and treat a repeated query or form parameter as tampering unless every value matches. See `values_match` in §6.
 - **Make sure it can never reach the logic, without changing what the endpoint does with it today.** If the endpoint currently ignores unknown fields (most do), remove the field after recording it, so a later change to the serializer can't start honoring it. If the endpoint rejects unknown fields, record it and let the validator reject it exactly as it rejects any other unknown field. A honey field that is silently accepted while every other unknown field is rejected is a tell.
-- **Keep the work constant.** Look at the field on the top-level object only. Don't walk arrays or nested objects, don't run fuzzy matching (edit distance and the like) over attacker-supplied lists, and don't call `String()` or `str()` on values of unknown type without a guard: a crafted body must cost the same as a normal one and must never turn into a 500. In a safety review, a library that recursed into every array element let one anonymous 1.9 MB request write 8.7 MB of logs.
+- **Keep the work constant.** Look at the field on the top-level object only. Don't walk arrays or nested objects, don't run fuzzy matching (edit distance and the like) over attacker-supplied lists, and don't call `String()` or `str()` on values of unknown type without a guard: a crafted body must cost the same as a normal one and must never turn into a 500. In a safety review, a check that recursed into every array element let one anonymous 1.9 MB request write 8.7 MB of logs.
 - **Nothing else in the body switches the check off.** Compute the expected value from the authenticated caller, never from other fields the caller sent (an `id` in the body, for example); otherwise an attacker adds a field and the tripwire goes quiet.
 - **Bait it** with a field in a real response (backend-traps.md §2), and add it to the client types like the real optional fields.
 
@@ -249,7 +249,7 @@ Anonymous requests are rejected by the sibling's authentication before the tripw
 
 ## 8. Keeping decoys recognizable to the team
 
-Native decoys look exactly like real code. That is what makes them convincing, and also what gets them deleted or "finished" by a teammate or a coding agent. Counter it with:
+Decoys look exactly like real code. That is what makes them convincing, and also what gets them deleted or "finished" by a teammate or a coding agent. Counter it with:
 
 - **A marker on every decoy**, in server code: one comment line naming the cover story and pointing to the inventory, or a no-op decorator if the team uses decorators for such things.
 - **One inventory**: a server-side document or module listing every decoy, honey-field check and lure with its file, its cover story and its intent.
@@ -258,7 +258,7 @@ Native decoys look exactly like real code. That is what makes them convincing, a
 
 ## 9. Public repositories
 
-Native decoys in a public repository can be read by anyone, who can then work out which frontend code is a lure. You can still catch attackers who probe the deployed app without reading the source. To keep decoys out of the public tree:
+Decoys in a public repository can be read by anyone, who can then work out which frontend code is a lure. You can still catch attackers who probe the deployed app without reading the source. To keep decoys out of the public tree:
 - put the decoy routes and honey-field checks in a module that is not in the public repository (a private package, or a file supplied at deploy time) and register it at startup the way the app registers optional routers or plugins;
 - keep frontend lures generic;
 - tell the user plainly what remains visible.

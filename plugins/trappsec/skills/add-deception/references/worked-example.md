@@ -79,7 +79,7 @@ For accountants and viewers, the decoy's 403 says the owner role is required. Th
 
 ```js
 // server/src/security/events.js (new; the app's other observability code lives in server/src/telemetry)
-// One structured line per security event; see the reference helper in native-implementation.md §6.
+// One structured line per security event; see the reference helper in implementation.md §6.
 module.exports = { record, valuesMatch };
 ```
 

@@ -1,6 +1,6 @@
 # Decoy routes, honey fields and responses
 
-How to design them. How to build them in the app's own code is in native-implementation.md.
+How to design them. How to build them in the app's own code is in implementation.md.
 
 Contents
 1. Cover stories for decoy routes
@@ -44,7 +44,7 @@ Pick paths and methods that the real API plausibly lacks and that no real client
 
 ## 2. Honey fields
 
-A honey field is a parameter that real clients never send, or always send with one fixed value, on a real endpoint that would never honor it. The check records it and makes sure it can never change behavior (native-implementation.md §4).
+A honey field is a parameter that real clients never send, or always send with one fixed value, on a real endpoint that would never honor it. The check records it and makes sure it can never change behavior (implementation.md §4).
 
 In black-box testing, honey fields and value rules were never detected from behavior, while every decoy route was eventually singled out. Make them the core of the portfolio.
 
@@ -88,7 +88,7 @@ A honey field nobody sees rarely gets tried. Return the field in a real GET resp
 
 ## 3. Responses
 
-A native decoy's responses come from its sibling's chain: authentication, loaders, permission checks and validation answer every probe exactly as they do for the sibling. You only choose the final denial (native-implementation.md §2).
+A decoy's responses come from its sibling's chain: authentication, loaders, permission checks and validation answer every probe exactly as they do for the sibling. You only choose the final denial (implementation.md §2).
 
 **Capture real responses anyway.** Call real endpoints and record the status, body, headers and content type for each case: no credentials, expired credentials, valid credentials without permission, unknown resource, wrong method, invalid body. You'll compare the decoy with them during verification, and they tell you which error codes and messages the app already uses for the final denial.
 
