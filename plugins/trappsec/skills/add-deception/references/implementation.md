@@ -27,7 +27,7 @@ decoy:   authenticate → TRIPWIRE → load resource → check permission → va
 - **Copy the chain, in order.** Use the sibling's own middleware, dependencies, decorators, guards, permission classes and validators, in the order the sibling uses them. Every probe that the sibling rejects (no token, expired token, unknown or foreign ID, missing role, bad body) is then rejected by the same code, with the same status, body, headers and timing.
 - **Record right after authentication**, before anything that can reject the caller, so every authenticated attempt is recorded, including the ones the permission check turns away.
 - **Declare it where the sibling is declared**, in the same router, file and style, with the smallest edit. Don't reformat the surrounding routes: a large diff in real route files is harder to review and easier to undo by accident.
-- **Treat the spec the same way as its siblings.** If the sibling appears in a generated spec or route listing, the decoy appears there too, unless that would invite legitimate API consumers to call it. In that case it belongs only where the app already keeps undocumented routes; a lone undocumented route beside documented siblings is the first thing a tester diffs.
+- **Treat the spec the same way as its siblings** (SKILL.md, Design step 4).
 - **Validate the body like the sibling does**, with a schema of the same kind, so malformed and incomplete bodies fail the same way and in the same order.
 
 Express:
@@ -40,11 +40,11 @@ router.post('/:projectId/<decoy>', requireAuth, recordProbe('privilege_escalatio
   (req, res, next) => next(new HttpError(403, 'forbidden', '<final denial>')));
 ```
 
-FastAPI (route-level `dependencies` run before the endpoint's own dependencies, after their own sub-dependencies such as authentication; make the probe `async def` so it doesn't add a threadpool hop):
+FastAPI:
 
 ```python
 async def <decoy>_probe(request: Request, user: CurrentUser) -> None:
-    security_events.record("trap_hit", request, user=<user id>, role=<role>, intent="privilege_escalation")
+    security_events.record("decoy_hit", request, user=<user id>, role=<role>, intent="privilege_escalation")
 
 # Security tripwire: <cover story>. See <inventory location>.
 @projects.post("/{project_id}/<decoy>", status_code=201, dependencies=[Depends(<decoy>_probe)])
@@ -52,13 +52,13 @@ def create_<decoy>(body: <DecoyCreate>, project: Annotated[dict, Depends(require
     raise HTTPException(status_code=403, detail="<final denial>")
 ```
 
-Django REST framework: DRF checks permissions in order before the action runs, so put a permission class that records and returns `True` first. Recording on the first line of the action also works, but only after global permissions and throttling have passed. DRF publishes an action's name and docstring through OPTIONS and the browsable API, so write the docstring as part of the cover story:
+Django REST framework:
 
 ```python
 class RecordProbe(BasePermission):  # name it in the app's style
     def has_permission(self, request, view):
         user = request.user if request.user.is_authenticated else None
-        security_events.record("trap_hit", request, user=user and user.pk, role=<role>, intent=view.probe_intent)
+        security_events.record("decoy_hit", request, user=user and user.pk, role=<role>, intent=view.probe_intent)
         return True
 
 # on the existing viewset, beside the sibling action
@@ -105,20 +105,20 @@ A honey field is a parameter that real clients never send, or always send with o
   - a per-user value the UI echoes back (their own role, their own org ID): compute the expected value from the authenticated caller and record only on a mismatch. For stale but legitimate values (a tab opened before a demotion), accept values that are plausible for this caller and record only impossible ones.
 - **Compare canonically.** Form and query values are strings, JSON values are typed. Compare `"true"` with `true` and `"5"` with `5` as equal, compare arrays element by element, and treat a repeated query or form parameter as tampering unless every value matches. See `values_match` in §6.
 - **Make sure it can never reach the logic, without changing what the endpoint does with it today.** If the endpoint currently ignores unknown fields (most do), remove the field after recording it, so a later change to the serializer can't start honoring it. If the endpoint rejects unknown fields, record it and let the validator reject it exactly as it rejects any other unknown field. A honey field that is silently accepted while every other unknown field is rejected is a tell.
-- **Keep the work constant.** Look at the field on the top-level object only. Don't walk arrays or nested objects, don't run fuzzy matching (edit distance and the like) over attacker-supplied lists, and don't call `String()` or `str()` on values of unknown type without a guard: a crafted body must cost the same as a normal one and must never turn into a 500. In a safety review, a check that recursed into every array element let one anonymous 1.9 MB request write 8.7 MB of logs.
+- **Keep the work constant.** Look at the field on the top-level object only. Don't walk arrays or nested objects, don't run fuzzy matching (edit distance and the like) over attacker-supplied lists, and don't call `String()` or `str()` on values of unknown type without a guard: a crafted body must cost the same as a normal one and must never turn into a 500.
 - **Nothing else in the body switches the check off.** Compute the expected value from the authenticated caller, never from other fields the caller sent (an `id` in the body, for example); otherwise an attacker adds a field and the tripwire goes quiet.
 - **Bait it** with a field in a real response (backend-traps.md §2), and add it to the client types like the real optional fields.
 
 Express:
 
 ```js
-const watchField = (field, expected, intent) => (req, res, next) => {
+const checkField = (field, expected, intent) => (req, res, next) => {
   try {
     if (req.body && Object.hasOwn(req.body, field)) {
       const value = req.body[field];
       let want; try { want = expected(req); } catch { want = undefined; }
       if (want === undefined || !valuesMatch(value, want)) {
-        securityEvents.record('watch_hit', req, { found_fields: [{ type: 'body', field, value, intent }] });
+        securityEvents.record('field_hit', req, { found_fields: [{ type: 'body', field, value, intent }] });
       }
       delete req.body[field];          // only if the endpoint ignores unknown fields today
     }
@@ -135,17 +135,17 @@ A field the real handler reads can't be a honey field. A value the real UI never
 
 One small module, written in the app's style and named like its other observability code. It records one structured event per hit. If the app already exports OpenTelemetry, emit the event through it (a log record, or an event on the current span, with the keys below as attributes) so it lands wherever the app's telemetry goes. Otherwise write it through the app's own logger.
 
-Event schema (keep these keys so alert rules work across services):
+Event schema (keep the same keys in every service, so one alert rule covers them all):
 
 | Key | Value |
 |---|---|
 | `timestamp` | seconds since the epoch |
-| `event` | `trap_hit` (decoy route), `watch_hit` (honey field) or `rule_hit` (value the form never offers) |
+| `event` | `decoy_hit` (decoy route), `field_hit` (honey field) or `rule_hit` (value the form never offers) |
 | `type` | `alert` when a user is identified, else `signal` |
 | `path`, `method`, `ip`, `user_agent` | from the request, truncated to 1024 characters |
 | `user`, `role` | the authenticated caller, or null |
-| `intent` | for `trap_hit` and `rule_hit` |
-| `found_fields` | for `watch_hit`: `[{type: "body"|"query", field, value, intent}]` |
+| `intent` | for `decoy_hit` and `rule_hit` |
+| `found_fields` | for `field_hit`: `[{type: "body"|"query", field, value, intent}]` |
 | `app` | `{service, environment, hostname}` |
 
 Rules:
@@ -267,7 +267,7 @@ Decoys in a public repository can be read by anyone, who can then work out which
 
 - **FastAPI:** route-level `dependencies=[...]` run before the endpoint's own dependencies, after their own sub-dependencies; make the probe `async def`. A malformed JSON body is rejected with 422 before any dependency runs, for decoy and sibling alike. Body models ignore unknown fields unless the model forbids extras. In honey-field checks, read path parameters directly rather than depending on the sibling's loader a second time: a duplicated dependency reports a malformed ID twice in the 422 and changes real responses.
 - **Flask:** decorators run outermost first, so put the tripwire decorator directly under the authentication decorator. Errors go through the app's `errorhandler`s like the sibling's.
-- **Django / DRF:** permission classes run in order before the action; put the recording class first. Add inferred methods to the existing view or viewset; Django URL patterns don't dispatch by method, so a second pattern for the same URL takes over every method.
+- **Django / DRF:** permission classes run in order before the action; put the recording class first (recording on the first line of the action works too, but only after global permissions and throttling). DRF publishes an action's name and docstring through OPTIONS and the browsable API, so write the docstring as part of the cover story. Add inferred methods to the existing view or viewset; Django URL patterns don't dispatch by method, so a second pattern for the same URL takes over every method.
 - **Express / Koa:** route middleware runs in the order given. Use the app's error middleware (`next(err)`) for the denial.
 - **Fastify:** schema validation runs before `preHandler` hooks, even for anonymous callers; give the decoy a schema like the sibling's so validation happens at the same point, and put the tripwire first in the route's `preHandler` list. Register the decoy in the same plugin as the sibling so its hooks and error handler apply.
 - **NestJS:** guards run before pipes and handlers; record in a guard ordered after the authentication guard, and keep the sibling's guards and pipes.

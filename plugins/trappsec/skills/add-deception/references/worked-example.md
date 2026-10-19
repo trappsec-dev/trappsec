@@ -88,7 +88,7 @@ module.exports = { record, valuesMatch };
 const { record, valuesMatch } = require('./events');
 
 const recordProbe = (intent) => (req, res, next) => {
-  record('trap_hit', req, {
+  record('decoy_hit', req, {
     user: req.session?.userId ?? null,
     role: req.session?.memberships?.[req.params.bookId] ?? null,
     intent,
@@ -96,13 +96,13 @@ const recordProbe = (intent) => (req, res, next) => {
   next();
 };
 
-const watchField = (field, expected, intent) => (req, res, next) => {
+const checkField = (field, expected, intent) => (req, res, next) => {
   try {
     if (req.body && Object.hasOwn(req.body, field)) {
       const value = req.body[field];
       let want; try { want = expected(req); } catch { want = undefined; }
       if (want === undefined || !valuesMatch(value, want)) {
-        record('watch_hit', req, {
+        record('field_hit', req, {
           user: req.session?.userId ?? null,
           role: req.session?.memberships?.[req.params.bookId] ?? null,
           found_fields: [{ type: 'body', field, value, intent }],
@@ -114,7 +114,7 @@ const watchField = (field, expected, intent) => (req, res, next) => {
   next();
 };
 
-module.exports = { recordProbe, watchField };
+module.exports = { recordProbe, checkField };
 ```
 
 ```js
@@ -128,7 +128,7 @@ router.post('/:bookId/ledger-exports', requireSession, recordProbe('data_exfiltr
 
 // Security tripwire: myRole is echoed by the settings form; roles come from memberships. See docs/security/tripwires.md.
 router.patch('/:bookId', requireSession,
-  watchField('myRole', (req) => req.session.memberships?.[req.params.bookId], 'privilege_escalation'),
+  checkField('myRole', (req) => req.session.memberships?.[req.params.bookId], 'privilege_escalation'),
   loadBook, requireRole('owner'), validate(bookSettingsSchema), updateBook);
 ```
 

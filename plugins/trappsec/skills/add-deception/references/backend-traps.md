@@ -46,7 +46,7 @@ Pick paths and methods that the real API plausibly lacks and that no real client
 
 A honey field is a parameter that real clients never send, or always send with one fixed value, on a real endpoint that would never honor it. The check records it and makes sure it can never change behavior (implementation.md §4).
 
-In black-box testing, honey fields and value rules were never detected from behavior, while every decoy route was eventually singled out. Make them the core of the portfolio.
+Honey fields and value rules leave nothing to observe from outside, while every decoy route is one more endpoint that never works. Make them the core of the portfolio.
 
 ### Pick fields an attacker would try on that endpoint
 
@@ -69,7 +69,7 @@ Compute per-user expected values from the authenticated caller, never from other
 
 **Stale but legitimate values.** A tab opened before a demotion still echoes the old role, and a tab from another account echoes that account's IDs. Accept values that are plausible for this caller, and record only impossible ones, such as a role nobody can hold through this endpoint, or a tenant the caller doesn't belong to. Write down any blind spot this creates.
 
-Don't change the client to avoid staleness, for example by re-fetching before each save. Reviewers spot real code that bends around a tripwire.
+Don't change the client to avoid staleness, for example by re-fetching before each save. Real code that bends around a tripwire is a tell.
 
 ### Values the real form never offers
 
