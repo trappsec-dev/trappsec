@@ -46,9 +46,8 @@ If you find an impossible state the app *doesn't* reject, that's a vulnerability
 - **OpenTelemetry logs are a prerequisite.** Check them first, as references/telemetry.md describes. If they aren't in place, stop and tell the user.
 - **Ownership.** Confirm this is the user's own application.
 - **Questions.** Ask in one batch, only what the code cannot tell you:
-  1. Which attribute prefix does the organization use for its own telemetry, if the app's telemetry doesn't show one?
-  2. Which clients call the API besides the web UI in this repo: mobile apps and their oldest supported versions, partner integrations, scripts, SDKs?
-  3. What sits in front of the app in production (load balancer, CDN, ingress), if the repo doesn't say?
+  1. Which clients call the API besides the web UI in this repo: mobile apps and their oldest supported versions, partner integrations, scripts, SDKs?
+  2. What sits in front of the app in production (load balancer, CDN, ingress), if the repo doesn't say?
 
 ### 1. Reconnaissance
 

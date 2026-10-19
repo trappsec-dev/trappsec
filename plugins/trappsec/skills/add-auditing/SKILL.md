@@ -1,6 +1,6 @@
 ---
 name: add-auditing
-description: Add an audit trail to an application the user owns. Records the security-relevant actions people, services and agents take in the product (sign-ins, role and permission changes, sharing, exports, API keys, admin settings, deletions) as domain events in the product's own terms, with who did it, on whose behalf, to what, from where and with what outcome, emitted as OpenTelemetry events. Use this whenever the user wants audit logs, an activity log, an audit trail, compliance logging (SOC 2, ISO 27001, HIPAA), a customer-facing audit log API, or a record of authorization decisions. Not for debugging logs, metrics, tracing setup or detecting attacks.
+description: Add an audit trail to an application the user owns. Records what people, services and agents do in the product: everyday activity on its core objects (creating, editing, deleting, reading sensitive records) and the security-relevant actions (sign-ins, role and permission changes, sharing, exports, API keys, admin settings) as domain events in the product's own terms, with who did it, on whose behalf, to what, from where and with what outcome, emitted as OpenTelemetry events. Use this whenever the user wants audit logs, a user activity log or history, an audit trail, compliance logging (SOC 2, ISO 27001, HIPAA), a customer-facing audit log API, or a record of authorization decisions. Not for debugging logs, metrics, tracing setup or detecting attacks.
 license: MIT
 ---
 
@@ -28,7 +28,11 @@ The judgment calls are yours:
 
 ## What to audit
 
-Start with the actions a security team or a customer's admin would ask about, usually 20 to 40:
+Two kinds of activity, both as audit events in the same schema.
+
+**What users do with the product.** Creating, editing, deleting, restoring, moving and archiving the product's core objects (the projects, documents, orders, records, tickets the product is about), changes of status and assignment, and reads of records that are sensitive in this product (a patient's chart, a payroll run, a customer's payment details). This is the trail that answers "who changed this, and when", for support, customers and investigations alike. Record what changed, not the content.
+
+**Actions a security team or a customer's admin would ask about:**
 - authentication: sign-in success and failure, sign-out, MFA and password changes, session revocation;
 - access: role and permission grants and revocations, membership invitations and removals, ownership transfers;
 - sharing and exposure: sharing outside the organization, public links, visibility changes;
@@ -39,6 +43,8 @@ Start with the actions a security team or a customer's admin would ask about, us
 
 Every allow or deny on a sensitive operation is itself worth recording: the permission evaluated, the decision and the reason.
 
+Leave out what isn't a user's action: page views, searches and ordinary reads of non-sensitive data, background housekeeping, and the app's own internal calls. Those belong in product analytics or traces. If the user wants them too, raise the volume and cost with them first.
+
 ## Workflow
 
 ### 0. Prerequisites and questions
@@ -47,9 +53,8 @@ Every allow or deny on a sensitive operation is itself worth recording: the perm
 - **Ownership.** Confirm this is the user's own application.
 - **Existing audit logging.** Find any audit tables, activity feeds or audit-style logs. Extend or align with them rather than creating a parallel trail, and ask before replacing one.
 - **Questions.** Ask in one batch, only what the code cannot tell you:
-  1. Which attribute prefix does the organization use for its own telemetry, if the app's telemetry doesn't show one?
-  2. Who reads the trail: the security team, compliance, customers through an audit log API? Any regulation that dictates content or retention?
-  3. What sits in front of the app in production (load balancer, CDN, ingress), if the repo doesn't say?
+  1. Who reads the trail: the security team, compliance, customers through an audit log API? Any regulation that dictates content or retention?
+  2. What sits in front of the app in production (load balancer, CDN, ingress), if the repo doesn't say?
 
 ### 1. Reconnaissance
 
@@ -62,7 +67,7 @@ Every allow or deny on a sensitive operation is itself worth recording: the perm
 
 1. **The action registry.** For each audited action: its event name (references/telemetry.md), operation type, the resources and participants it records, the parameters and changes that matter, and which outcomes it can have. Keep it in one place in the codebase, versioned with it.
 2. **Sensitive data.** Decide per action what must never be recorded (secrets, content) and what personal data is truly needed.
-3. **Volume.** For high-volume reads, record one event per operation with a count, not one per item.
+3. **Volume.** For bulk and high-volume operations, record one event per operation with a count, not one per item. Autosave and other rapid edits to the same object become one event per editing session or time window, with the fields that changed, if the app already has such a boundary; otherwise one per save.
 
 ### 3. Present the plan
 

@@ -81,10 +81,9 @@ If you cannot write a plausible Think, the tripwire is not believable. If the Do
 - **Layout.** Find which service is the public API, where the frontend lives (same repo, another repo, none), and how each is built and run.
 - **Questions.** Ask in one batch, and only what the code cannot tell you:
   1. Is the source repository public? Decoys in public source are visible to everyone (see references/implementation.md §8).
-  2. Which attribute prefix does the organization use for its own telemetry, if the app's telemetry doesn't show one?
-  3. Do external testers (bug bounty, pentests) use this app? Their findings need a triage path.
-  4. Do older clients (mobile builds, partner integrations, scripts) still call older API versions or paths?
-  5. What sits in front of the app in production (load balancer, CDN, ingress, API gateway), if the repo doesn't say? An alert is only as useful as the client IP it records.
+  2. Do external testers (bug bounty, pentests) use this app? Their findings need a triage path.
+  3. Do older clients (mobile builds, partner integrations, scripts) still call older API versions or paths?
+  4. What sits in front of the app in production (load balancer, CDN, ingress, API gateway), if the repo doesn't say? An alert is only as useful as the client IP it records.
 
   If the user wants you to proceed without questions, assume: private repo, no legacy clients, and whatever the deployment config in the repo shows about proxies. State those assumptions in the report.
 
