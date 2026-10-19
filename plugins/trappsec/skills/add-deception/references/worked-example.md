@@ -78,63 +78,53 @@ For accountants and viewers, the decoy's 403 says the owner role is required. Th
 
 ### Code
 
-```js
-// server/src/security/events.js (new; the app's other observability code lives in server/src/telemetry)
-// One structured line per security event; see the reference helper in implementation.md §6.
-module.exports = { record, valuesMatch };
-```
-
-```js
-// server/src/security/probes.js (new)
-const { record, valuesMatch } = require('./events');
-
-const recordProbe = (intent) => (req, res, next) => {
-  record('decoy_hit', req, {
-    user: req.session?.userId ?? null,
-    role: req.session?.memberships?.[req.params.bookId] ?? null,
-    tenant: req.session?.firmId ?? null,
-    credential: req.session?.id ?? null,
-    intent,
-  });
-  next();
-};
-
-const checkField = (field, expected, intent) => (req, res, next) => {
-  try {
-    if (req.body && Object.hasOwn(req.body, field)) {
-      const value = req.body[field];
-      let want; try { want = expected(req); } catch { want = undefined; }
-      if (want === undefined || !valuesMatch(value, want)) {
-        record('field_hit', req, {
-          user: req.session?.userId ?? null,
-          role: req.session?.memberships?.[req.params.bookId] ?? null,
-          tenant: req.session?.firmId ?? null,
-          credential: req.session?.id ?? null,
-          found_fields: [{ type: 'body', field, value, intent }],
-        });
-      }
-      delete req.body[field];
-    }
-  } catch { /* never break the request */ }
-  next();
-};
-
-module.exports = { recordProbe, checkField };
-```
+A new `server/src/security/` module, next to the app's other telemetry code, records hits as the standard event through the app's existing OpenTelemetry logger. It provides route middleware for the decoy (`recordProbe`) and for the honey field (`checkField`), both keyed by inventory ID.
 
 ```js
 // server/src/routes/books.js (existing router)
 router.post('/:bookId/close-periods', requireSession, loadBook, requireRole('owner'), validate(closePeriodSchema), closePeriods);
 
 // Security tripwire: full-ledger export, dark-launched behind ledgerExportsBeta and never enabled. See docs/security/tripwires.md.
-router.post('/:bookId/ledger-exports', requireSession, recordProbe('data_exfiltration'), loadBook, requireRole('owner'),
+router.post('/:bookId/ledger-exports', requireSession, recordProbe('books.ledger-exports'), loadBook, requireRole('owner'),
   validate(ledgerExportSchema),
   (req, res, next) => next(new HttpError(403, 'forbidden', "Ledger exports aren't enabled for this firm yet.")));
 
 // Security tripwire: myRole is echoed by the settings form; roles come from memberships. See docs/security/tripwires.md.
 router.patch('/:bookId', requireSession,
-  checkField('myRole', (req) => req.session.memberships?.[req.params.bookId], 'privilege_escalation'),
+  checkField('books.my-role', 'myRole', (req) => req.session.memberships?.[req.params.bookId]),
   loadBook, requireRole('owner'), validate(bookSettingsSchema), updateBook);
+```
+
+An accountant's PATCH with `"myRole": "owner"` produces this event (resource and trace context omitted):
+
+```json
+{
+  "event.name": "deception.field_hit",
+  "severity": "WARN",
+  "body": "honey field hit",
+  "attributes": {
+    "deception.schema.version": "1",
+    "deception.tripwire.id": "books.my-role",
+    "deception.kind": "honey_field",
+    "deception.intent": "privilege_escalation",
+    "deception.attributed": true,
+    "deception.field.name": "myRole",
+    "deception.field.location": "body",
+    "deception.field.value": "owner",
+    "http.request.method": "PATCH",
+    "http.route": "/api/v3/books/:bookId",
+    "url.path": "/api/v3/books/bk_8Hq2",
+    "http.response.status_code": 403,
+    "client.address": "198.51.100.23",
+    "user_agent.original": "Mozilla/5.0 ...",
+    "user.id": "usr_41xQ",
+    "user.roles": ["accountant"],
+    "deception.tenant.id": "firm_9kd2",
+    "deception.credential.type": "session",
+    "deception.credential.id": "sess_7d1c",
+    "deception.request.id": "req_5b2e"
+  }
+}
 ```
 
 ```ts
@@ -177,7 +167,7 @@ const createLedgerExport = useMutation({ mutationFn: (format: ExportFormat) => e
   - An unrelated unknown field is ignored exactly like `myRole`.
 - **Inert.** A test hits the decoy as each role and asserts no export job, no file and no change to the book.
 - **Robust.** A test makes the security logger throw; every response is unchanged.
-- **Attribution.** Each event names the user, their role in that book, the firm and the session ID, with the same request ID as the access log line. A forged `X-Forwarded-For` didn't change the recorded IP.
+- **Attribution and schema.** Each event matches the alert schema and names the user, their role in that book, the firm and the session ID, with the same trace and request ID as the app's own telemetry. A forged `X-Forwarded-For` didn't change the recorded IP.
 - **Parity.** `compare_responses.mjs` against `close-periods` reported no differences: anonymous and with an expired cookie (`--identical`), and as a viewer.
 - **Elimination.** As a self-serve owner, every other book endpoint can be made to work. `ledger-exports` can't, but it is gated by the same owner check testers see failing on `close-periods`, and it sits behind a client flag like the app's other unreleased features.
 - **Survival.** `scan_bundle.mjs --dir dist --lure /ledger-exports --lure ledgerExportsBeta`: both found, no findings.

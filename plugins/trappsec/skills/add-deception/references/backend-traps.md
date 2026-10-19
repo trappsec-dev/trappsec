@@ -7,7 +7,7 @@ Contents
 2. Honey fields
 3. Responses
 4. Breadcrumb chains
-5. Intent labels
+5. Intents
 6. Directions by domain
 7. Infrastructure gotchas
 
@@ -113,9 +113,9 @@ Patterns:
 
 Each step must be plausible on its own and consistent with the others. The permission named in a 403 must be one the app's real routes use too.
 
-## 5. Intent labels
+## 5. Intents
 
-Give every tripwire an intent, so alerts can be routed and prioritized. Use one consistent vocabulary, for example: `reconnaissance`, `privilege_escalation`, `account_takeover`, `cross_tenant_access`, `data_exfiltration`, `entitlement_abuse`, `payment_fraud`, `mass_assignment`, `defense_evasion`. If the team already has a security vocabulary, reuse it.
+Give every tripwire one intent from the list in alert-schema.md, so alerts can be routed and prioritized.
 
 ## 6. Directions by domain
 
@@ -132,5 +132,5 @@ These are directions, not names. Translate them into the app's vocabulary and co
 
 - **Edge routing.** An API gateway, ingress or serverless config with an explicit route allowlist answers decoy paths itself (usually with a 404), and the decoy never records. Check the infrastructure config, and add routes there with the user's approval.
 - **Caching.** A CDN that caches GET responses can serve a decoy without the request ever reaching the app. Make sure decoy responses aren't cacheable at the edge, just as real authenticated API responses shouldn't be.
-- **Client IP.** Behind a load balancer or CDN, check that the app is configured to trust exactly those proxies, so alerts carry the real client IP (implementation.md §7).
+- **Client IP.** Behind a load balancer or CDN, check that the app is configured to trust exactly those proxies, so alerts carry the real client IP (implementation.md §6).
 - **Generated clients and contract tests.** A decoy that appears in a published spec gets picked up by SDK generators, contract tests and API fuzzers. Check which of the team's tools read the spec, and keep them away from decoys.
