@@ -93,7 +93,7 @@ In a versioned API whose client has been migrated, a leftover method or fallback
 
 If the frontend uses a client generated from an OpenAPI spec, add the decoy operation to the spec and regenerate. Mark it `deprecated`, or tag it the way the app tags internal operations. The lure then appears in generated code in exactly the generator's style.
 
-If the spec is published, the decoy is discoverable there too. That is fine as long as it stays consistent. FastAPI and Litestar exclude traps from auto-generated schemas, so add a decoy only to a spec the team maintains by hand.
+If the spec is published, the decoy is discoverable there too. That is fine as long as it stays consistent with its siblings. With an auto-generated spec, a decoy that is a real route appears in it like any other route; if that would invite legitimate API consumers to call it, choose another pattern. Testers diff the spec against the client: a client method whose endpoint is missing from a generated spec that lists every other endpoint is a tell.
 
 ### F. Bait fields in types and UI (for honey fields)
 
@@ -164,6 +164,7 @@ Before finishing, look at each lure the way an attacker would, and remove:
 - **Real code bent to serve a tripwire:** for example a re-fetch before every save so an echoed field is never stale, with a comment explaining why. Reviewers rated that pairing 50–55%. Handle staleness on the server instead (backend-traps.md §2).
 - **Template seams:** template comments and directives don't ship, but the blank lines they leave do. A hidden input after a blank line that its neighbors lack shows it was added separately.
 - **Dangling references:** something nothing consumes, such as a `data-` attribute no script reads or a config key no code uses. It exists only to be found, and reviewers treat it that way.
+- **Vocabulary only lures use:** a role, permission, scope or flag that appears in a lure and nowhere else in the app. Testers caught an invented "staff" role this way in three of four apps.
 - **Clichés:** "internal", "debug", "do not use", "remove before prod", `/admin/secret`, `superuser`.
 - **Mismatches with the backend:** a different method, a path that answers 404, a response that doesn't fit the type the frontend declares.
 - **Anything copied from this skill's examples.**
@@ -175,7 +176,7 @@ Before finishing, look at each lure the way an attacker would, and remove:
   - Lures belong in `"use client"` components and client-side modules.
   - Page routes appear in build manifests; API calls made from client components appear in chunks.
   - `productionBrowserSourceMaps` controls public source maps.
-  - If the API itself is Next.js route handlers, trappsec cannot protect it. Lures can only point at a separate supported backend.
+  - If the API itself is Next.js route handlers, decoys are route handlers too: call the same helpers as the sibling handler, in the same order.
 - **Vue / Nuxt.** Composables and API service modules; route meta for role gates. Nuxt server routes are backend code.
 - **Angular.** Injectable services are classes, so unused methods survive. Route guards (`canActivate`) are the natural role gate.
 - **Svelte / SvelteKit.** Use client modules. Loaders (`+page.ts`) run on navigation, so never put a decoy call in a loader that real users trigger. `+page.server.ts` never ships.

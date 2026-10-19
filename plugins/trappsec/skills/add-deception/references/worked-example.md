@@ -11,43 +11,49 @@ This example shows the reasoning, not names to reuse. Copying its paths, flags o
 House-style dossier, from recon:
 
 - **Routes:** `/api/v3/books/:bookId/<plural-noun>`. Actions are sub-resources (`/close-periods`). IDs are prefixed (`bk_`, `usr_`). JSON is camelCase.
-- **Errors:** `{ "error": { "type": "...", "detail": "..." } }`. Captured from the running app:
+- **Errors:** `{ "error": { "type": "...", "detail": "..." } }` through an `HttpError` class and one error middleware. Types in use: `unauthenticated`, `forbidden`, `not_found`, `validation_failed`. Captured from the running app:
   - anonymous: `401 {"error":{"type":"unauthenticated","detail":"Sign in to continue."}}`
   - forbidden: `403 {"error":{"type":"forbidden","detail":"You need the owner role for this."}}`
-- **Auth:** cookie sessions via global middleware. Role checks run per route (`requireRole('owner')`). Each book has roles `owner | accountant | viewer`, loaded into `req.session.memberships`.
+  - unknown book: `404 {"error":{"type":"not_found","detail":"Book not found."}}`
+- **Pipeline:** cookie sessions via global middleware. Each book route runs `requireSession`, `loadBook` (404 for books the caller isn't a member of), `requireRole(...)`, then `validate(schema)`. Each book has roles `owner | accountant | viewer`, loaded into `req.session.memberships`. Firms sign up self-serve, so anyone can own a book.
 - **Frontend:**
   - an axios instance `http` in `src/lib/http.ts`;
   - per-domain API objects (`exportsApi`, `booksApi`) in `src/api/`;
   - react-query hooks and i18next;
-  - homegrown flags: `useFlag(name)` reads `session.flags`; unknown names return false;
+  - homegrown flags: `useFlag(name)` reads `session.flags`, which lists only enabled flags; unknown names return false;
   - the book settings form sends back the fetched book object with edits (`{...book, name}`).
 - **History:** per-account CSV exports shipped last year. An issue asks for "full ledger export per book".
 - **Source maps:** not deployed. **Repo:** private.
 
-Threat narrative: Ledgerly holds firms' financial records. An attacker with an accountant or viewer seat wants (a) bulk data out of books they can see, and (b) owner rights.
+Threat narrative: Ledgerly holds firms' financial records. An attacker with an accountant or viewer seat wants (a) bulk data out of books they can see, and (b) owner rights. An attacker who signs up their own firm owns their own books and will compare.
 
 ## The obvious design (don't do this)
 
 ```js
-ts.trap('/admin/config').respond({ status: 200, body: { debug: true } });
-ts.watch('/api/v3/me').body('is_admin', { intent: 'PrivEsc' });
+// src/routes/admin.js
+// INTERNAL DEBUG - remove before prod
+router.get('/admin/config', (req, res) => res.json({ debug: true }));
+
+router.patch('/api/v3/me', requireSession, (req, res, next) => {
+  if (req.body.is_admin) console.log('HONEYPOT TRIGGERED', req.ip);
+  next();
+});
 ```
 ```js
 // src/adminDebug.js
-// INTERNAL DEBUG - remove before prod
 export const getConfig = () => fetch('/admin/config');
 ```
 
 Why it fails:
 - **Generic path.** `/admin/config` is on every scanner wordlist, so it collects anonymous noise. It also fits nothing in a `/api/v3/books/...` API.
+- **No chain.** It skips `requireSession`, so it answers anonymous callers with 200 where every real route answers 401. One unauthenticated request separates it from the real API.
 - **Too good to be true.** `200 {"debug": true}` reads as bait.
-- **Fingerprint.** The anonymous response is trappsec's default `401 {}`.
 - **Foreign field.** Ledgerly models permissions as roles; `is_admin` appears nowhere else in it.
+- **No identity, no structure.** A bare `console.log` with no user, no intent and a revealing message.
 - **The lure undermines itself:**
-  - the comment and file name point straight at it;
+  - the comment and file names point straight at it;
   - it uses `fetch` where the app uses `http`;
   - nothing imports the standalone export, so tree-shaking removes it and it never ships.
-- **No attribution.** No `identify_user`. Even with one reading `req.user`, per-route auth means every hit would be an anonymous signal.
 
 ## The convincing design
 
@@ -57,65 +63,74 @@ Why it fails:
 - **See:** in the `BookSettings-*.js` chunk, a button gated by `useFlag('ledgerExportsBeta')` that calls `exportsApi.createLedgerExport(bookId, 'csv')`, which POSTs to `/api/v3/books/:bookId/ledger-exports`.
 - **Think:** "Bulk export exists but is hidden behind a client-side flag; maybe the server only checks the flag."
 - **Do:** call the endpoint, or flip the flag. Either sends an authenticated POST → alert (`data_exfiltration`).
-- **Response:** anonymous, the real 401. Signed in, the real 403 ("You need the owner role for this."), which feeds the chain below.
+- **Chain copied:** `close-periods`, the owner-only action beside it: `requireSession`, then the tripwire, `loadBook`, `requireRole('owner')`, `validate(...)`.
+- **Responses:** every probe gets what `close-periods` gives it (401, 404 for foreign books, 403 "You need the owner role for this." for accountants and viewers, 422 for bad bodies). An owner, who passes every check, gets the final denial: `403 forbidden` "Ledger exports aren't enabled for this firm yet." That makes sense to an owner, and it uses an error type the app already returns.
 
 ### 2. Honey field: `myRole` on the book update
 
 - **Cover story:** none needed. `GET /api/v3/books/:bookId` already returns `myRole`, the UI uses it for gating, and the settings form echoes it back. The server derives roles from memberships and never reads `myRole` on PATCH. The bait already exists; extrapolate from it.
-- **Watch:** `PATCH /api/v3/books/:bookId`, field `myRole`, with a callable default equal to the caller's real role from the session. Owners saving settings echo their own role and trigger nothing. An accountant who sends `"myRole": "owner"` triggers an alert (`privilege_escalation`).
+- **Check:** at the top of `PATCH /api/v3/books/:bookId`, after `requireSession`: compare `myRole` with the caller's real role from the session. Owners saving settings echo their own role and record nothing. An accountant who sends `"myRole": "owner"` records an alert (`privilege_escalation`). The settings schema ignores unknown fields, so the check removes `myRole` after recording, and the endpoint behaves exactly as before.
 
 ### Chain
 
-The decoy's 403 says the owner role is required. The book response shows `myRole`. Setting it trips the honey field. Two alerts with the same identity leave little doubt about intent.
+For accountants and viewers, the decoy's 403 says the owner role is required. The book response shows `myRole`. Setting it trips the honey field. Two alerts with the same identity leave little doubt about intent.
 
 ### Code
 
 ```js
-// server/src/deception.js: trappsec decoys. Cover stories are listed in the deception report.
-const { Sentry } = require('trappsec');
-
-function installDeception(app) {
-  const ts = new Sentry(app, 'ledgerly-api', process.env.APP_ENV || 'development');
-
-  // Captured from GET /api/v3/books/bk_test/entries: anonymous, and as a viewer.
-  ts.default_responses.unauthenticated = {
-    status_code: 401,
-    response_body: { error: { type: 'unauthenticated', detail: 'Sign in to continue.' } },
-    mime_type: 'application/json',
-  };
-  ts.default_responses.authenticated = {
-    status_code: 403,
-    response_body: { error: { type: 'forbidden', detail: 'You need the owner role for this.' } },
-    mime_type: 'application/json',
-  };
-
-  // Session middleware is global, so the user is already resolved on trap routes.
-  ts.identify_user((req) => (req.session?.userId
-    ? { user: req.session.userId, role: req.session.plan }
-    : null));
-
-  // Ledger exports: dark-launched behind ledgerExportsBeta, which is never enabled.
-  ts.trap('/api/v3/books/:bookId/ledger-exports')
-    .methods('POST')
-    .intent('data_exfiltration');
-
-  // The settings form echoes myRole; roles really come from memberships.
-  ts.watch('/api/v3/books/:bookId')
-    .body('myRole', {
-      defaultValue: (req) => req.session?.memberships?.[req.params.bookId],
-      intent: 'privilege_escalation',
-    });
-
-  if (process.env.SECURITY_WEBHOOK_URL) {
-    ts.add_webhook(process.env.SECURITY_WEBHOOK_URL, { secret: process.env.SECURITY_WEBHOOK_SECRET });
-  }
-  return ts;
-}
-
-module.exports = { installDeception };
+// server/src/security/events.js (new; the app's other observability code lives in server/src/telemetry)
+// One structured line per security event; see the reference helper in native-implementation.md §6.
+module.exports = { record, valuesMatch };
 ```
 
-`server.js` calls `installDeception(app)` after the session middleware. It awaits `ts.close()` inside the graceful-shutdown handler it already had, before `process.exit`. A new bare `SIGTERM` listener would stop Node from exiting on SIGTERM.
+```js
+// server/src/security/probes.js (new)
+const { record, valuesMatch } = require('./events');
+
+const recordProbe = (intent) => (req, res, next) => {
+  record('trap_hit', req, {
+    user: req.session?.userId ?? null,
+    role: req.session?.memberships?.[req.params.bookId] ?? null,
+    intent,
+  });
+  next();
+};
+
+const watchField = (field, expected, intent) => (req, res, next) => {
+  try {
+    if (req.body && Object.hasOwn(req.body, field)) {
+      const value = req.body[field];
+      let want; try { want = expected(req); } catch { want = undefined; }
+      if (want === undefined || !valuesMatch(value, want)) {
+        record('watch_hit', req, {
+          user: req.session?.userId ?? null,
+          role: req.session?.memberships?.[req.params.bookId] ?? null,
+          found_fields: [{ type: 'body', field, value, intent }],
+        });
+      }
+      delete req.body[field];
+    }
+  } catch { /* never break the request */ }
+  next();
+};
+
+module.exports = { recordProbe, watchField };
+```
+
+```js
+// server/src/routes/books.js (existing router)
+router.post('/:bookId/close-periods', requireSession, loadBook, requireRole('owner'), validate(closePeriodSchema), closePeriods);
+
+// Security tripwire: full-ledger export, dark-launched behind ledgerExportsBeta and never enabled. See docs/security/tripwires.md.
+router.post('/:bookId/ledger-exports', requireSession, recordProbe('data_exfiltration'), loadBook, requireRole('owner'),
+  validate(ledgerExportSchema),
+  (req, res, next) => next(new HttpError(403, 'forbidden', "Ledger exports aren't enabled for this firm yet.")));
+
+// Security tripwire: myRole is echoed by the settings form; roles come from memberships. See docs/security/tripwires.md.
+router.patch('/:bookId', requireSession,
+  watchField('myRole', (req) => req.session.memberships?.[req.params.bookId], 'privilege_escalation'),
+  loadBook, requireRole('owner'), validate(bookSettingsSchema), updateBook);
+```
 
 ```ts
 // src/api/exports.ts (existing module; one method added, same style as its neighbors)
@@ -147,14 +162,20 @@ const createLedgerExport = useMutation({ mutationFn: (format: ExportFormat) => e
 
 ### Checks that passed before this was called done
 
-- **Fired every tripwire.**
-  - Anonymous POST to the decoy: the real 401, plus a signal.
-  - Viewer session: the 403, plus an alert carrying the user.
-  - PATCH as owner with the echoed form: no event.
-  - PATCH as accountant with `myRole: "owner"`: an alert, and the role was unchanged.
-- **Parity.** `compare_responses.mjs` against `POST /api/v3/books/:bookId/close-periods` (owner-only) showed the same status, body and header names for a viewer.
+- **Probed like its sibling.** Each probe went to `ledger-exports` and to `close-periods`:
+  - anonymous, expired cookie, foreign book, unknown book, malformed body: identical responses;
+  - viewer and accountant: identical 403, plus an alert carrying the user and their role in that book;
+  - owner of their own book: the final denial on the decoy, 201 on the sibling, plus an alert.
+- **Honey field.**
+  - PATCH as owner with the echoed form: no event, same response as before.
+  - PATCH as accountant with `myRole: "owner"`: an alert, the same 403 as before, and the role unchanged.
+  - An unrelated unknown field is ignored exactly like `myRole`.
+- **Inert.** A test hits the decoy as each role and asserts no export job, no file and no change to the book.
+- **Robust.** A test makes the security logger throw; every response is unchanged.
+- **Parity.** `compare_responses.mjs` against `close-periods` reported no differences: anonymous and with an expired cookie (`--identical`), and as a viewer.
+- **Elimination.** As a self-serve owner, every other book endpoint can be made to work. `ledger-exports` can't, but it is gated by the same owner check testers see failing on `close-periods`, and it sits behind a client flag like the app's other unreleased features.
 - **Survival.** `scan_bundle.mjs --dir dist --lure /ledger-exports --lure ledgerExportsBeta`: both found, no findings.
 - **False positives.**
-  - `ledgerExportsBeta` is absent from the flag config, so `useFlag` returns false for everyone. Its name is recorded in the report so nobody reuses it.
+  - `ledgerExportsBeta` is not in the flag config, and `session.flags` lists only enabled flags, so its absence looks like any other disabled flag. Its name is recorded in the inventory so nobody reuses it.
   - `createLedgerExport` has exactly one call site, behind the flag.
-- **Team.** AGENTS.md now names `exportsApi.createLedgerExport` and the flag as security sensors. CODEOWNERS sends `server/src/deception.js` and the two frontend files to the security team.
+- **Team.** `docs/security/tripwires.md` lists both tripwires with their files and tests. AGENTS.md names `exportsApi.createLedgerExport`, the flag and the two routes as security sensors not to remove, call or complete. CODEOWNERS sends `server/src/security/`, `server/src/routes/books.js` and the two frontend files to the security team.

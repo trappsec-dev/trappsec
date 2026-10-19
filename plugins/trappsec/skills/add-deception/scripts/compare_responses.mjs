@@ -2,33 +2,44 @@
 // Compare a decoy's response with a real endpoint's, the way a careful tester would.
 //
 //   node compare_responses.mjs --real http://localhost:3000/api/v2/reports/1 \
-//                              --trap http://localhost:3000/api/v2/reports/1/exports \
-//                              [--method POST] [--data '{"format":"csv"}'] [-H 'Authorization: Bearer ...']
-//                              [--trap-method POST] [--runs 5] [--ignore-header x-foo] [--json]
+//                              --decoy http://localhost:3000/api/v2/reports/1/exports \
+//                              [--method POST] [--decoy-method POST] [--data '{"format":"csv"}']
+//                              [-H 'Authorization: Bearer ...'] [--identical] [--runs 5]
+//                              [--ignore-header x-foo] [--json]
 //
-// Sends the same request to both URLs and reports differences in status, content type,
-// header names, body (exact and JSON shape) and median latency. Volatile headers
-// (date, request ids, etag, content-length, ...) are ignored.
+// Sends the same request to both URLs over raw HTTP, so header names keep their case and order
+// as the server wrote them. Reports differences in the status line, header names (presence,
+// case, order), header values, body bytes, JSON key order and values, stability across runs,
+// and median latency (requests interleaved). Only the values of inherently per-request headers
+// (date, request ids, etag, content-length...) are ignored; their presence is still compared.
 //
-// Exit code: 0 = status, content type and body shape match; 1 = they differ; 2 = usage or network error.
+// --identical  require byte-identical bodies (use it for anonymous and invalid-token probes,
+//              where the decoy and its sibling must answer exactly alike).
+//
+// Exit code: 0 = no differences, 1 = differences, 2 = usage or network error.
 // Node 18+, no dependencies.
 
-const VOLATILE = new Set([
-  'date', 'age', 'etag', 'last-modified', 'content-length', 'expires', 'set-cookie',
+import http from 'node:http';
+import https from 'node:https';
+
+const VOLATILE_VALUE = new Set([
+  'date', 'age', 'etag', 'last-modified', 'expires', 'set-cookie', 'content-length',
   'x-request-id', 'request-id', 'x-correlation-id', 'x-trace-id', 'traceparent', 'tracestate',
   'x-response-time', 'server-timing', 'x-runtime', 'cf-ray', 'x-amzn-requestid', 'x-amz-cf-id',
-  'x-cache', 'via', 'connection', 'keep-alive', 'transfer-encoding', 'vary',
+  'location',
 ]);
+const HOP_BY_HOP = new Set(['connection', 'keep-alive']);
 
 function usage(msg) {
   if (msg) console.error(`error: ${msg}\n`);
-  console.error('usage: node compare_responses.mjs --real <url> --trap <url> [--method M] [--trap-method M]');
-  console.error('                                  [-H "Name: value" ...] [--data <body>] [--runs N] [--ignore-header name] [--json]');
+  console.error('usage: node compare_responses.mjs --real <url> --decoy <url> [--method M] [--decoy-method M]');
+  console.error('                                  [-H "Name: value" ...] [--data <body>] [--identical] [--runs N]');
+  console.error('                                  [--ignore-header name] [--json]');
   process.exit(2);
 }
 
 function parseArgs(argv) {
-  const opts = { headers: {}, runs: 3, method: 'GET', trapMethod: null, data: undefined, ignore: new Set(), json: false };
+  const opts = { headers: {}, runs: 5, method: 'GET', decoyMethod: null, data: undefined, ignore: new Set(), json: false, identical: false };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     const next = () => {
@@ -36,12 +47,13 @@ function parseArgs(argv) {
       return argv[++i];
     };
     if (a === '--real') opts.real = next();
-    else if (a === '--trap') opts.trap = next();
+    else if (a === '--decoy' || a === '--trap') opts.decoy = next();
     else if (a === '--method' || a === '-X') opts.method = next().toUpperCase();
-    else if (a === '--trap-method') opts.trapMethod = next().toUpperCase();
+    else if (a === '--decoy-method' || a === '--trap-method') opts.decoyMethod = next().toUpperCase();
     else if (a === '--data' || a === '-d') opts.data = next();
     else if (a === '--runs') opts.runs = Math.max(1, Number(next()) || 1);
     else if (a === '--ignore-header') opts.ignore.add(next().toLowerCase());
+    else if (a === '--identical') opts.identical = true;
     else if (a === '--json') opts.json = true;
     else if (a === '-H' || a === '--header') {
       const h = next();
@@ -51,34 +63,42 @@ function parseArgs(argv) {
     } else if (a === '-h' || a === '--help') usage();
     else usage(`unknown argument ${a}`);
   }
-  if (!opts.real || !opts.trap) usage('--real and --trap are required');
+  if (!opts.real || !opts.decoy) usage('--real and --decoy are required');
   if (opts.data !== undefined && !Object.keys(opts.headers).some((k) => k.toLowerCase() === 'content-type')) {
     opts.headers['Content-Type'] = 'application/json';
   }
   return opts;
 }
 
-async function probe(url, method, opts) {
-  const times = [];
-  let first = null;
-  for (let i = 0; i < opts.runs; i++) {
+// One request over raw HTTP. rawHeaders keeps the server's order and case.
+function send(url, method, opts) {
+  return new Promise((resolve, reject) => {
+    const u = new URL(url);
+    const lib = u.protocol === 'https:' ? https : http;
+    const headers = { ...opts.headers };
+    const body = method === 'GET' || method === 'HEAD' ? undefined : opts.data;
+    if (body !== undefined) headers['Content-Length'] = Buffer.byteLength(body);
     const t0 = performance.now();
-    const res = await fetch(url, {
-      method,
-      headers: opts.headers,
-      body: method === 'GET' || method === 'HEAD' ? undefined : opts.data,
-      redirect: 'manual',
+    const req = lib.request(u, { method, headers, agent: false }, (res) => {
+      const chunks = [];
+      res.on('data', (c) => chunks.push(c));
+      res.on('end', () => {
+        const raw = res.rawHeaders;
+        const pairs = [];
+        for (let i = 0; i < raw.length; i += 2) pairs.push([raw[i], raw[i + 1]]);
+        resolve({
+          status: res.statusCode,
+          reason: res.statusMessage,
+          headers: pairs,
+          body: Buffer.concat(chunks).toString('utf8'),
+          ms: performance.now() - t0,
+        });
+      });
     });
-    const body = await res.text();
-    times.push(performance.now() - t0);
-    if (!first) {
-      const headers = {};
-      res.headers.forEach((v, k) => { headers[k.toLowerCase()] = v; });
-      first = { status: res.status, headers, body };
-    }
-  }
-  times.sort((a, b) => a - b);
-  return { ...first, medianMs: times[Math.floor(times.length / 2)] };
+    req.on('error', reject);
+    if (body !== undefined) req.write(body);
+    req.end();
+  });
 }
 
 function parseJson(text) {
@@ -89,15 +109,12 @@ function parseJson(text) {
   }
 }
 
-// A shape is the structure without the values: object keys, array element shapes, primitive types.
+// Structure with key order kept: object keys in the order the server wrote them, array element
+// shapes, primitive types. Two bodies with the same data in a different key order differ here.
 function shape(v) {
   if (v === null) return 'null';
   if (Array.isArray(v)) return v.length ? [shape(v[0])] : ['<empty>'];
-  if (typeof v === 'object') {
-    const out = {};
-    for (const k of Object.keys(v).sort()) out[k] = shape(v[k]);
-    return out;
-  }
+  if (typeof v === 'object') return Object.fromEntries(Object.keys(v).map((k) => [k, shape(v[k])]));
   return typeof v;
 }
 
@@ -106,7 +123,7 @@ function diffShapes(a, b, p = '$', out = []) {
   const ka = kind(a);
   const kb = kind(b);
   if (ka !== kb) {
-    out.push(`${p}: real=${JSON.stringify(ka)} trap=${JSON.stringify(kb)}`);
+    out.push(`${p}: real=${JSON.stringify(ka)} decoy=${JSON.stringify(kb)}`);
     return out;
   }
   if (ka === 'array') {
@@ -114,92 +131,140 @@ function diffShapes(a, b, p = '$', out = []) {
     return diffShapes(a[0], b[0], `${p}[0]`, out);
   }
   if (ka === 'object') {
-    const keys = new Set([...Object.keys(a), ...Object.keys(b)]);
-    for (const k of [...keys].sort()) {
-      if (!(k in a)) out.push(`${p}.${k}: only in trap`);
-      else if (!(k in b)) out.push(`${p}.${k}: only in real`);
-      else diffShapes(a[k], b[k], `${p}.${k}`, out);
-    }
+    const ak = Object.keys(a);
+    const bk = Object.keys(b);
+    for (const k of ak) if (!bk.includes(k)) out.push(`${p}.${k}: only in real`);
+    for (const k of bk) if (!ak.includes(k)) out.push(`${p}.${k}: only in decoy`);
+    const common = ak.filter((k) => bk.includes(k));
+    const bOrder = bk.filter((k) => ak.includes(k));
+    if (common.join() !== bOrder.join()) out.push(`${p}: key order real=[${common}] decoy=[${bOrder}]`);
+    for (const k of common) diffShapes(a[k], b[k], `${p}.${k}`, out);
   }
   return out;
 }
 
-const normType = (ct) => (ct || '').toLowerCase().replace(/\s+/g, '');
+// Leaf values that differ, for reading (expected for messages that name a different feature).
+function diffValues(a, b, p = '$', out = []) {
+  if (a && b && typeof a === 'object' && typeof b === 'object' && Array.isArray(a) === Array.isArray(b)) {
+    for (const k of Object.keys(a)) if (k in b) diffValues(a[k], b[k], `${p}.${k}`, out);
+  } else if (JSON.stringify(a) !== JSON.stringify(b)) {
+    out.push(`${p}: real=${JSON.stringify(a)} decoy=${JSON.stringify(b)}`);
+  }
+  return out;
+}
+
+const median = (xs) => {
+  const s = [...xs].sort((x, y) => x - y);
+  return s[Math.floor(s.length / 2)];
+};
 
 async function main() {
   const opts = parseArgs(process.argv.slice(2));
-  let real;
-  let trap;
+  const decoyMethod = opts.decoyMethod || opts.method;
+  const realRuns = [];
+  const decoyRuns = [];
   try {
-    real = await probe(opts.real, opts.method, opts);
-    trap = await probe(opts.trap, opts.trapMethod || opts.method, opts);
+    // Interleaved, alternating which goes first, so warm-up and drift hit both alike.
+    for (let i = 0; i < opts.runs; i++) {
+      if (i % 2 === 0) {
+        realRuns.push(await send(opts.real, opts.method, opts));
+        decoyRuns.push(await send(opts.decoy, decoyMethod, opts));
+      } else {
+        decoyRuns.push(await send(opts.decoy, decoyMethod, opts));
+        realRuns.push(await send(opts.real, opts.method, opts));
+      }
+    }
   } catch (e) {
     console.error(`request failed: ${e.message}`);
     process.exit(2);
   }
+  const real = realRuns[0];
+  const decoy = decoyRuns[0];
+  const problems = [];
+  const notes = [];
 
-  const ignore = (h) => VOLATILE.has(h) || opts.ignore.has(h);
-  const realHeaders = Object.keys(real.headers).filter((h) => !ignore(h));
-  const trapHeaders = Object.keys(trap.headers).filter((h) => !ignore(h));
-  const onlyReal = realHeaders.filter((h) => !(h in trap.headers));
-  const onlyTrap = trapHeaders.filter((h) => !(h in real.headers));
-  const differingValues = realHeaders
-    .filter((h) => h in trap.headers && h !== 'content-type' && real.headers[h] !== trap.headers[h])
-    .map((h) => ({ header: h, real: real.headers[h], trap: trap.headers[h] }));
+  if (real.status !== decoy.status || real.reason !== decoy.reason) {
+    problems.push(`status line: real=${real.status} ${real.reason} decoy=${decoy.status} ${decoy.reason}`);
+  }
 
+  // Header names: presence, case and order. Values: everything but per-request values.
+  const keep = ([name]) => !HOP_BY_HOP.has(name.toLowerCase()) && !opts.ignore.has(name.toLowerCase());
+  const rh = real.headers.filter(keep);
+  const dh = decoy.headers.filter(keep);
+  const rNames = rh.map(([n]) => n);
+  const dNames = dh.map(([n]) => n);
+  const lower = (xs) => xs.map((x) => x.toLowerCase());
+  for (const n of rNames) if (!lower(dNames).includes(n.toLowerCase())) problems.push(`header only in real: ${n}: ${rh.find(([x]) => x === n)[1]}`);
+  for (const n of dNames) if (!lower(rNames).includes(n.toLowerCase())) problems.push(`header only in decoy: ${n}: ${dh.find(([x]) => x === n)[1]}`);
+  const rCommon = rNames.filter((n) => lower(dNames).includes(n.toLowerCase()));
+  const dCommon = dNames.filter((n) => lower(rNames).includes(n.toLowerCase()));
+  if (rCommon.join('\n') !== dCommon.join('\n')) {
+    if (lower(rCommon).join() === lower(dCommon).join()) problems.push(`header name case differs: real=[${rCommon}] decoy=[${dCommon}]`);
+    else problems.push(`header order differs: real=[${rCommon}] decoy=[${dCommon}]`);
+  }
+  for (const [n, v] of rh) {
+    const other = dh.find(([x]) => x.toLowerCase() === n.toLowerCase());
+    if (other && !VOLATILE_VALUE.has(n.toLowerCase()) && other[1] !== v) problems.push(`header value differs: ${n}: real=${v} decoy=${other[1]}`);
+  }
+
+  // Body.
   const rj = parseJson(real.body);
-  const tj = parseJson(trap.body);
-  let shapeDiffs = [];
-  let bodyKind;
-  if (rj.ok && tj.ok) {
-    bodyKind = 'json';
-    shapeDiffs = diffShapes(shape(rj.value), shape(tj.value));
-    // Same data, different bytes (spacing, key order, escaping) is visible to anyone diffing raw responses.
-    if (!shapeDiffs.length && real.body !== trap.body && JSON.stringify(rj.value) === JSON.stringify(tj.value)) {
-      shapeDiffs.push('same JSON, different serialization (spacing, key order or escaping): compare the raw bodies below');
+  const dj = parseJson(decoy.body);
+  let valueDiffs = [];
+  if (opts.identical) {
+    if (real.body !== decoy.body) problems.push(`bodies are not byte-identical (real ${real.body.length} bytes, decoy ${decoy.body.length} bytes)`);
+  }
+  if (rj.ok && dj.ok) {
+    for (const d of diffShapes(shape(rj.value), shape(dj.value))) problems.push(`body: ${d}`);
+    valueDiffs = diffValues(rj.value, dj.value);
+    if (!opts.identical && real.body !== decoy.body && JSON.stringify(rj.value) === JSON.stringify(dj.value)) {
+      problems.push('body: same JSON, different bytes (spacing, escaping or a trailing newline)');
     }
-  } else if (rj.ok !== tj.ok) {
-    bodyKind = 'mixed';
-    shapeDiffs = [`real body is ${rj.ok ? 'JSON' : 'not JSON'}, trap body is ${tj.ok ? 'JSON' : 'not JSON'}`];
-  } else {
-    bodyKind = 'text';
-    if (real.body !== trap.body) shapeDiffs = [`text bodies differ (real ${real.body.length} bytes, trap ${trap.body.length} bytes)`];
+  } else if (rj.ok !== dj.ok) {
+    problems.push(`body: real is ${rj.ok ? 'JSON' : 'not JSON'}, decoy is ${dj.ok ? 'JSON' : 'not JSON'}`);
+  } else if (!opts.identical && real.body !== decoy.body) {
+    notes.push(`text bodies differ (real ${real.body.length} bytes, decoy ${decoy.body.length} bytes)`);
+  }
+
+  // Stability: a decoy whose body changes between identical requests, when the real one doesn't.
+  const varies = (runs) => new Set(runs.map((r) => r.body)).size > 1;
+  if (varies(decoyRuns) && !varies(realRuns)) problems.push('decoy body changes between identical requests; the real one does not');
+
+  // Latency.
+  const rMs = median(realRuns.map((r) => r.ms));
+  const dMs = median(decoyRuns.map((r) => r.ms));
+  const gap = dMs - rMs;
+  if (opts.runs >= 5 && Math.abs(gap) > 1 && Math.abs(gap) / Math.max(rMs, dMs) > 0.25) {
+    notes.push(`latency differs by ${gap.toFixed(1)} ms (${(100 * Math.abs(gap) / Math.max(rMs, dMs)).toFixed(0)}%); confirm with more --runs before treating it as a tell`);
   }
 
   const result = {
-    real: { url: opts.real, status: real.status, contentType: real.headers['content-type'] || null, medianMs: +real.medianMs.toFixed(1), body: real.body.slice(0, 400) },
-    trap: { url: opts.trap, status: trap.status, contentType: trap.headers['content-type'] || null, medianMs: +trap.medianMs.toFixed(1), body: trap.body.slice(0, 400) },
-    statusMatch: real.status === trap.status,
-    contentTypeMatch: normType(real.headers['content-type']) === normType(trap.headers['content-type']),
-    bodyIdentical: real.body === trap.body,
-    bodyKind,
-    shapeDiffs,
-    headersOnlyInReal: onlyReal,
-    headersOnlyInTrap: onlyTrap,
-    headerValueDiffs: differingValues,
+    real: { url: opts.real, method: opts.method, status: real.status, headers: real.headers, body: real.body.slice(0, 600), medianMs: +rMs.toFixed(2) },
+    decoy: { url: opts.decoy, method: decoyMethod, status: decoy.status, headers: decoy.headers, body: decoy.body.slice(0, 600), medianMs: +dMs.toFixed(2) },
+    problems,
+    valueDiffs,
+    notes,
+    match: problems.length === 0,
   };
-  result.match = result.statusMatch && result.contentTypeMatch && shapeDiffs.length === 0;
 
   if (opts.json) {
     console.log(JSON.stringify(result, null, 2));
   } else {
-    const mark = (ok) => (ok ? 'same ' : 'DIFF ');
-    console.log(`real: ${opts.method} ${opts.real}`);
-    console.log(`trap: ${opts.trapMethod || opts.method} ${opts.trap}\n`);
-    console.log(`${mark(result.statusMatch)} status        real=${real.status} trap=${trap.status}`);
-    console.log(`${mark(result.contentTypeMatch)} content-type  real=${result.real.contentType} trap=${result.trap.contentType}`);
-    console.log(`${mark(shapeDiffs.length === 0)} body shape    ${bodyKind}${result.bodyIdentical ? ' (byte-identical)' : ''}`);
-    for (const d of shapeDiffs) console.log(`        ${d}`);
-    console.log(`${mark(!onlyReal.length && !onlyTrap.length)} header names  ${onlyReal.length || onlyTrap.length ? '' : '(ignoring volatile headers)'}`);
-    for (const h of onlyReal) console.log(`        only in real: ${h}: ${real.headers[h]}`);
-    for (const h of onlyTrap) console.log(`        only in trap: ${h}: ${trap.headers[h]}`);
-    for (const d of differingValues) console.log(`        value differs: ${d.header}: real=${d.real} trap=${d.trap}`);
-    console.log(`      latency       real=${result.real.medianMs}ms trap=${result.trap.medianMs}ms (median of ${opts.runs})`);
-    if (!result.bodyIdentical) {
-      console.log(`\nreal body: ${result.real.body}`);
-      console.log(`trap body: ${result.trap.body}`);
+    console.log(`real:  ${opts.method} ${opts.real}`);
+    console.log(`decoy: ${decoyMethod} ${opts.decoy}\n`);
+    console.log(problems.length ? 'Differences' : 'Differences\n  none');
+    for (const p of problems) console.log(`  DIFF  ${p}`);
+    if (valueDiffs.length) {
+      console.log('\nValues that differ (expected only where the decoy names its own feature or final denial)');
+      for (const v of valueDiffs) console.log(`  ${v}`);
     }
-    console.log(`\nResult: ${result.match ? 'MATCH' : 'DIFFERENT'}${onlyReal.length || onlyTrap.length ? ' (header differences listed above; per-handler headers are a known trappsec limitation)' : ''}`);
+    for (const n of notes) console.log(`\nnote: ${n}`);
+    console.log(`\nlatency: real=${rMs.toFixed(2)} ms decoy=${dMs.toFixed(2)} ms (median of ${opts.runs}, interleaved)`);
+    if (real.body !== decoy.body) {
+      console.log(`\nreal  ${real.status}: ${result.real.body}`);
+      console.log(`decoy ${decoy.status}: ${result.decoy.body}`);
+    }
+    console.log(`\nResult: ${result.match ? 'MATCH' : 'DIFFERENT'}`);
   }
   process.exit(result.match ? 0 : 1);
 }

@@ -4,8 +4,9 @@
 //   node scan_bundle.mjs --dir dist --lure "/api/v2/exports" --lure "bulkExportBeta" [--json] [--verbose]
 //
 // For every --lure string: is it present in the shipped files (or was it tree-shaken)?
-// For every shipped file: are there words that reveal intent (decoy, honeypot, trappsec, ...),
-// and how close are they to a lure? Source maps are inspected the way an attacker holding
+// For every shipped file: are there words or phrases that reveal intent (decoy, honeypot,
+// "never enabled", "do not remove", ...), and how close are they to a lure? Do shipped file
+// and chunk names reveal intent? Source maps are inspected the way an attacker holding
 // them would: original file of each lure, comments and revealing words around it.
 //
 // Exit code: 0 = every lure found and no HIGH findings, 1 = otherwise, 2 = usage error.
@@ -16,6 +17,12 @@ import path from 'node:path';
 
 const STRONG = ['trappsec', 'decoy', 'honeypot', 'honeyfield', 'honeytoken', 'tripwire', 'lure', 'canarytoken', 'deception', 'deceptive'];
 const WEAK = ['trap', 'honey', 'bait', 'canary', 'fake', 'dummy', 'ghost', 'sensor', 'mock', 'bogus', 'sham', 'phony', 'snare'];
+// Phrases a teammate writes next to a deliberate lure; they reveal it as surely as a word.
+const PHRASES = [
+  /do not (use|call|remove|delete|touch|ship)/i, /don'?t (use|call|remove|delete|touch)/i, /never (enabled|called|used|shipped)/i,
+  /remove (this )?before (prod|production|release|launch)/i, /internal[ _-]?(debug|only)/i, /debug[ _-]?only/i,
+  /security (team|sensor|tripwire|trap)/i, /\bon purpose\b/i, /\bintentionally (unused|uncalled|disabled)/i, /not (wired|hooked) up/i,
+];
 const TEXT_EXT = new Set(['.js', '.mjs', '.cjs', '.jsx', '.css', '.html', '.htm', '.json', '.map', '.txt', '.xml', '.svg', '.webmanifest']);
 const SKIP_DIRS = new Set(['node_modules', '.git', 'cache']);
 
@@ -106,6 +113,16 @@ function lineOf(text, index) {
   return line;
 }
 
+function scanPhrases(text) {
+  const hits = [];
+  for (const re of PHRASES) {
+    const g = new RegExp(re.source, 'gi');
+    let m;
+    while ((m = g.exec(text))) hits.push({ word: m[0], index: m.index, strength: 'phrase' });
+  }
+  return hits;
+}
+
 function scanVocab(text) {
   const hits = [];
   for (const w of STRONG) for (const i of wordHits(text, w)) hits.push({ word: w, index: i, strength: 'strong' });
@@ -178,6 +195,28 @@ function main() {
       }
     });
 
+    // File and chunk names ship too (AdminTools-3f9a.js); check them like identifiers.
+    for (const w of STRONG.concat(WEAK)) {
+      if (wordHits(path.basename(file), w).length) {
+        const strong = STRONG.includes(w) || lureHits.length > 0;
+        result.findings.push({
+          severity: strong ? 'HIGH' : 'MEDIUM',
+          file: rel,
+          offset: 0,
+          word: w,
+          reason: lureHits.length ? 'revealing word in the name of a file that holds a lure' : 'revealing word in a shipped file name',
+          context: path.basename(file),
+        });
+      }
+    }
+
+    for (const hit of scanPhrases(text)) {
+      const near = lureHits.some((h) => Math.abs(h.index - hit.index) <= opts.proximity);
+      if (near) {
+        result.findings.push({ severity: 'HIGH', file: rel, offset: hit.index, word: hit.word, reason: 'revealing phrase near a lure', context: snippet(text, hit.index) });
+      }
+    }
+
     for (const hit of scanVocab(text)) {
       // Minified bundles pack unrelated modules side by side, so weak words (often library
       // code such as focusTrap) only count as HIGH when they sit right next to a lure.
@@ -234,7 +273,7 @@ function main() {
             const window = [];
             for (let k = Math.max(1, ln - 5); k <= Math.min(lines.length, ln + 5); k++) window.push({ n: k, text: lines[k - 1] });
             const comments = commentLines(window);
-            const vocab = window.flatMap(({ n, text }) => scanVocab(text).map((h) => ({ n, word: h.word, text })));
+            const vocab = window.flatMap(({ n, text }) => scanVocab(text).concat(scanPhrases(text)).map((h) => ({ n, word: h.word, text })));
             l.sourceOrigins.push({ map: file, source: src, line: ln, comments });
             for (const v of vocab) {
               result.findings.push({
@@ -242,7 +281,7 @@ function main() {
                 file: `${src} (via ${file})`,
                 offset: v.n,
                 word: v.word,
-                reason: `revealing word within 5 lines of lure "${l.lure}" in original source`,
+                reason: `revealing word or phrase within 5 lines of lure "${l.lure}" in original source`,
                 context: v.text.trim().slice(0, 160),
               });
             }
