@@ -1,0 +1,115 @@
+---
+name: add-detection
+description: Turn an application's existing validation and authorization into high-signal detections of someone probing its business logic. Finds the checks that reject inputs and states the app's real clients can never produce (values the UI never offers, client-sent totals that disagree with the server, workflow steps out of order, another tenant's IDs, replayed one-time tokens) and makes each one emit an identity-attributed OpenTelemetry event, without changing any response. Use this whenever the user wants to detect tampering, impossible states, business-logic abuse, mass assignment or IDOR attempts in their own app, or wants security alerts from existing validation. Not for adding new validation, fixing vulnerabilities, rate limiting, WAF rules or audit logging.
+license: MIT
+---
+
+# Add detection
+
+You are making the application's existing defenses report on themselves. Most apps already reject the inputs an attacker sends while probing business logic: a price that doesn't match the catalogue, a role the form never offers, a refund for an order that was never paid, another tenant's project ID in a request body. They reject them quietly, so nobody learns that someone tried. Each such rejection, where no real client could ever have produced the input, is a detection waiting to happen.
+
+The judgment calls are yours:
+- which rejections are impossible for every real client, and which ones ordinary users hit by mistake;
+- recording each impossible one with who did it and from where;
+- proving that nothing about the app's behavior changes, and that no real user ever triggers a detection.
+
+## What makes a good detection
+
+| Property | In practice |
+|---|---|
+| Impossible | No real client can produce the input: not the current UI, not an older version still in use, not a retry, a race or a double click. A detection a real user can trigger is a bug. |
+| Existing | It instruments a check the app already makes. The app's response and behavior stay exactly as they were. |
+| Silent | Nothing in any response reveals that the check now reports. |
+| Attributed | The event names the account, credential, tenant and client, and links to the request's trace. |
+| Meaningful | It points at an intent worth acting on: privilege, money, other tenants' data, workflow integrity. |
+| Proven | You have triggered it, and shown that the real client's flows never do. |
+
+## What counts as impossible
+
+Look for these where validation or authorization already rejects them:
+
+- **Values the UI never offers:** an enum outside the options any version of the form showed; a disabled or hidden option; a role, status, plan or scope no screen lets a user pick.
+- **Values the server already knows:** a client-sent price, total, discount, owner, tenant or user ID that must equal the server's own value and doesn't.
+- **Objects the caller can't have seen:** an ID belonging to another tenant in a field the client always fills from its own data. IDs in URLs usually don't qualify: shared links, bookmarks and stale tabs carry them legitimately.
+- **Workflow steps out of order:** approving one's own request, refunding an unpaid order, shipping a cancelled one, skipping a required step, acting on a resource in a state the UI never offers the action for.
+- **Replays and forgeries:** a one-time token, coupon, invitation or nonce used again; a signed or HMAC'd value that fails verification; an idempotency key reused with a different payload.
+- **Limits the client enforces:** quantities, lengths or counts beyond what the UI allows, where the server also rejects them.
+
+Ordinary validation failures are not detections: typos, expired sessions, values a real user can type, concurrent edits, retries after timeouts, an option retired recently enough that open tabs still send it. When a rejection is ambiguous, leave it alone.
+
+If you find an impossible state the app *doesn't* reject, that's a vulnerability, not a detection. Report it to the user; don't fix it as part of this work unless they ask.
+
+## Workflow
+
+### 0. Prerequisites and questions
+
+- **OpenTelemetry logs are a prerequisite.** Check them first, as references/telemetry.md describes. If they aren't in place, stop and tell the user.
+- **Ownership.** Confirm this is the user's own application.
+- **Questions.** Ask in one batch, only what the code cannot tell you:
+  1. Which attribute prefix does the organization use for its own telemetry, if the app's telemetry doesn't show one?
+  2. Which clients call the API besides the web UI in this repo: mobile apps and their oldest supported versions, partner integrations, scripts, SDKs?
+  3. What sits in front of the app in production (load balancer, CDN, ingress), if the repo doesn't say?
+
+### 1. Reconnaissance
+
+- **Every client's real behavior.** For each endpoint you consider, find what every real client sends: the form's options, the values it computes, what it echoes back, how it retries. Include older client versions still in use.
+- **Every rejection.** Find where the app rejects input or state: validators, schema constraints, permission checks, state-machine guards, signature checks, explicit error branches in domain code.
+- **Who and from where.** Where the authenticated principal lives after authentication (user, tenant, credential, impersonation), and how the client IP reaches the app through its proxies.
+
+### 2. Design
+
+For each candidate rejection, write down:
+- the condition, in one sentence;
+- why no real client can produce it, with evidence from the client code;
+- the intent (references/telemetry.md);
+- a stable rule ID.
+
+Keep only the ones whose evidence holds for every client. Prefer fewer, certain detections over many plausible ones.
+
+### 3. Present the plan
+
+Unless the user already told you to go ahead, show the plan and wait:
+
+| # | Rule ID | Endpoint / operation | Condition | Why no real client produces it | Intent |
+|---|---|---|---|---|---|
+
+### 4. Implement
+
+- **Record in the branch that already rejects**, after authentication, with the app's own idioms. The response, status, timing class and side effects stay exactly as they were.
+- **Never add a new rejection, and never change what the app accepts.**
+- **Evaluate only what the check already evaluates.** Recording adds constant, small work and never walks attacker-supplied structures.
+- **One recording module** emits the event in references/telemetry.md. Recording never fails, blocks or changes a request.
+- **Every rule has a stable ID, a marker in server code naming it, and an entry in one server-side inventory** with its condition, its evidence and its intent.
+
+### 5. Verify
+
+1. **Project checks.** Lint, type checks and the app's existing tests pass.
+2. **Each rule fires.** Send the impossible input as a normal user. The event matches references/telemetry.md, names the right user, tenant and credential, and carries the request's trace context.
+3. **Behavior unchanged.** The response to the impossible input is identical to the response before your change: status, headers and body. No data changed that didn't change before.
+4. **Real flows stay silent.** Replay every real client flow through the endpoints you touched, including the edge cases (retries, stale tabs, concurrent edits). Not one event.
+5. **Robustness.** Make recording fail in a test; responses don't change.
+6. **Tests.** One test per rule that fires it and asserts the event and the unchanged response, plus one that replays the real flows and asserts no events.
+
+### 6. Report
+
+- The rule inventory, with file:line for each rule.
+- For each rule, a command that triggers it.
+- The false-positive evidence: what each real client sends, and why it can't match.
+- Impossible states you found that the app doesn't reject (vulnerabilities to fix separately).
+- Assumptions and residual risks, including any proxy misconfiguration that affects the recorded client IP.
+
+## Keep the team in on it
+
+Every rule is real product code, and someone will eventually refactor the check it lives in. The inventory, the markers and the tests keep the detection alive. In a private repository, add a short note to the repo's agent instructions naming the rules and asking agents to keep them when they change the surrounding validation.
+
+## Ground rules
+
+- **A false positive is a bug.** If a real client can produce it, it isn't a detection.
+- **Never change behavior.** Same responses, same acceptance, same side effects.
+- **Don't fix, report.** Missing validation is a vulnerability for the user to decide on.
+- **No secrets in events**, even when the caller submitted one.
+- **Stay in scope.** Ask before touching auth, infrastructure or CI.
+
+## Reference files
+
+- **references/telemetry.md**: the OpenTelemetry prerequisite, the event schema shared with add-auditing and add-deception, and the detection event.

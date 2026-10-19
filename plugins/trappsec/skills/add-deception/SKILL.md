@@ -49,7 +49,7 @@ Seven habits produce that:
    - support tooling is over-privileged.
 3. **Give every lure an innocent reason to exist.** Real dead code always has a story: deprecated, behind a flag, role-gated, or kept for an older client. Write the one-sentence cover story first. It decides naming, location and response.
 4. **Let them discover it.** A full URL next to a "do not use" comment reads as bait. A role-gated button, a flag-gated code path or an extra response field is something the attacker feels clever for finding, and people trust what they discover. From least to most suspicious to someone reading the client:
-   1. nothing new in the client: honey fields on values the client already reads or sends back, values the forms never offer, decoys inferred from the API's conventions (references/backend-traps.md §1–2);
+   1. nothing new in the client: honey fields on values the client already reads or sends back, decoys inferred from the API's conventions (references/backend-traps.md §1–2);
    2. one flag- or role-gated entry point to a decoy;
    3. an uncalled client method for a powerful capability;
    4. a hidden or disabled field of a kind the app's other forms don't carry;
@@ -76,16 +76,17 @@ If you cannot write a plausible Think, the tripwire is not believable. If the Do
 
 ### 0. Check fit and ask what you can't infer
 
+- **OpenTelemetry logs are a prerequisite.** Check them first, as references/telemetry.md describes. If they aren't in place, stop and tell the user.
 - **Ownership.** Confirm this is the user's own application. Deception belongs only in systems you operate.
 - **Layout.** Find which service is the public API, where the frontend lives (same repo, another repo, none), and how each is built and run.
 - **Questions.** Ask in one batch, and only what the code cannot tell you:
   1. Is the source repository public? Decoys in public source are visible to everyone (see references/implementation.md §8).
-  2. Where should alerts go: logs only, OpenTelemetry, the app's existing error tracker or SIEM?
+  2. Which attribute prefix does the organization use for its own telemetry, if the app's telemetry doesn't show one?
   3. Do external testers (bug bounty, pentests) use this app? Their findings need a triage path.
   4. Do older clients (mobile builds, partner integrations, scripts) still call older API versions or paths?
   5. What sits in front of the app in production (load balancer, CDN, ingress, API gateway), if the repo doesn't say? An alert is only as useful as the client IP it records.
 
-  If the user wants you to proceed without questions, assume: private repo, logs-only alerts, no legacy clients, and whatever the deployment config in the repo shows about proxies. State those assumptions in the report.
+  If the user wants you to proceed without questions, assume: private repo, no legacy clients, and whatever the deployment config in the repo shows about proxies. State those assumptions in the report.
 
 ### 1. Reconnaissance: see the app as an attacker, then as its authors
 
@@ -120,7 +121,7 @@ If there is a frontend, read references/frontend-lures.md now.
 
 1. **Threat narrative.** In two or three sentences: who would attack this app, and what do they want? Examples: a B2B SaaS draws privilege escalation and cross-tenant access; a marketplace draws price and payout manipulation; a fintech app draws limit and balance tampering. Pick the 3–5 intents that matter.
 2. **Portfolio.** For a typical app, 4–8 tripwires in total, led by the ones that live inside real endpoints:
-   - 2–4 honey fields and value rules on real endpoints: fields real responses already show, and values the real forms never offer (references/backend-traps.md §2). They leave nothing to observe from outside;
+   - 2–4 honey fields on real endpoints, baited by fields real responses already show (references/backend-traps.md §2). They leave nothing to observe from outside;
    - 1–2 decoy routes, each reached through a frontend lure or inferred from the API's own conventions (references/backend-traps.md §1). In an API with fewer than about 30 endpoints, use one at most: every decoy route is one more endpoint that never works, and a tester who eliminates the working ones finds it;
    - optionally, a honey query parameter;
    - at least one breadcrumb chain linking two of the above.
@@ -137,7 +138,7 @@ If there is a frontend, read references/frontend-lures.md now.
    - path and method in house style;
    - lure placements;
    - the sibling whose chain it copies, the point where the tripwire records, and the final denial;
-   - intent (references/alert-schema.md) and tripwire ID;
+   - intent (references/telemetry.md) and tripwire ID;
    - the guard that keeps legitimate traffic away.
 6. **Review.** Look at the design through four sets of eyes, and revise until it passes each:
    - **A skeptical tester who has seen honeypots before.** Why does this exist? Why here? Why written like this? What happens if I poke it differently: no auth, wrong method, garbage body, another ID, as the owner of my own workspace? Does anything differ from its neighbors? If I clear every endpoint I can make work, what's left?
@@ -156,13 +157,13 @@ Then list the files you will touch, your assumptions, and anything the user must
 
 ### 4. Implement
 
-The rules for each piece are in references/implementation.md, and the event every tripwire emits is in references/alert-schema.md. Build them with the app's own idioms.
+The rules for each piece are in references/implementation.md, and the event every tripwire emits is in references/telemetry.md. Build them with the app's own idioms.
 
 **Backend.**
 - **Recording.** One small module records every hit as the standard event, through the app's OpenTelemetry setup or, without one, its logger. Recording never fails, slows or changes a request.
 - **Decoy routes.** Each is a real route beside its sibling that runs the sibling's chain, records right after authentication, and ends in the final denial. It writes, sends and calls out nothing.
 - **Inferred decoys.** A new method on an existing route, listed by the framework like any real method.
-- **Honey fields and value rules.** Checked after authentication and before the input is used. The endpoint behaves exactly as before, and the field can never reach the logic.
+- **Honey fields.** Checked after authentication and before the input is used. The endpoint behaves exactly as before, and the field can never reach the logic.
 - **Attribution.** Who and from where come from the app's authenticated state and its trusted-proxy configuration, never from anything the caller sent.
 - **Bait fields.** Added to the real serializer with the smallest idiomatic change; the real write handler never reads them.
 - **Inventory.** Every tripwire has a stable ID, a server-side marker and an entry in one server-side inventory.
@@ -189,7 +190,7 @@ A tripwire you haven't fired is a tripwire you don't have. Commands and details:
 6. **Response parity.** `node ${CLAUDE_SKILL_DIR}/scripts/compare_responses.mjs` against the sibling: anonymous and with an expired token using `--identical`, and signed in as a normal user.
 7. **Frontend survival.** Build for production, then run `node ${CLAUDE_SKILL_DIR}/scripts/scan_bundle.mjs --dir <build-output> --lure <string> ...`. Every lure must survive the bundler, with nothing near it that reveals intent.
 8. **False positives.** For each lure, show that no real code path calls it and no real user can pass its gate. For each honey field, show exactly what the real UI sends. Run the e2e suite if there is one.
-9. **Attribution and schema.** For one hit per tripwire, the event matches references/alert-schema.md and names the right user, tenant and credential, and its trace or request ID matches the app's own telemetry for that request. A request with a forged `X-Forwarded-For` header does not change the recorded IP, unless it came through a proxy the app trusts.
+9. **Attribution and schema.** For one hit per tripwire, the event matches references/telemetry.md and names the right user, tenant and credential, and its trace or request ID matches the app's own telemetry for that request. A request with a forged `X-Forwarded-For` header does not change the recorded IP, unless it came through a proxy the app trusts.
 10. **Tripwire robustness.** Make recording fail in a test, and send an oversized or deeply nested body to every honey-field endpoint; responses and response times must not change.
 
 ### 6. Report
@@ -237,8 +238,8 @@ Propose fixes in the plan format, then extend. For a request about one specific 
 
 ## Reference files
 
-- **references/implementation.md**: rules for decoy routes, final denials, inferred decoys, honey fields and value rules, recording, attribution, inventory, public repositories, and a safety checklist.
-- **references/alert-schema.md**: the OpenTelemetry event every tripwire emits, its attributes and the intent list.
+- **references/implementation.md**: rules for decoy routes, final denials, inferred decoys, honey fields, recording, attribution, inventory, public repositories, and a safety checklist.
+- **references/telemetry.md**: the OpenTelemetry prerequisite, the event schema shared with add-auditing and add-detection, and the deception events.
 - **references/frontend-lures.md**: how attackers read frontends, lure patterns, build survival, false-positive hazards, tells, notes per framework.
 - **references/backend-traps.md**: cover stories, honey-field design and expected values, responses, breadcrumb chains, directions by domain, infrastructure gotchas.
 - **references/verification.md**: verification commands, the bundled scripts, the false-positive audit, the report template.

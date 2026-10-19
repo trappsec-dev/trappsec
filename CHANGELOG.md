@@ -4,9 +4,15 @@ All notable changes to trappsec are documented here. The format follows [Keep a 
 
 ## Unreleased
 
+### Added: `add-detection` and `add-auditing` skills; OpenTelemetry is required
+
+- **`add-detection`** turns the app's existing validation and authorization into detections: checks that reject inputs and states no real client can produce report who tried, without changing any response. Values the real UI never offers moved here from `add-deception`.
+- **`add-auditing`** records security-relevant product actions as domain audit events, emitted where the decision is made, with actor, credential, resource, participants, changes and outcome.
+- **OpenTelemetry logs are a prerequisite** for all three skills; each stops if they aren't in place. The skills share one common telemetry core (namespace, event shape, attribution, credential and outcome attributes, value rules), kept identical by a CI check, with standard OpenTelemetry attributes where they exist and `security_rule.*` for deception and detection rules.
+
 ### Changed: the `add-deception` skill writes deception into the app's own code
 
-- **No library needed.** The skill now builds decoy routes as real routes in the app's own router, copying the authentication, loaders, permission checks and validation of the route beside them, and adds honey-field checks inside real handlers. Every hit is recorded as one standard OpenTelemetry event (`deception.decoy_hit`, `deception.field_hit`, `deception.rule_hit`) with a fixed set of attributes for the tripwire, the caller, the credential, the tenant and the client, defined in the skill's `references/alert-schema.md`. It works on any stack.
+- **No library needed.** The skill now builds decoy routes as real routes in the app's own router, copying the authentication, loaders, permission checks and validation of the route beside them, and adds honey-field checks inside real handlers. Every hit is recorded as one standard OpenTelemetry event (`<ns>.deception.decoy_hit`, `<ns>.deception.field_hit`) under the organization's own attribute prefix, using the common telemetry core described below. It works on any stack.
 - **Why.** Probing the same decoys built both ways in nine framework setups, trappsec traps still gave themselves away on 7–19 probes per framework after every workaround (unknown IDs, owner accounts, validation order, headers, body bytes, method handling), and native decoys on none. In end-to-end runs, native changes also carried fewer safety risks.
 - **Design guidance from black-box testing.** Honey fields and value rules were never detected from behavior, while decoy routes were found by elimination, so portfolios now lead with honey fields and keep decoy routes few and gated by checks real routes share.
 - **Sharper verification.** `compare_responses.mjs` now uses raw HTTP and compares header presence, case and order, byte-identical bodies (`--identical`), JSON key order and values, and interleaved latency. `scan_bundle.mjs` also flags revealing phrases near lures and revealing words in shipped file names.

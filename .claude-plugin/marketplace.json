@@ -9,9 +9,9 @@
     {
       "name": "trappsec",
       "source": "./plugins/trappsec",
-      "description": "Agent skills for adding deception (decoy routes, honey fields and frontend lures) to your own application, written in its own code.",
+      "description": "Agent skills that add deception, detection and auditing to your own application, in its own code, reporting through OpenTelemetry.",
       "category": "security",
-      "tags": ["security", "deception", "honeypot", "detection", "api"]
+      "tags": ["security", "deception", "honeypot", "detection", "audit", "opentelemetry", "api"]
     }
   ]
 }

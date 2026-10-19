@@ -184,8 +184,9 @@ Before finishing, look at each lure the way an attacker would, and remove:
 
   Prefer, in order:
   1. honey fields the real JSON already exposes (backend-traps.md §2);
-  2. values the real forms never offer in fields they already submit, such as a shipping option or payout schedule the form doesn't list (backend-traps.md §2);
-  3. inferred decoys (backend-traps.md §1).
+  2. inferred decoys (backend-traps.md §1).
+
+  Values the real forms never offer, in fields they already submit, are covered by the add-detection skill.
 
   A design built only from these adds nothing to the pages. The trade-off is that such tripwires are found only by probing. They catch active testers, not people reading the page source. Give at least one a breadcrumb that probing turns up, such as the `405` and `Allow` header some frameworks send for other methods on the decoy's path, or an error that names a permission.
 - **Mobile apps.** Decompilers read endpoint strings out of the binary. The same patterns apply, but slow release cycles make lures harder to maintain.

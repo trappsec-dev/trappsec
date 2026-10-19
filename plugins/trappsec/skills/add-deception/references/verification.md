@@ -42,7 +42,7 @@ If the project has tests, add one per decoy that fires it as a normal user and a
 For each honey field:
 1. **Normal use.** Perform the real UI action, or replay the exact request the frontend sends. Expect no event and unchanged behavior.
 2. **Explicit expected value.** Send the expected value explicitly. Expect no event.
-3. **Tampering.** Send a tampered value. Expect a `deception.field_hit` event naming the field, value and intent. The handler must behave as if the field were absent (the role didn't change, the price wasn't used).
+3. **Tampering.** Send a tampered value. Expect a `<ns>.deception.field_hit` event naming the field, value and intent. The handler must behave as if the field were absent (the role didn't change, the price wasn't used).
 4. **Repetition and types.** For query fields, send the parameter twice (`?x=a&x=b`). For JSON fields, try the value as a string and as its typed form (`"true"` and `true`).
 5. **Unknown-field behavior.** Send an unrelated unknown field the same way. The endpoint must treat it exactly as it treats the honey field (both ignored, or both rejected).
 
@@ -91,9 +91,9 @@ If the gate can be satisfied locally (flipping the flag in devtools, a local-onl
 ## 6. Attribution
 
 For one hit per tripwire, check the recorded event against what you know about the request:
-- `user.id`, `user.roles`, `deception.tenant.id` and `deception.credential.id` name the account and the session, token or API key you used; nothing in the event is the credential's secret;
+- `user.id`, `user.roles`, `<ns>.tenant.id` and `<ns>.credential.id` name the account and the session, token or API key you used; nothing in the event is the credential's secret;
 - if the app supports acting as another user, an impersonated hit records both the acting admin and the user;
-- the event matches alert-schema.md, and its trace context or request ID matches the app's own telemetry for the same request;
+- the event matches telemetry.md, and its trace context or request ID matches the app's own telemetry for the same request;
 - `client.address` is your client address. Send the same request with a forged `X-Forwarded-For: 203.0.113.9`: the recorded IP must not change unless the request really came through a proxy the app trusts. If you can run the app behind its real proxy setup (docker compose, a local ingress), check that the recorded IP is the client's, not the proxy's.
 
 ## 7. False-positive audit

@@ -46,7 +46,7 @@ Pick paths and methods that the real API plausibly lacks and that no real client
 
 A honey field is a parameter that real clients never send, or always send with one fixed value, on a real endpoint that would never honor it. The check records it and makes sure it can never change behavior (implementation.md §4).
 
-Honey fields and value rules leave nothing to observe from outside, while every decoy route is one more endpoint that never works. Make them the core of the portfolio.
+Honey fields leave nothing to observe from outside, while every decoy route is one more endpoint that never works. Make them the core of the portfolio.
 
 ### Pick fields an attacker would try on that endpoint
 
@@ -71,11 +71,7 @@ Compute per-user expected values from the authenticated caller, never from other
 
 Don't change the client to avoid staleness, for example by re-fetching before each save. Real code that bends around a tripwire is a tell.
 
-### Values the real form never offers
-
-A field the real handler reads can't be a honey field. A value the real UI never sends can still be a tripwire: a shipping option, payout schedule, role or status the form doesn't offer. Record it in the branch where the handler already rejects or falls back on unknown values, and keep the existing behavior. The lure is the real form, so nothing new ships to the client.
-
-Only values that no version of the real form ever offered qualify. A tab opened before an option was retired still submits it.
+Values the real UI never offers, in fields the handler really reads, are a different mechanism: detect them with the add-detection skill.
 
 ### Bait it
 
@@ -115,7 +111,7 @@ Each step must be plausible on its own and consistent with the others. The permi
 
 ## 5. Intents
 
-Give every tripwire one intent from the list in alert-schema.md, so alerts can be routed and prioritized.
+Give every tripwire one intent from the list in telemetry.md, so alerts can be routed and prioritized.
 
 ## 6. Directions by domain
 

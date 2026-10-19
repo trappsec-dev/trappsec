@@ -6,7 +6,7 @@ Contents
 1. Decoy routes
 2. The final denial
 3. Inferred decoys
-4. Honey fields and value rules
+4. Honey fields
 5. Recording hits
 6. Attribution
 7. Keeping decoys recognizable to the team
@@ -45,9 +45,9 @@ An inferred decoy is a method or sub-resource the API's conventions imply but th
 - **Its sibling is the existing route on that path:** reuse that route's loaders, so an unknown item gets the same 404, then the permission check the action would have, then the final denial.
 - **Pick capabilities no customer has.** A denied DELETE on something owners can delete elsewhere invites the question why.
 
-## 4. Honey fields and value rules
+## 4. Honey fields
 
-A honey field is a parameter real clients never send, or always send with one known value, on a real endpoint that never honors it. A value rule records a value the real UI never offers, in a field the handler really reads.
+A honey field is a parameter real clients never send, or always send with one known value, on a real endpoint that never honors it.
 
 - **Checked after authentication, before the input is validated or used.**
 - **Expected values come from the authenticated caller**, never from other fields in the same request; otherwise an attacker adds a field and the check goes quiet.
@@ -55,13 +55,12 @@ A honey field is a parameter real clients never send, or always send with one kn
   - A constant the real UI always sends: record when it differs.
   - A per-user value the UI echoes back: record only values impossible for this caller. Values that are stale but legitimate (a tab opened before a demotion) don't record.
 - **Compare canonically.** Form and query values are strings, JSON values are typed: `"true"` and `true` match, `"5"` and `5` match, arrays compare element by element, and a repeated parameter is tampering unless every value matches.
-- **The endpoint behaves exactly as before for every request.** If it ignores unknown fields, the honey field is discarded after recording, so no later change can start honoring it. If it rejects unknown fields, the honey field is rejected exactly like any other. For value rules, the existing rejection or fallback is unchanged.
+- **The endpoint behaves exactly as before for every request.** If it ignores unknown fields, the honey field is discarded after recording, so no later change can start honoring it. If it rejects unknown fields, the honey field is rejected exactly like any other.
 - **Constant work.** Look only at the named top-level field. Never walk arrays or nested objects, never run fuzzy matching over attacker input, and handle values of any type without failing: a crafted body costs the same as a normal one and never becomes a 500.
-- **Only values no version of the real UI ever offered** qualify for value rules.
 
 ## 5. Recording hits
 
-One small server-side module records every hit, in the app's style and named like its other observability code. It emits the event in references/alert-schema.md.
+One small server-side module records every hit, in the app's style and named like its other observability code. It emits the events in references/telemetry.md, which also covers the prerequisite and the attributes every event carries.
 
 - **Never fails the request.** Any error while recording is swallowed, and the response is unchanged.
 - **Never blocks.** No network call on the request path; delivery to other systems goes through the app's existing telemetry or background work.

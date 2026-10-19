@@ -23,6 +23,7 @@ House-style dossier, from recon:
   - homegrown flags: `useFlag(name)` reads `session.flags`, which lists only enabled flags; unknown names return false;
   - the book settings form sends back the fetched book object with edits (`{...book, name}`).
 - **History:** per-account CSV exports shipped last year. An issue asks for "full ledger export per book".
+- **Telemetry:** the OpenTelemetry SDK is initialized in `server/src/telemetry`, exporting traces and logs over OTLP; the company's attribute prefix is `ledgerly`.
 - **Deployment:** behind an AWS load balancer; the app already sets `app.set('trust proxy', 1)`, so `req.ip` is the client. Requests carry an `X-Request-Id` the access log records.
 - **Source maps:** not deployed. **Repo:** private.
 
@@ -78,7 +79,7 @@ For accountants and viewers, the decoy's 403 says the owner role is required. Th
 
 ### Code
 
-A new `server/src/security/` module, next to the app's other telemetry code, records hits as the standard event through the app's existing OpenTelemetry logger. It provides route middleware for the decoy (`recordProbe`) and for the honey field (`checkField`), both keyed by inventory ID.
+A new `server/src/security/` module, next to the app's other telemetry code, records hits as the standard events through the app's existing OpenTelemetry logger, under the company's `ledgerly` prefix. It provides route middleware for the decoy (`recordProbe`) and for the honey field (`checkField`), both keyed by inventory ID.
 
 ```js
 // server/src/routes/books.js (existing router)
@@ -99,18 +100,18 @@ An accountant's PATCH with `"myRole": "owner"` produces this event (resource and
 
 ```json
 {
-  "event.name": "deception.field_hit",
+  "event.name": "ledgerly.deception.field_hit",
   "severity": "WARN",
   "body": "honey field hit",
   "attributes": {
-    "deception.schema.version": "1",
-    "deception.tripwire.id": "books.my-role",
-    "deception.kind": "honey_field",
-    "deception.intent": "privilege_escalation",
-    "deception.attributed": true,
-    "deception.field.name": "myRole",
-    "deception.field.location": "body",
-    "deception.field.value": "owner",
+    "ledgerly.schema.version": "1",
+    "security_rule.ruleset.name": "deception",
+    "security_rule.name": "books.my-role",
+    "security_rule.category": "privilege_escalation",
+    "ledgerly.deception.kind": "honey_field",
+    "ledgerly.deception.field.name": "myRole",
+    "ledgerly.deception.field.location": "body",
+    "ledgerly.deception.field.value": "owner",
     "http.request.method": "PATCH",
     "http.route": "/api/v3/books/:bookId",
     "url.path": "/api/v3/books/bk_8Hq2",
@@ -119,10 +120,14 @@ An accountant's PATCH with `"myRole": "owner"` produces this event (resource and
     "user_agent.original": "Mozilla/5.0 ...",
     "user.id": "usr_41xQ",
     "user.roles": ["accountant"],
-    "deception.tenant.id": "firm_9kd2",
-    "deception.credential.type": "session",
-    "deception.credential.id": "sess_7d1c",
-    "deception.request.id": "req_5b2e"
+    "ledgerly.tenant.id": "firm_9kd2",
+    "ledgerly.actor.type": "user",
+    "session.id": "sess_7d1c",
+    "ledgerly.credential.type": "session",
+    "ledgerly.credential.id": "sess_7d1c",
+    "ledgerly.outcome": "denied",
+    "error.type": "forbidden",
+    "ledgerly.request.id": "req_5b2e"
   }
 }
 ```
