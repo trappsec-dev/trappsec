@@ -8,8 +8,9 @@ Contents
 3. Response parity
 4. Frontend survival and tells
 5. Inert, and real routes unchanged
-6. False-positive audit
-7. Report template
+6. Attribution
+7. False-positive audit
+8. Report template
 
 ## 1. Fire every decoy, probed like its sibling
 
@@ -87,7 +88,15 @@ If the gate can be satisfied locally (flipping the flag in devtools, a local-onl
 - **Real routes unchanged.** Run the app's existing test suites. For every real route on a path a decoy shares (inferred decoys), replay the real UI's requests and compare with the responses before your change.
 - **Recording never breaks a request.** Make the tripwire helper's logger raise (monkeypatch or a test double) and fire each decoy and honey field: responses must be unchanged.
 
-## 6. False-positive audit
+## 6. Attribution
+
+For one hit per tripwire, check the recorded event against what you know about the request:
+- `user`, `role`, `tenant` and `credential` name the account and the session, token or API key you used; nothing in the event is the credential's secret;
+- if the app supports acting as another user, an impersonated hit records both the acting admin and the user;
+- `request_id` matches the app's own log line for the same request;
+- `ip` is your client address. Send the same request with a forged `X-Forwarded-For: 203.0.113.9`: the recorded IP must not change unless the request really came through a proxy the app trusts. If you can run the app behind its real proxy setup (docker compose, a local ingress), check that the recorded IP is the client's, not the proxy's.
+
+## 7. False-positive audit
 
 **For every lure:**
 - List every call site of the lure method or component. Each one must sit behind the gate.
@@ -102,7 +111,7 @@ If the gate can be satisfied locally (flipping the flag in devtools, a local-onl
 
 Run the project's test suites (unit, integration, e2e). Tests that snapshot API responses need updating for bait fields. Update them; don't delete them.
 
-## 7. Report template
+## 8. Report template
 
 ```markdown
 ## Deception added
@@ -115,7 +124,7 @@ Run the project's test suites (unit, integration, e2e). Tests that snapshot API 
 <curl commands, as a normal user and as an owner, with the expected response and event>
 
 ### Alerts
-<where events go, alert vs. signal, how to change it>
+<where events go, alert vs. signal, what each event identifies (user, tenant, credential, IP, request ID), how the client IP is resolved behind the app's proxies, and how to change any of it>
 
 ### Verification results
 <what you ran and what came out: the probe comparison per decoy, compare_responses, scan_bundle, the inertness and robustness tests, the app's own tests>

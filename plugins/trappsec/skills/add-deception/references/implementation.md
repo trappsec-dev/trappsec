@@ -9,7 +9,7 @@ Contents
 4. Honey fields
 5. Values the real form never offers
 6. The tripwire helper
-7. Identity and anonymous hits
+7. Attribution: who, and from where
 8. Keeping decoys recognizable to the team
 9. Public repositories
 10. Framework notes
@@ -142,8 +142,11 @@ Event schema (keep the same keys in every service, so one alert rule covers them
 | `timestamp` | seconds since the epoch |
 | `event` | `decoy_hit` (decoy route), `field_hit` (honey field) or `rule_hit` (value the form never offers) |
 | `type` | `alert` when a user is identified, else `signal` |
-| `path`, `method`, `ip`, `user_agent` | from the request, truncated to 1024 characters |
-| `user`, `role` | the authenticated caller, or null |
+| `path`, `method`, `user_agent` | from the request, truncated to 1024 characters |
+| `ip` | the client IP resolved through the app's trusted-proxy setting (§7) |
+| `request_id` | the request or trace ID the app already logs |
+| `user`, `role`, `tenant`, `credential` | the authenticated caller (§7), or null |
+| `actor` | when someone is acting as `user`, the real person behind the request; otherwise null |
 | `intent` | for `decoy_hit` and `rule_hit` |
 | `found_fields` | for `field_hit`: `[{type: "body"|"query", field, value, intent}]` |
 | `app` | `{service, environment, hostname}` |
@@ -152,7 +155,6 @@ Rules:
 - **Never raise.** Wrap the whole body in try/except. A failure to record must not change the response.
 - **Never block.** Write a log line. If alerts must go to a webhook, hand the event to the app's existing background worker or an in-process queue, never an HTTP call on the request path.
 - **Sanitize.** Truncate strings, limit lists, serialize objects compactly. Attacker-controlled values end up in dashboards and tickets.
-- **Use the client IP the app already trusts** (its proxy configuration), never a raw forwarding header.
 
 Python:
 
@@ -191,12 +193,13 @@ def values_match(actual, expected):
         return actual == expected
     return _canon(actual) == _canon(expected)
 
-def record(event, request, *, user=None, role=None, **fields):
+def record(event, request, *, user=None, role=None, tenant=None, credential=None, actor=None, **fields):
     try:
         payload = {
             "timestamp": time.time(), "event": event, "type": "alert" if user else "signal",
-            "path": _clip(<path from request>), "method": <method>, "ip": <client ip the app trusts>,
-            "user_agent": _clip(<user agent>), "user": user, "role": role,
+            "path": _clip(<path from request>), "method": <method>, "ip": <client ip resolved by the app>,
+            "request_id": <request or trace id the app logs>, "user_agent": _clip(<user agent>),
+            "user": user, "role": role, "tenant": tenant, "credential": credential, "actor": actor,
             **{k: _clip(v) if k != "found_fields" else [{**f, "value": _clip(f.get("value"))} for f in v] for k, v in fields.items()},
             "app": _APP,
         }
@@ -226,12 +229,13 @@ function valuesMatch(actual, expected) {
   return canon(actual) === canon(expected);
 }
 
-function record(event, req, { user = null, role = null, ...fields } = {}) {
+function record(event, req, { user = null, role = null, tenant = null, credential = null, actor = null, ...fields } = {}) {
   try {
     const line = {
       timestamp: Date.now() / 1000, event, type: user ? 'alert' : 'signal',
-      path: clip(<path from req>), method: req.method, ip: <client ip the app trusts>,
-      user_agent: clip(<user agent>), user, role, ...fields, app: APP,
+      path: clip(<path from req>), method: req.method, ip: <client ip resolved by the app>,
+      request_id: <request or trace id the app logs>, user_agent: clip(<user agent>),
+      user, role, tenant, credential, actor, ...fields, app: APP,
     };
     if (line.found_fields) line.found_fields = line.found_fields.map((f) => ({ ...f, value: clip(f.value) }));
     <app logger>.warn(JSON.stringify(line));
@@ -241,11 +245,27 @@ function record(event, req, { user = null, role = null, ...fields } = {}) {
 
 Go: the same shape as a function taking `*http.Request`, with `defer func() { _ = recover() }()` at the top and the app's `slog` or logger.
 
-## 7. Identity and anonymous hits
+## 7. Attribution: who, and from where
 
-The tripwire runs after the app's own authentication, so it has the real caller: pass the user ID and the role that matters for this route (an account role, or the caller's role in the workspace in the path when roles are per workspace).
+An alert is only useful if a responder can act on it: find the account, revoke the credential, and match the request in the other logs.
 
-Anonymous requests are rejected by the sibling's authentication before the tripwire runs, with the app's real 401. They are mostly scanners. If you want them as `signal`s, record from the app's 401 path for decoy routes only, without changing the response. Requests the framework rejects before authentication (FastAPI's 422 for malformed JSON, DRF's 406 for an unsupported `Accept`) are never recorded; that matches the sibling and is fine.
+**Who.** The tripwire runs after the app's own authentication, so take everything from the state that authentication left behind, never from the request body or headers the caller controls:
+- `user`: a stable ID (not just an email or display name, which can change);
+- `role`: the role that matters for this route (an account role, or the caller's role in the workspace in the path when roles are per workspace);
+- `tenant`: the organization or workspace the caller acted in;
+- `credential`: the ID of the session, token (its `jti`) or API key that authenticated the request, so a responder can revoke exactly that one. Never record the secret itself;
+- `actor`: when an admin or support user is acting as someone else, the real person behind the request. Record both; the alert is about the actor.
+
+For API keys and service accounts, `user` is the owning account and `credential` is the key ID.
+
+**From where.** Behind a load balancer, CDN or ingress, the socket address is the proxy's, and the original client is in a forwarding header (`X-Forwarded-For`, `Forwarded`, `CF-Connecting-IP`, `True-Client-IP`) that anyone can also send themselves. So:
+- use the client IP the framework resolves through its trusted-proxy setting: Express `trust proxy`, uvicorn `--forwarded-allow-ips` or Starlette's `ProxyHeadersMiddleware`, Django behind middleware the app already uses, Rails `trusted_proxies`, Spring `server.forward-headers-strategy`, Gin `SetTrustedProxies`, chi `RealIP` only when the edge overwrites the header;
+- never parse a forwarding header yourself, and never take its leftmost value: the caller wrote it;
+- if the app isn't configured for its proxies, every alert shows the proxy's address. Report it, with the setting that would fix it, rather than changing infrastructure or proxy trust yourself.
+
+**Correlation.** Record the request ID or trace ID the app already logs (or the current OpenTelemetry trace and span), so an alert leads straight to the access log, the application log and any upstream WAF or CDN log for the same request. Keep `user_agent` too.
+
+**Anonymous hits.** Anonymous requests are rejected by the sibling's authentication before the tripwire runs, with the app's real 401. They are mostly scanners. If you want them as `signal`s, record from the app's 401 path for decoy routes only, without changing the response. Requests the framework rejects before authentication (FastAPI's 422 for malformed JSON, DRF's 406 for an unsupported `Accept`) are never recorded; that matches the sibling and is fine.
 
 ## 8. Keeping decoys recognizable to the team
 

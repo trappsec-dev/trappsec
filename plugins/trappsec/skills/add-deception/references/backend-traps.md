@@ -132,5 +132,5 @@ These are directions, not names. Translate them into the app's vocabulary and co
 
 - **Edge routing.** An API gateway, ingress or serverless config with an explicit route allowlist answers decoy paths itself (usually with a 404), and the decoy never records. Check the infrastructure config, and add routes there with the user's approval.
 - **Caching.** A CDN that caches GET responses can serve a decoy without the request ever reaching the app. Make sure decoy responses aren't cacheable at the edge, just as real authenticated API responses shouldn't be.
-- **Client IP.** Record the client IP the app already trusts (its proxy configuration), never a raw forwarding header.
+- **Client IP.** Behind a load balancer or CDN, check that the app is configured to trust exactly those proxies, so alerts carry the real client IP (implementation.md §7).
 - **Generated clients and contract tests.** A decoy that appears in a published spec gets picked up by SDK generators, contract tests and API fuzzers. Check which of the team's tools read the spec, and keep them away from decoys.

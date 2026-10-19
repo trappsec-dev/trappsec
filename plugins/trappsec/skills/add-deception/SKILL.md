@@ -83,8 +83,9 @@ If you cannot write a plausible Think, the tripwire is not believable. If the Do
   2. Where should alerts go: logs only, OpenTelemetry, the app's existing error tracker or SIEM?
   3. Do external testers (bug bounty, pentests) use this app? Their findings need a triage path.
   4. Do older clients (mobile builds, partner integrations, scripts) still call older API versions or paths?
+  5. What sits in front of the app in production (load balancer, CDN, ingress, API gateway), if the repo doesn't say? An alert is only as useful as the client IP it records.
 
-  If the user wants you to proceed without questions, assume: private repo, logs-only alerts, no legacy clients. State those assumptions in the report.
+  If the user wants you to proceed without questions, assume: private repo, logs-only alerts, no legacy clients, and whatever the deployment config in the repo shows about proxies. State those assumptions in the report.
 
 ### 1. Reconnaissance: see the app as an attacker, then as its authors
 
@@ -111,6 +112,7 @@ If you cannot write a plausible Think, the tripwire is not believable. If the Do
   - Frontend: HTTP client wrapper, folder layout, file naming, typing, i18n, role-gating idiom, feature-flag system, comment style.
 - **Story material.** Read the history: `git log --oneline`, deprecated folders, version migrations, TODOs, flags, renamed features. The best decoys continue a story the codebase already tells.
 - **Request pipeline.** Trace how a request gets authenticated and authorized: global middleware, per-route middleware, guards, dependencies, permission classes. Decoys reuse this pipeline, so you need to know it exactly.
+- **Who and where from.** Find where the authenticated principal lives after authentication (the user, their tenant or workspace, the session, token or API key that authenticated them, and whether an admin can act as another user), and how the real client IP reaches the app: the proxies in front of it, and the framework's setting for which proxies to trust. Note the request or trace ID the app already logs.
 
 If there is a frontend, read references/frontend-lures.md now.
 
@@ -161,7 +163,7 @@ Patterns, reference code and per-framework notes are in references/implementatio
 - **Decoy routes.** Declare each decoy as a real route beside its sibling, in the same router, file and style. Copy the sibling's chain in order: authentication, then the tripwire, then the sibling's loaders and permission checks, then body validation in the sibling's style. End with the final denial through the app's own error mechanism. A decoy never writes, sends, enqueues or calls out, and reads nothing beyond what the sibling's loaders read.
 - **Inferred decoys.** Add the method as a real handler on the existing path, in the same router or view, so the framework lists it in `Allow` and OPTIONS like any real method.
 - **Honey fields.** In the real endpoint, before the body is validated or used: detect the field (present, or a value other than the expected one), record it, and make sure it can never reach the logic. Preserve exactly what the endpoint does with that field today: if it currently ignores unknown fields, discard it; if it rejects them, let it be rejected the same way. Inspect only the top-level field, never every element of an array, and treat values of any type without crashing.
-- **Identity.** The tripwire runs after the app's own authentication, so pass it the authenticated user and their role.
+- **Attribution.** The tripwire runs after the app's own authentication, so record who did it from the app's own state: a stable user ID, their role, their tenant, and the ID of the session, token or API key used (never the secret itself). For impersonation, record both the acting admin and the user being acted as. Record the client IP the app resolves through its trusted-proxy setting, never a forwarding header read directly, plus the request or trace ID the app logs. If the app resolves the IP wrongly behind its proxy, say so in the report instead of changing infrastructure config yourself (references/implementation.md §7).
 - **Bait fields.** Add each bait field to the real serializer with the smallest idiomatic change. Confirm the real write handler never reads the honey field.
 - **Inventory.** Keep one server-side list of every tripwire, and mark each decoy in server code the way the team marks deliberate code (a one-line comment naming the cover story, or a no-op decorator). Server code never reaches browsers, so clarity there costs nothing.
 
@@ -187,14 +189,15 @@ A tripwire you haven't fired is a tripwire you don't have. Commands and details:
 6. **Response parity.** `node ${CLAUDE_SKILL_DIR}/scripts/compare_responses.mjs` against the sibling: anonymous and with an expired token using `--identical`, and signed in as a normal user.
 7. **Frontend survival.** Build for production, then run `node ${CLAUDE_SKILL_DIR}/scripts/scan_bundle.mjs --dir <build-output> --lure <string> ...`. Every lure must survive the bundler, with nothing near it that reveals intent.
 8. **False positives.** For each lure, show that no real code path calls it and no real user can pass its gate. For each honey field, show exactly what the real UI sends. Run the e2e suite if there is one.
-9. **Tripwire robustness.** Make the helper's logger raise in a test, and send an oversized or deeply nested body to every honey-field endpoint; responses and response times must not change.
+9. **Attribution.** For one hit per tripwire, the event names the right user, tenant and credential, and the request ID matches the app's own log line for that request. A request with a forged `X-Forwarded-For` header does not change the recorded IP, unless it came through a proxy the app trusts.
+10. **Tripwire robustness.** Make the helper's logger raise in a test, and send an oversized or deeply nested body to every honey-field endpoint; responses and response times must not change.
 
 ### 6. Report
 
 Finish with a report the user can hand to their security team:
 - the inventory table from the plan, with file:line for every decoy, honey-field check and lure;
 - a curl command that fires each tripwire;
-- where alerts go;
+- where alerts go, and what each alert identifies (user, tenant, credential, IP, request ID);
 - the false-positive analysis;
 - assumptions and residual risks;
 - maintenance notes.

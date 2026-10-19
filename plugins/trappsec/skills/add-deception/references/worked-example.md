@@ -23,6 +23,7 @@ House-style dossier, from recon:
   - homegrown flags: `useFlag(name)` reads `session.flags`, which lists only enabled flags; unknown names return false;
   - the book settings form sends back the fetched book object with edits (`{...book, name}`).
 - **History:** per-account CSV exports shipped last year. An issue asks for "full ledger export per book".
+- **Deployment:** behind an AWS load balancer; the app already sets `app.set('trust proxy', 1)`, so `req.ip` is the client. Requests carry an `X-Request-Id` the access log records.
 - **Source maps:** not deployed. **Repo:** private.
 
 Threat narrative: Ledgerly holds firms' financial records. An attacker with an accountant or viewer seat wants (a) bulk data out of books they can see, and (b) owner rights. An attacker who signs up their own firm owns their own books and will compare.
@@ -91,6 +92,8 @@ const recordProbe = (intent) => (req, res, next) => {
   record('decoy_hit', req, {
     user: req.session?.userId ?? null,
     role: req.session?.memberships?.[req.params.bookId] ?? null,
+    tenant: req.session?.firmId ?? null,
+    credential: req.session?.id ?? null,
     intent,
   });
   next();
@@ -105,6 +108,8 @@ const checkField = (field, expected, intent) => (req, res, next) => {
         record('field_hit', req, {
           user: req.session?.userId ?? null,
           role: req.session?.memberships?.[req.params.bookId] ?? null,
+          tenant: req.session?.firmId ?? null,
+          credential: req.session?.id ?? null,
           found_fields: [{ type: 'body', field, value, intent }],
         });
       }
@@ -172,6 +177,7 @@ const createLedgerExport = useMutation({ mutationFn: (format: ExportFormat) => e
   - An unrelated unknown field is ignored exactly like `myRole`.
 - **Inert.** A test hits the decoy as each role and asserts no export job, no file and no change to the book.
 - **Robust.** A test makes the security logger throw; every response is unchanged.
+- **Attribution.** Each event names the user, their role in that book, the firm and the session ID, with the same request ID as the access log line. A forged `X-Forwarded-For` didn't change the recorded IP.
 - **Parity.** `compare_responses.mjs` against `close-periods` reported no differences: anonymous and with an expired cookie (`--identical`), and as a viewer.
 - **Elimination.** As a self-serve owner, every other book endpoint can be made to work. `ledger-exports` can't, but it is gated by the same owner check testers see failing on `close-periods`, and it sits behind a client flag like the app's other unreleased features.
 - **Survival.** `scan_bundle.mjs --dir dist --lure /ledger-exports --lure ledgerExportsBeta`: both found, no findings.
