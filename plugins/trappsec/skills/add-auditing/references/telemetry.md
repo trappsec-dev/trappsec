@@ -1,107 +1,151 @@
 # Telemetry
 
-What add-auditing emits, and what it needs in place first. The common core is shared word for word with the add-deception and add-detection skills, so events from all three line up.
+What add-auditing emits, and what it needs in place first. The common core is shared word for word with add-deception and add-detection, so records from all three line up.
 
 <!-- BEGIN COMMON CORE: identical in add-auditing, add-deception and add-detection -->
-## Prerequisite: OpenTelemetry logs
+## Prerequisite: OpenTelemetry traces and logs
 
-Everything these skills record travels as OpenTelemetry log records. Before designing anything, confirm the app already has:
-- an OpenTelemetry SDK initialized at startup, with a logger provider and an exporter for log records (usually OTLP to a Collector). Traces alone are not enough;
-- log records emitted while handling a request carrying that request's trace context.
+These skills write to OpenTelemetry traces and logs together. Before designing anything, confirm the app already has:
+- an OpenTelemetry SDK initialized at startup, with a tracer provider and a logger provider, both exported (usually OTLP to a Collector);
+- HTTP server instrumentation, so every request has a server span carrying the request: `http.request.method`, `http.route`, `url.path`, `http.response.status_code`, `client.address`, `user_agent.original`;
+- log records emitted during a request carrying that request's trace and span IDs.
 
-If either is missing, stop. Tell the user what you found and that this skill needs OpenTelemetry logs in place first. Don't set it up as part of this work; offer to do it as a separate change.
+If any of these is missing, stop. Tell the user what you found and that this skill needs OpenTelemetry traces and logs in place first. Don't set them up as part of this work; offer to do it as a separate change.
+
+Sampling belongs to the backend, not the app: every server span is exported, and the backend decides what to keep. If the app samples traces itself, findings from requests it drops can't be joined to their caller. Tell the user, and ask before changing the sampler. Audit records don't depend on it.
 
 ## Common core
 
 ### Namespace
 
-Event names and attributes these skills define live under the fixed `trappsec` namespace, the same in every app and service and for all three skills, so one schema serves every app. Never invent attributes in OpenTelemetry's own namespaces.
+Event names and attributes these skills define live under the fixed `trappsec` namespace, the same in every app and service and for all three skills. Never invent attributes in OpenTelemetry's own namespaces.
 
-`trappsec` appears only in attribute keys and event names. No attribute value, record body, rule or inventory ID, code identifier, comment or error message contains it: values show up in dashboards, tickets and searches, and code is read by teammates and sometimes by attackers. The recording code is named like the app's other observability code.
+`trappsec` appears only in attribute keys and event names. No attribute value, record body, logger name, rule or inventory ID, code identifier, comment or error message contains it: values show up in dashboards, tickets and searches, and code is read by teammates and sometimes by attackers. The recording code is named like the app's other observability code.
 
-### The event
+### Three kinds of record
 
-- One log record per occurrence, emitted as an event: the event name identifies what happened. Set it in the log record's own event name field, not as an `event.name` attribute, which is deprecated. Event names never contain dynamic values.
-- Emitted inside the trace context of the request that caused it.
-- Under the app's existing resource, which identifies at least `service.name`, `service.version` and `deployment.environment.name`.
-- The body is a short fixed description. Request data goes in attributes, never in the body.
-- Every event carries `trappsec.schema.version` = `"1"`.
+Each fact is said once, where it is known.
 
-### Attributes every event carries when known
-
-Standard OpenTelemetry attributes where one exists; `trappsec.*` for the rest. Omit an attribute whose value is unknown.
-
-| Attribute | Type | Value |
+| Record | Says | When |
 |---|---|---|
-| `http.request.method`, `http.route`, `url.path` | string | The request, with the route template in `http.route` |
-| `http.response.status_code` | int | The status the caller received |
-| `client.address` | string | The client IP the app resolves through its trusted-proxy configuration; never a forwarding header read directly |
-| `user_agent.original` | string | The User-Agent header |
-| `trappsec.request.id` | string | The app's own request ID, if it has one besides the trace ID |
-| `user.id` | string | A stable ID for the account the request acted as; not an email or display name |
-| `user.roles` | string[] | The roles that matter for the operation |
-| `trappsec.tenant.id` | string | The organization or workspace the request acted in |
-| `trappsec.actor.type` | string | `user`, `service`, `integration` or `agent` |
-| `trappsec.actor.id` | string | When someone acts as `user.id` (impersonation, support access, an agent acting for a person), the real actor |
-| `session.id` | string | The session the request belongs to |
-| `trappsec.credential.type` | string | `session`, `token`, `api_key`, `oauth_client` or `service_account` |
-| `trappsec.credential.id` | string | The ID of that credential, so it can be revoked. Never the secret. |
-| `trappsec.credential.scopes` | string[] | The credential's scopes, when it has them |
-| `trappsec.outcome` | string | `success`, `failure` or `denied` |
-| `error.type` | string | A machine-readable reason when the outcome isn't `success` |
+| Request context, on the server span | Who called and from where | Once per request |
+| Audit record, a log record | The complete audit entry: who did what, for whom, to what, from where, with what result | When an audited action succeeds, is denied or fails |
+| Finding, a log record | Which deception or detection rule fired, on what, plus the tenant and account as routing keys | When a rule fires |
 
-Who and from where always come from the app's authenticated state and its proxy configuration, never from anything the caller sent.
+The backend joins each finding to its request's context by trace and span ID. Audit records are complete on their own and never depend on the join, the span or sampling.
+
+### Request context
+
+Set once per request on the server span (the local root span the HTTP instrumentation creates), right after authentication, from the app's authenticated state and never from anything the caller sent. One small module does it for all three skills: if another of these skills already added it, reuse it.
+
+| Span attribute | Type | Value |
+|---|---|---|
+| `user.id` | string | A stable ID for the account the request acted as; not an email |
+| `user.name` | string | That account's login, when the app has one |
+| `user.roles` | string[] | The roles that matter for authorization |
+| `trappsec.tenant.id` | string | The organization or workspace the request acted in |
+| `session.id` | string | The session, when there is one |
+| `trappsec.credential.type` | string | `session`, `token`, `api_key`, `oauth_client` or `service_account` |
+| `trappsec.credential.id` | string | That credential's ID, so it can be revoked. Never the secret. |
+| `trappsec.actor.type` | string | `user`, `service`, `integration` or `agent` |
+| `trappsec.actor.id` | string | When someone or something acts as `user.id` (impersonation, support access, an agent working for a person), the real actor |
+| `trappsec.flagged` | boolean | `true` once any finding fires during the request, so the backend keeps the whole trace |
+
+`client.address` must be the IP the app resolves through its trusted-proxy configuration. If the instrumentation reads a forwarding header the app doesn't trust, or records a proxy's address, report it and the setting that would fix it instead of changing proxy or infrastructure configuration yourself.
+
+### Log records
+
+- **One record per occurrence, emitted as an event.** The event name goes in the record's own event-name field, not an `event.name` attribute, and never contains dynamic values.
+- **A dedicated logger per family**, named like the app's other loggers: audit records from one (for example `<app>.audit`), findings from another (for example `<app>.security`). The backend routes by logger and event name, so the two never mix with each other or with ordinary logs.
+- **Inside the trace context of the request that caused it**, so the SDK stamps its trace and span IDs; under the app's existing resource (`service.name`, `service.version`, `deployment.environment.name`).
+- **The body is a short fixed display string**, such as "member role changed". Everything else goes in attributes.
+- **Severity:** audit records `INFO`; findings `WARN` when the caller is identified and `INFO` when anonymous.
 
 ### Intents
 
-Events that flag suspected abuse carry one of these in `security_rule.category`: `reconnaissance`, `privilege_escalation`, `account_takeover`, `cross_tenant_access`, `data_exfiltration`, `entitlement_abuse`, `payment_fraud`, `mass_assignment`, `defense_evasion`.
+Findings carry one of these in `security_rule.category`: `reconnaissance`, `privilege_escalation`, `account_takeover`, `cross_tenant_access`, `data_exfiltration`, `entitlement_abuse`, `payment_fraud`, `mass_assignment`, `defense_evasion`. If none fits, add one to the inventory rather than force a rule into the nearest.
 
 ### Values
 
 - Attacker-controlled strings are truncated to 1024 characters and arrays to 20 elements; objects become compact JSON text.
-- No secrets in any attribute (passwords, tokens, keys, session secrets), even when the caller submitted one. No document or message content.
-- IDs, kinds and intents that describe the rule or action come from server code, never from the request.
+- No secrets anywhere (passwords, tokens, keys, session secrets), even when the caller submitted one. No document or message content.
+- IDs, names of actions and rules, and intents come from server code, never from the request.
+- Listed values are a starting vocabulary. Anything specific to one action or rule goes in its params, declared in the registry or inventory.
 
 ### Emitting
 
 - Emitting never fails, blocks or changes a request: errors while recording are swallowed, and nothing waits on the network in the request path.
 - Its cost is constant and small, whatever the request contains.
-- Each skill keeps one inventory in server code of everything that emits, with stable IDs; events refer to those IDs.
+- Each skill keeps one inventory or registry in server code of everything that emits, with stable IDs; records refer to those IDs.
 
 ### Changing the schema
 
-Add attributes freely under `trappsec`. Renaming or removing one, or changing its meaning, raises `trappsec.schema.version`.
+The schema version is `"1"`: `trappsec.schema.version` on findings, `version` inside audit entries. Add attributes freely under `trappsec`. Renaming or removing one, or changing its meaning, raises the version.
 
-Some standard attributes used here are still in Development status in OpenTelemetry's semantic conventions (`user.*`, `session.id`, `security_rule.*`) and may be renamed. When one is, or when OpenTelemetry standardizes something defined here under `trappsec` (tenants, credentials, actors, audit events), move to the standard name and raise `trappsec.schema.version`.
+`user.*`, `session.id` and `security_rule.*` are still in Development status in OpenTelemetry's semantic conventions. If OpenTelemetry renames one, follow it and raise the version.
 <!-- END COMMON CORE -->
 
-## Audit events
+## Audit records
+
+An audit record is what customers see in an audit log, export to their own SIEM and hand to auditors as evidence, so it is complete on its own. It reads the same whether or not its trace was kept, however long traces are retained, and whether or not the action ran in a request at all.
 
 ### Names
 
-Event names are `trappsec.audit.<area>.<action>`, in lower snake case, in the product's own language: `trappsec.audit.project.member_role_changed`, `trappsec.audit.auth.sign_in`, `trappsec.audit.export.started`. One name per action, whatever path triggered it. Outcomes are attributes, never separate names.
+Event names are `trappsec.audit.<area>.<action>`, in lower snake case and the product's own language: `trappsec.audit.book.member_role_changed`, `trappsec.audit.auth.sign_in`, `trappsec.audit.export.started`. One name per action, whatever path triggered it. The outcome is part of the entry, never a separate name.
 
-Severity is `INFO`. Audit events are never sampled.
+### The entry
 
-### Attributes
+The record has two attributes: `trappsec.audit`, holding the whole entry as a map, and `log.record.uid`, set to the entry's `id`. Everything critical is inside the map. It repeats what the server span says about the caller on purpose: the entry is evidence and must stand without the span. One recording module fills both from the same values.
 
-| Attribute | Type | Value |
+| Key | Required | Value |
 |---|---|---|
-| `trappsec.audit.operation` | string | `create`, `read`, `update`, `delete`, `share`, `export`, `grant`, `revoke`, `authenticate` or `configure` |
-| `trappsec.audit.resource.type` | string | The kind of thing acted on, in the product's terms |
-| `trappsec.audit.resource.id` | string | Its ID |
-| `trappsec.audit.resource.name` | string | Its display name, when not sensitive |
-| `trappsec.audit.resource.owner.id` | string | Its owner, when that matters to the action |
-| `trappsec.audit.participant.ids` | string[] | Other users or groups affected, such as share recipients or the member whose role changed |
-| `trappsec.audit.participant.external` | boolean | Whether any participant is outside the tenant |
-| `trappsec.audit.change.<field>.old`, `trappsec.audit.change.<field>.new` | string | Before and after values of changed settings, roles and permissions |
-| `trappsec.audit.impact.count` | int | Items affected, read or exported |
-| `trappsec.audit.impact.bytes` | int | Bytes exported or downloaded |
-| `trappsec.audit.params.<name>` | any | Action-specific parameters from the registry |
-| `trappsec.audit.authz.permission` | string | The permission evaluated, for authorization decisions |
-| `trappsec.audit.authz.decision` | string | `allow` or `deny` |
-| `trappsec.audit.authz.reason` | string | The policy or rule that decided |
-| `trappsec.audit.agent.id` | string | For actions by an automated agent: the agent |
-| `trappsec.audit.agent.approved_by` | string | The person who approved the agent's action, if one did |
+| `id` | Always | A unique, sortable ID (a ULID), used to deduplicate and to page through the log |
+| `time` | Always | When it happened, UTC, ISO 8601 with milliseconds |
+| `version` | Always | `"1"` |
+| `action` | Always | The event name without `trappsec.audit.`, such as `book.member_role_changed` |
+| `operation` | Always | Starting vocabulary: `create`, `read`, `update`, `delete`, `share`, `export`, `grant`, `revoke`, `authenticate`, `configure`. Add a verb to the registry when none fits |
+| `outcome` | Always | `result` (`success`, `failure` or `denied`), and a machine-readable `reason` when it isn't a success |
+| `actor` | Always | Who actually did it: `type` (`user`, `service`, `integration`, `agent`), `id`, and `name` at the time |
+| `tenant` | Always | The organization or workspace: `id` and `name` |
+| `origin` | Always | `ip`, `user_agent`, `session_id`, and `credential` (`type`, `id`; never the secret). For a job or script: the service's credential, and the host or job ID instead of an IP |
+| `resource` | When it applies | The main object acted on: `type`, `id`, and `name` at the time |
+| `on_behalf_of` | When it applies | The account the action counted as, when that isn't the actor: the person an agent works for, the customer a support engineer impersonated. `id` and `name` |
+| `approved_by` | When it applies | The person who approved an agent's action: `id` and `name` |
+| `related` | When it applies | Other objects in the action, each with a `role`, `type`, `id` and `name`: a move's source and destination, a transfer's new owner |
+| `participants` | When it applies | People or groups affected, with `id` and `name`: share recipients, the member whose role changed |
+| `changes` | When it applies | Before and after values per field, `{ "<field>": { "old": …, "new": … } }`, in their own types, with arrays for sets such as permissions |
+| `impact` | When it applies | `count` of items affected, read or exported |
+| `authz` | When it applies | The `permission` evaluated, for authorization decisions |
+| `params` | When it applies | Anything specific to this action, declared in the registry: a sign-in's method and MFA, an export's format |
 
-For sign-ins, `user.id` is the account the attempt targeted, and a failed attempt still records `client.address`, `user_agent.original` and `error.type`.
+- **Names are as they were at the time**, so an entry still reads correctly after a rename or deletion.
+- **Sign-ins:** the actor is the account the attempt targeted, when it exists. A failed attempt still records its origin and the outcome's reason.
+- **Never sampled, written once.** The backend stores audit records exactly as received.
+- **No display sentence.** The UI that shows an entry builds "Priya changed Sam's role" from it, so it can be translated.
+
+A role change:
+
+```json
+{
+  "trappsec.audit": {
+    "id": "01JAB7Q3M2V8K4T0R6YHXN5C1D",
+    "time": "2026-10-20T08:55:12.204Z",
+    "version": "1",
+    "action": "book.member_role_changed",
+    "operation": "update",
+    "outcome": { "result": "success" },
+    "actor": { "type": "user", "id": "usr_07Lm", "name": "Priya Raman" },
+    "tenant": { "id": "firm_9kd2", "name": "Hartley & Co" },
+    "origin": {
+      "ip": "203.0.113.40",
+      "user_agent": "Mozilla/5.0 (Macintosh; …)",
+      "session_id": "sess_2b8e",
+      "credential": { "type": "session", "id": "sess_2b8e" }
+    },
+    "resource": { "type": "book", "id": "bk_8Hq2", "name": "Hartley & Co, FY2026" },
+    "participants": [{ "id": "usr_41xQ", "name": "Sam Okafor" }],
+    "changes": { "role": { "old": "senior_accountant", "new": "accountant" } }
+  },
+  "log.record.uid": "01JAB7Q3M2V8K4T0R6YHXN5C1D"
+}
+```

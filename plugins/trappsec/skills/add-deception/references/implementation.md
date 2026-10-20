@@ -60,7 +60,7 @@ A honey field is a parameter real clients never send, or always send with one kn
 
 ## 5. Recording hits
 
-One small server-side module records every hit, in the app's style and named like its other observability code. It emits the events in references/telemetry.md, which also covers the prerequisite and the attributes every event carries.
+One small server-side module records every hit, in the app's style and named like its other observability code. It sets the request context on the server span and emits findings, both as references/telemetry.md describes, along with the prerequisite.
 
 - **Never fails the request.** Any error while recording is swallowed, and the response is unchanged.
 - **Never blocks.** No network call on the request path; delivery to other systems goes through the app's existing telemetry or background work.
@@ -69,11 +69,11 @@ One small server-side module records every hit, in the app's style and named lik
 
 ## 6. Attribution
 
-An alert must let a responder find the account, revoke the credential and find the same request in other logs.
+A finding, joined to its request's context, must let a responder find the account, revoke the credential and follow the request's trace.
 
 - **Who comes from the app's authenticated state**, never from anything the caller sent: the user, their roles, their tenant, the session, token or key that authenticated them, and the real person behind the request when someone is acting as another user. Never record a secret.
 - **The client IP is the one the app resolves through its trusted-proxy configuration.** Never parse forwarding headers yourself, and never trust a value the caller could have written. If the app isn't configured for the proxies in front of it, alerts will carry a proxy's address: report that, and the setting that would fix it, instead of changing proxy or infrastructure configuration yourself.
-- **Correlation:** the event carries the request's trace context, and the app's own request ID if it has one.
+- **Where it goes:** who and from where are set once on the request's server span; the finding carries the rule's facts and the routing keys, and shares the span's trace and span IDs.
 - **Anonymous requests** are answered by the sibling's authentication before anything records. If the user wants them as low-severity signals, record them from the app's unauthenticated path for decoy routes only, without changing the response. Requests the framework rejects before authentication aren't recorded, the same as for the sibling.
 
 ## 7. Keeping decoys recognizable to the team

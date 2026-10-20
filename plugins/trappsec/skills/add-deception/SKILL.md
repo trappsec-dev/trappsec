@@ -9,7 +9,7 @@ license: MIT
 You are adding a detection layer to an application the user owns, written in the app's own code:
 - decoy routes are real routes in the app's own router, built from the same authentication, loaders, validation, serializers and error helpers as the routes beside them;
 - honey fields are checks inside real handlers;
-- every hit is recorded as one standard OpenTelemetry event that identifies the caller.
+- every hit is recorded as one standard OpenTelemetry finding, joined to the caller's identity on the request's server span.
 
 A decoy that runs the same code as its neighbors answers every probe the way they do: unknown IDs, bad bodies, expired tokens, other methods, headers and bytes all come from the app itself. The judgment calls are yours:
 - which decoys *this* app should have;
@@ -76,7 +76,7 @@ If you cannot write a plausible Think, the tripwire is not believable. If the Do
 
 ### 0. Check fit and ask what you can't infer
 
-- **OpenTelemetry logs are a prerequisite.** Check them first, as references/telemetry.md describes. If they aren't in place, stop and tell the user.
+- **OpenTelemetry traces and logs are a prerequisite.** Check them first, as references/telemetry.md describes, including how the app samples traces. If they aren't in place, stop and tell the user.
 - **Ownership.** Confirm this is the user's own application. Deception belongs only in systems you operate.
 - **Layout.** Find which service is the public API, where the frontend lives (same repo, another repo, none), and how each is built and run.
 - **Questions.** Ask in one batch, and only what the code cannot tell you:
@@ -159,7 +159,7 @@ Then list the files you will touch, your assumptions, and anything the user must
 The rules for each piece are in references/implementation.md, and the event every tripwire emits is in references/telemetry.md. Build them with the app's own idioms.
 
 **Backend.**
-- **Recording.** One small module records every hit as the standard event, through the app's OpenTelemetry setup or, without one, its logger. Recording never fails, slows or changes a request.
+- **Recording.** One small module sets the caller's identity on the server span and records every hit as the standard finding, through the app's OpenTelemetry setup. Recording never fails, slows or changes a request.
 - **Decoy routes.** Each is a real route beside its sibling that runs the sibling's chain, records right after authentication, and ends in the final denial. It writes, sends and calls out nothing.
 - **Inferred decoys.** A new method on an existing route, listed by the framework like any real method.
 - **Honey fields.** Checked after authentication and before the input is used. The endpoint behaves exactly as before, and the field can never reach the logic.
@@ -189,7 +189,7 @@ A tripwire you haven't fired is a tripwire you don't have. Commands and details:
 6. **Response parity.** `node ${CLAUDE_SKILL_DIR}/scripts/compare_responses.mjs` against the sibling: anonymous and with an expired token using `--identical`, and signed in as a normal user.
 7. **Frontend survival.** Build for production, then run `node ${CLAUDE_SKILL_DIR}/scripts/scan_bundle.mjs --dir <build-output> --lure <string> ...`. Every lure must survive the bundler, with nothing near it that reveals intent.
 8. **False positives.** For each lure, show that no real code path calls it and no real user can pass its gate. For each honey field, show exactly what the real UI sends. Run the e2e suite if there is one.
-9. **Attribution and schema.** For one hit per tripwire, the event matches references/telemetry.md and names the right user, tenant and credential, and its trace or request ID matches the app's own telemetry for that request. A request with a forged `X-Forwarded-For` header does not change the recorded IP, unless it came through a proxy the app trusts.
+9. **Attribution and schema.** For one hit per tripwire, the finding matches references/telemetry.md and shares its trace and span IDs with the request's server span, which names the right user, tenant and credential. A request with a forged `X-Forwarded-For` header does not change the recorded IP, unless it came through a proxy the app trusts.
 10. **Tripwire robustness.** Make recording fail in a test, and send an oversized or deeply nested body to every honey-field endpoint; responses and response times must not change.
 
 ### 6. Report
@@ -238,7 +238,7 @@ Propose fixes in the plan format, then extend. For a request about one specific 
 ## Reference files
 
 - **references/implementation.md**: rules for decoy routes, final denials, inferred decoys, honey fields, recording, attribution, inventory, public repositories, and a safety checklist.
-- **references/telemetry.md**: the OpenTelemetry prerequisite, the event schema shared with add-auditing and add-detection, and the deception events.
+- **references/telemetry.md**: the OpenTelemetry prerequisite, the request context and records shared with add-auditing and add-detection, and the deception findings.
 - **references/frontend-lures.md**: how attackers read frontends, lure patterns, build survival, false-positive hazards, tells, notes per framework.
 - **references/backend-traps.md**: cover stories, honey-field design and expected values, responses, breadcrumb chains, directions by domain, infrastructure gotchas.
 - **references/verification.md**: verification commands, the bundled scripts, the false-positive audit, the report template.

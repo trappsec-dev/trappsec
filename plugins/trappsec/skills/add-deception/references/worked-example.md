@@ -23,7 +23,7 @@ House-style dossier, from recon:
   - homegrown flags: `useFlag(name)` reads `session.flags`, which lists only enabled flags; unknown names return false;
   - the book settings form sends back the fetched book object with edits (`{...book, name}`).
 - **History:** per-account CSV exports shipped last year. An issue asks for "full ledger export per book".
-- **Telemetry:** the OpenTelemetry SDK is initialized in `server/src/telemetry`, exporting traces and logs over OTLP.
+- **Telemetry:** the OpenTelemetry SDK is initialized in `server/src/telemetry`, exporting traces and logs over OTLP, with HTTP server instrumentation and the default always-on sampler.
 - **Deployment:** behind an AWS load balancer; the app already sets `app.set('trust proxy', 1)`, so `req.ip` is the client. Requests carry an `X-Request-Id` the access log records.
 - **Source maps:** not deployed. **Repo:** private.
 
@@ -79,7 +79,7 @@ For accountants and viewers, the decoy's 403 says the owner role is required. Th
 
 ### Code
 
-A new `server/src/security/` module, next to the app's other telemetry code, records hits as the standard events through the app's existing OpenTelemetry logger. It provides route middleware for the decoy (`recordProbe`) and for the honey field (`checkField`), both keyed by inventory ID.
+A new `server/src/security/` module, next to the app's other telemetry code, does two things. Its `setRequestContext` middleware runs right after `requireSession` on every route and sets the caller's identity on the request's server span. Its route middleware records hits as findings through a dedicated `ledgerly.security` logger: `recordProbe` for the decoy and `checkField` for the honey field, both keyed by inventory ID.
 
 ```js
 // server/src/routes/books.js (existing router)
@@ -96,22 +96,36 @@ router.patch('/:bookId', requireSession,
   loadBook, requireRole('owner'), validate(bookSettingsSchema), updateBook);
 ```
 
-An accountant's PATCH with `"myRole": "owner"` produces this event (resource and trace context omitted):
+An accountant's PATCH with `"myRole": "owner"` gets the app's normal 403 and produces this finding (resource omitted):
 
 ```json
 {
   "eventName": "trappsec.deception.field_hit",
   "severityText": "WARN",
   "body": "honey field hit",
+  "traceId": "4bf92f3577b34da6a3ce929d0e0e4736",
+  "spanId": "00f067aa0ba902b7",
   "attributes": {
     "trappsec.schema.version": "1",
-    "security_rule.ruleset.name": "deception",
+    "trappsec.tenant.id": "firm_9kd2",
+    "user.id": "usr_41xQ",
     "security_rule.name": "books.my-role",
     "security_rule.category": "privilege_escalation",
-    "trappsec.deception.kind": "honey_field",
-    "trappsec.deception.field.name": "myRole",
-    "trappsec.deception.field.location": "body",
-    "trappsec.deception.field.value": "owner",
+    "trappsec.finding.field.name": "myRole",
+    "trappsec.finding.field.value": "owner",
+    "trappsec.finding.resource.type": "book",
+    "trappsec.finding.resource.id": "bk_8Hq2"
+  }
+}
+```
+
+Who and from where are on the server span with the same trace and span IDs, which the backend joins to the finding:
+
+```json
+{
+  "kind": "SERVER",
+  "name": "PATCH /api/v3/books/:bookId",
+  "attributes": {
     "http.request.method": "PATCH",
     "http.route": "/api/v3/books/:bookId",
     "url.path": "/api/v3/books/bk_8Hq2",
@@ -119,15 +133,14 @@ An accountant's PATCH with `"myRole": "owner"` produces this event (resource and
     "client.address": "198.51.100.23",
     "user_agent.original": "Mozilla/5.0 ...",
     "user.id": "usr_41xQ",
+    "user.name": "sam.okafor",
     "user.roles": ["accountant"],
     "trappsec.tenant.id": "firm_9kd2",
-    "trappsec.actor.type": "user",
     "session.id": "sess_7d1c",
     "trappsec.credential.type": "session",
     "trappsec.credential.id": "sess_7d1c",
-    "trappsec.outcome": "denied",
-    "error.type": "forbidden",
-    "trappsec.request.id": "req_5b2e"
+    "trappsec.actor.type": "user",
+    "trappsec.flagged": true
   }
 }
 ```
@@ -172,7 +185,7 @@ const createLedgerExport = useMutation({ mutationFn: (format: ExportFormat) => e
   - An unrelated unknown field is ignored exactly like `myRole`.
 - **Inert.** A test hits the decoy as each role and asserts no export job, no file and no change to the book.
 - **Robust.** A test makes the security logger throw; every response is unchanged.
-- **Attribution and schema.** Each event matches the alert schema and names the user, their role in that book, the firm and the session ID, with the same trace and request ID as the app's own telemetry. A forged `X-Forwarded-For` didn't change the recorded IP.
+- **Attribution and schema.** Each finding matches references/telemetry.md and shares its trace and span IDs with the request's server span, which names the user, their role in that book, the firm, the session and the credential. A forged `X-Forwarded-For` didn't change the recorded IP.
 - **Parity.** `compare_responses.mjs` against `close-periods` reported no differences: anonymous and with an expired cookie (`--identical`), and as a viewer.
 - **Elimination.** As a self-serve owner, every other book endpoint can be made to work. `ledger-exports` can't, but it is gated by the same owner check testers see failing on `close-periods`, and it sits behind a client flag like the app's other unreleased features.
 - **Survival.** `scan_bundle.mjs --dir dist --lure /ledger-exports --lure ledgerExportsBeta`: both found, no findings.

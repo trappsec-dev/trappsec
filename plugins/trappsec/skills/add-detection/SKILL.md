@@ -1,6 +1,6 @@
 ---
 name: add-detection
-description: Turn an application's existing validation and authorization into high-signal detections of someone probing its business logic. Finds the checks that reject inputs and states the app's real clients can never produce (values the UI never offers, client-sent totals that disagree with the server, workflow steps out of order, another tenant's IDs, replayed one-time tokens) and makes each one emit an identity-attributed OpenTelemetry event, without changing any response. Use this whenever the user wants to detect tampering, impossible states, business-logic abuse, mass assignment or IDOR attempts in their own app, or wants security alerts from existing validation. Not for adding new validation, fixing vulnerabilities, rate limiting, WAF rules or audit logging.
+description: Turn an application's existing validation and authorization into high-signal detections of someone probing its business logic. Finds the checks that reject inputs and states the app's real clients can never produce (values the UI never offers, client-sent totals that disagree with the server, workflow steps out of order, another tenant's IDs, replayed one-time tokens) and makes each one emit an OpenTelemetry finding tied to the caller's identity, without changing any response. Use this whenever the user wants to detect tampering, impossible states, business-logic abuse, mass assignment or IDOR attempts in their own app, or wants security alerts from existing validation. Not for adding new validation, fixing vulnerabilities, rate limiting, WAF rules or audit logging.
 license: MIT
 ---
 
@@ -20,7 +20,7 @@ The judgment calls are yours:
 | Impossible | No real client can produce the input: not the current UI, not an older version still in use, not a retry, a race or a double click. A detection a real user can trigger is a bug. |
 | Existing | It instruments a check the app already makes. The app's response and behavior stay exactly as they were. |
 | Silent | Nothing in any response reveals that the check now reports. |
-| Attributed | The event names the account, credential, tenant and client, and links to the request's trace. |
+| Attributed | The finding shares its trace with the request's server span, which names the account, credential, tenant and client. |
 | Meaningful | It points at an intent worth acting on: privilege, money, other tenants' data, workflow integrity. |
 | Proven | You have triggered it, and shown that the real client's flows never do. |
 
@@ -43,7 +43,7 @@ If you find an impossible state the app *doesn't* reject, that's a vulnerability
 
 ### 0. Prerequisites and questions
 
-- **OpenTelemetry logs are a prerequisite.** Check them first, as references/telemetry.md describes. If they aren't in place, stop and tell the user.
+- **OpenTelemetry traces and logs are a prerequisite.** Check them first, as references/telemetry.md describes, including how the app samples traces. If they aren't in place, stop and tell the user.
 - **Ownership.** Confirm this is the user's own application.
 - **Questions.** Ask in one batch, only what the code cannot tell you:
   1. Which clients call the API besides the web UI in this repo: mobile apps and their oldest supported versions, partner integrations, scripts, SDKs?
@@ -77,17 +77,17 @@ Unless the user already told you to go ahead, show the plan and wait:
 - **Record in the branch that already rejects**, after authentication, with the app's own idioms. The response, status, timing class and side effects stay exactly as they were.
 - **Never add a new rejection, and never change what the app accepts.**
 - **Evaluate only what the check already evaluates.** Recording adds constant, small work and never walks attacker-supplied structures.
-- **One recording module** emits the event in references/telemetry.md. Recording never fails, blocks or changes a request.
+- **One recording module** sets the caller's identity on the server span and emits the finding in references/telemetry.md. Recording never fails, blocks or changes a request.
 - **Every rule has a stable ID, a marker in server code naming it, and an entry in one server-side inventory** with its condition, its evidence and its intent.
 
 ### 5. Verify
 
 1. **Project checks.** Lint, type checks and the app's existing tests pass.
-2. **Each rule fires.** Send the impossible input as a normal user. The event matches references/telemetry.md, names the right user, tenant and credential, and carries the request's trace context.
+2. **Each rule fires.** Send the impossible input as a normal user. The finding matches references/telemetry.md and shares its trace and span IDs with the request's server span, which names the right user, tenant and credential and has `trappsec.flagged` set.
 3. **Behavior unchanged.** The response to the impossible input is identical to the response before your change: status, headers and body. No data changed that didn't change before.
-4. **Real flows stay silent.** Replay every real client flow through the endpoints you touched, including the edge cases (retries, stale tabs, concurrent edits). Not one event.
+4. **Real flows stay silent.** Replay every real client flow through the endpoints you touched, including the edge cases (retries, stale tabs, concurrent edits). Not one finding.
 5. **Robustness.** Make recording fail in a test; responses don't change.
-6. **Tests.** One test per rule that fires it and asserts the event and the unchanged response, plus one that replays the real flows and asserts no events.
+6. **Tests.** One test per rule that fires it and asserts the finding and the unchanged response, plus one that replays the real flows and asserts no findings.
 
 ### 6. Report
 
@@ -111,4 +111,4 @@ Every rule is real product code, and someone will eventually refactor the check 
 
 ## Reference files
 
-- **references/telemetry.md**: the OpenTelemetry prerequisite, the event schema shared with add-auditing and add-deception, and the detection event.
+- **references/telemetry.md**: the OpenTelemetry prerequisite, the request context and records shared with add-auditing and add-deception, and the detection finding.

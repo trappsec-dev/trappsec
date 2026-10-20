@@ -39,11 +39,11 @@ trappsec can integrate directly into your existing workflows. Events are written
 
 ### Let Your Coding Agent Do It
 
-Three agent skills turn your coding agent into a security engineer for your own app. Each writes its changes in your app's own code, adds no dependency, works on any stack, and reports through **OpenTelemetry**, which the app must already have set up with logs. All three share one event schema, so their events line up in your SIEM.
+Three agent skills turn your coding agent into a security engineer for your own app. Each writes its changes in your app's own code, adds no dependency, works on any stack, and reports through **OpenTelemetry**, which the app must already have set up with traces and logs. All three share one schema: the caller's identity is set once on each request's server span, findings from deception and detection carry only the rule's facts and join to it, and audit records are complete on their own.
 
 * **`add-deception`** designs honey fields and decoy routes that match your API's conventions, built from the same authentication, loaders and validation as the routes beside them, plus frontend lures that look like your team wrote them. It verifies that every tripwire fires and that no real user can ever trigger one.
 * **`add-detection`** turns validation your app already does into detections: it finds the checks that reject inputs and states no real client can produce (values the UI never offers, totals that disagree with the server, steps out of order, another tenant's IDs) and makes each one report who tried, without changing any response.
-* **`add-auditing`** records what users do in your product, from everyday edits to its core objects to security-relevant actions (sign-ins, role changes, sharing, exports, API keys, settings), as domain events with actor, credential, resource and outcome.
+* **`add-auditing`** records what users do in your product, from everyday edits to its core objects to security-relevant actions (sign-ins, role changes, sharing, exports, API keys, settings), as self-contained audit records with actor, on whose behalf, tenant, origin, resource, changes and outcome.
 
 **Claude Code:**
 
