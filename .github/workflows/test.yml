@@ -29,6 +29,8 @@ jobs:
       - name: Node syntax check
         run: |
           find packages/node/src -name '*.js' -print0 | xargs -0 -n1 node --check
+      - name: Skills share one telemetry core
+        run: node tests/skills/check_telemetry_core.mjs
 
   python:
     name: Python ${{ matrix.python-version }}

@@ -1,63 +1,67 @@
 # Verification
 
-A tripwire you haven't fired is a tripwire you don't have. A lure the bundler dropped doesn't exist.
+A tripwire you haven't fired is a tripwire you don't have. A lure the bundler dropped doesn't exist. A decoy that changed data isn't a decoy.
 
 Contents
-1. Fire every trap
+1. Fire every decoy, probed like its sibling
 2. Exercise every honey field
 3. Response parity
 4. Frontend survival and tells
-5. False-positive audit
-6. Report template
+5. Inert, and real routes unchanged
+6. Attribution
+7. False-positive audit
+8. Report template
 
-## 1. Fire every trap
+## 1. Fire every decoy, probed like its sibling
 
-Start the app the way its developers run it locally, with logging that shows the `trappsec` logger. Then, for each trap:
+Start the app the way its developers run it locally, so you can see the events it records. Get credentials through the app's real login flow or its test fixtures for at least: a normal user, and the owner of their own workspace (or whatever the most privileged self-service role is).
 
-**Anonymous:**
+For each decoy, send every probe below to the decoy and to its sibling, and compare:
+
+| Probe | Expect |
+|---|---|
+| Anonymous | Identical responses (the sibling's authentication answers both). No event, or an `INFO` event if you record anonymous hits. |
+| Expired token, malformed token | Identical responses. |
+| Normal user | Identical responses where the sibling denies; a `WARN` event with the right user, roles and intent. |
+| Owner of their own workspace | The decoy's final denial where the sibling succeeds; a `WARN` event. The denial must make sense for an owner. |
+| Unknown, foreign and malformed IDs | Identical responses (the sibling's loader answers both); a `WARN` event. |
+| Malformed JSON, empty body, wrong content type, a body missing required fields | Identical status and shape, in the same order relative to authentication. |
+| Other methods, HEAD, OPTIONS, a CORS preflight | Identical, including `Allow`. |
+| Trailing slash, different case, `Accept: text/html` | Identical. |
+
 ```bash
-curl -s -i -X POST "http://localhost:$PORT/<trap-path>" -H 'Content-Type: application/json' -d '{}'
+curl -s -i -X POST "http://localhost:$PORT/<decoy-path>" -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' -d '{"<field>":"<value>"}'
 ```
-Expect the real anonymous response, plus a `trappsec.trap_hit` event with `"type": "signal"` in the log.
 
-**Signed in as a normal user** (get a cookie or token through the app's real login flow or its test fixtures):
-```bash
-curl -s -i -X POST "http://localhost:$PORT/<trap-path>" -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' -d '{}'
-```
-Expect the designed response, plus a `trap_hit` with `"type": "alert"` and the expected `user`, `role` and `intent`.
+Any difference other than the final denial and field names in validation messages is a tell. Fix the chain, not the response.
 
-If the signed-in call gets the anonymous response, `identify_user` can't see the user on trap routes. Fix that before anything else (trappsec-api.md §2).
-
-Then poke each trap the way a skeptic would: `OPTIONS`, `HEAD`, wrong method, empty body, garbage body, another ID, trailing slash, different case. Compare with a real sibling. Any difference should be one a real endpoint could plausibly have.
-
-If the project has integration tests, add tests that fire each trap and honey field and assert on both the response and the event, so a future refactor can't silently break them. Follow the project's test conventions. trappsec bootstraps on the first request, so test clients work.
+If the project has tests, add one per decoy that fires it as a normal user and as an owner and asserts the response, the recorded event, and that no data changed. Follow the project's test conventions.
 
 ## 2. Exercise every honey field
 
-For each watched field:
-1. **Normal use.** Perform the real UI action, or replay the exact request the frontend sends. Expect no `watch_hit` and unchanged behavior.
-2. **Explicit default.** Send the default value explicitly. Expect no event.
-3. **Tampering.** Send a tampered value. Expect a `watch_hit` alert naming the field, value and intent. The handler must behave as if the field were absent (the role didn't change, the price wasn't used).
-4. **Repetition.** For query honey fields, also send the parameter twice (`?x=a&x=b`).
+For each honey field:
+1. **Normal use.** Perform the real UI action, or replay the exact request the frontend sends. Expect no event and unchanged behavior.
+2. **Explicit expected value.** Send the expected value explicitly. Expect no event.
+3. **Tampering.** Send a tampered value. Expect a `trappsec.deception.field_hit` finding naming the field, value and intent. The handler must behave as if the field were absent (the role didn't change, the price wasn't used).
+4. **Repetition and types.** For query fields, send the parameter twice (`?x=a&x=b`). For JSON fields, try the value as a string and as its typed form (`"true"` and `true`).
+5. **Unknown-field behavior.** Send an unrelated unknown field the same way. The endpoint must treat it exactly as it treats the honey field (both ignored, or both rejected).
 
 ## 3. Response parity
 
-`scripts/compare_responses.mjs` sends the same request to a real endpoint and to a decoy. It reports differences in status, content type, header names and JSON shape, plus median latency. It needs only Node 18+.
+`scripts/compare_responses.mjs` sends the same request to a real endpoint and to a decoy over raw HTTP, so header names keep the case and order the server wrote. It reports differences in the status line, header presence, case, order and values, body bytes, JSON key order and values, stability across repeated requests, and median latency with the requests interleaved. Only the values of per-request headers (date, request IDs, ETag, content length) are ignored; their presence is still compared. It needs only Node 18+.
 
 ```bash
 node ${CLAUDE_SKILL_DIR}/scripts/compare_responses.mjs \
-  --real "http://localhost:3000/api/v2/<real-protected-path>" \
-  --trap "http://localhost:3000/api/v2/<trap-path>" \
-  [--method POST] [--data '{"a":1}'] [-H 'Authorization: Bearer ...'] [--runs 5] [--json]
+  --real "http://localhost:3000/api/v2/<sibling-path>" \
+  --decoy "http://localhost:3000/api/v2/<decoy-path>" \
+  [--method POST] [--data '{"a":1}'] [-H 'Authorization: Bearer ...'] [--identical] [--runs 5] [--json]
 ```
 
-Run it at least twice per trap:
-- **Anonymous:** expect identical status and body.
-- **Signed in:** against a real sibling that denies a normal user; expect the same shape.
+Run it for every probe in §1 where the decoy and its sibling must agree, at least:
+- anonymous and with an expired token, with `--identical`: the bodies must be byte-identical;
+- signed in as a normal user, where the sibling denies too.
 
-Volatile headers (date, request IDs, ETag, content length) are ignored. Investigate every other difference. Headers that only per-handler code sets are a known trappsec limitation; record them as residual risks.
-
-The exit code is 0 when status, content type and body shape match, and 1 otherwise.
+Values that differ are listed separately; they're expected only where the decoy's final denial or validation names its own feature. The exit code is 0 when nothing differs.
 
 ## 4. Frontend survival and tells
 
@@ -71,57 +75,66 @@ node ${CLAUDE_SKILL_DIR}/scripts/scan_bundle.mjs --dir dist \
 Pass every distinctive string a lure depends on: the decoy path (or its static prefix, if it's built from template literals), the flag name, the gated component's name. Then read the result:
 
 - **Found.** Every lure must appear in the shipped files. MISSING means it was tree-shaken, dead-code-eliminated, or lives in a server-only module.
-- **HIGH findings.** A revealing word near a lure, or trappsec mentioned anywhere in client files. Fix them. LOW findings (the same words far from any lure, often inside libraries such as focus-trap) are counted but usually harmless.
-- **Source maps.** If maps are present, the report shows each lure's original source file and any comments next to it, as an attacker holding the maps would see them.
+- **HIGH findings.** A revealing word near a lure. Fix them. LOW findings (the same words far from any lure, often inside libraries such as focus-trap) are counted but usually harmless.
+- **Source maps.** If maps are present, the report shows each lure's original source file and any comments next to it, as an attacker holding the maps would see them. Read those comments yourself: the scanner only matches single words.
 
-For server-rendered apps, scan what browsers receive, not the raw templates. Template comments (`{# #}`, `{% comment %}`, `<%# %>`) never ship, while server-side role checks decide who sees what. So save the rendered pages as each kind of user (anonymous, customer, staff...) into a directory, then scan it together with the static assets:
+For server-rendered apps, scan what browsers receive, not the raw templates. Save the rendered pages as each kind of user (anonymous, customer, staff...) into a directory, then scan it together with the static assets.
 
-```bash
-mkdir -p /tmp/rendered
-curl -s -b "$COOKIE" "http://localhost:$PORT/checkout" > /tmp/rendered/customer_checkout.html
-# ...one file per page and user type...
-node ${CLAUDE_SKILL_DIR}/scripts/scan_bundle.mjs --dir /tmp/rendered --dir static --lure '<string>'
-```
+If the gate can be satisfied locally (flipping the flag in devtools, a local-only role), also exercise the gated UI by hand and confirm the decoy records from the browser.
 
-If the gate can be satisfied locally (flipping the flag in devtools, a local-only role), also exercise the gated UI by hand and confirm the decoy fires from the browser.
+## 5. Inert, and real routes unchanged
 
-## 5. False-positive audit
+- **No state change.** Snapshot the data the decoy's sibling would change (or the whole store, in a test), hit every decoy as every role with valid bodies, and show the snapshot is unchanged.
+- **Real routes unchanged.** Run the app's existing test suites. For every real route on a path a decoy shares (inferred decoys), replay the real UI's requests and compare with the responses before your change.
+- **Recording never breaks a request.** Make recording fail and fire each decoy and honey field: responses must be unchanged.
+
+## 6. Attribution
+
+For one hit per tripwire, check the finding and the request's server span against what you know about the request:
+- the finding matches telemetry.md and carries the same trace and span IDs as the server span, and the span has `trappsec.flagged` set;
+- on the span, `user.id`, `user.roles`, `trappsec.tenant.id` and `trappsec.credential.id` name the account and the session, token or API key you used; nothing in either record is the credential's secret;
+- if the app supports acting as another user, an impersonated hit records both the acting admin and the user;
+- `client.address` on the span is your client address. Send the same request with a forged `X-Forwarded-For: 203.0.113.9`: the recorded IP must not change unless the request really came through a proxy the app trusts. If you can run the app behind its real proxy setup (docker compose, a local ingress), check that the recorded IP is the client's, not the proxy's.
+
+## 7. False-positive audit
 
 **For every lure:**
 - List every call site of the lure method or component. Each one must sit behind the gate.
 - Show why the gate can never pass for a real user: role-assignment code, flag definition, database enum.
 - Walk the hazard list in frontend-lures.md §5: links, prefetch, effects, loaders, retries, nav arrays, crawlers, tests.
 
+**For every decoy route:** show that no real client calls it: search the frontend, mobile apps, SDKs, scripts, partner integrations, e2e tests and monitoring.
+
 **For every honey field:**
-- Show the code that builds the real write payload, and what it sends for this field: nothing, or the default.
+- Show the code that builds the real write payload, and what it sends for this field: nothing, or the expected value.
 - Check other clients of the endpoint: mobile apps, partner integrations, scripts, e2e tests.
 
 Run the project's test suites (unit, integration, e2e). Tests that snapshot API responses need updating for bait fields. Update them; don't delete them.
 
-## 6. Report template
+## 8. Report template
 
 ```markdown
 ## Deception added
 <one paragraph: the threat narrative and what was added>
 
-| # | Tripwire | Kind | Cover story | Lure location(s) | See → Think → Do | Response (anon / authed) | Intent |
+| # | Tripwire | Kind | Cover story | Lure location(s) | See → Think → Do | Chain copied / final denial | Intent |
 |---|---|---|---|---|---|---|---|
 
 ### Fire each tripwire
-<curl commands, anonymous and signed in, with the expected event>
+<curl commands, as a normal user and as an owner, with the expected response and event>
 
 ### Alerts
-<where events go, alert vs. signal, how to change it>
+<where events go, which severities page someone, what each event identifies (user, tenant, credential, IP, trace or request ID), how the client IP is resolved behind the app's proxies, and how to change any of it>
 
 ### Verification results
-<what you ran and what came out, including summaries of scan_bundle and compare_responses>
+<what you ran and what came out: the probe comparison per decoy, compare_responses, scan_bundle, the inertness and robustness tests, the app's own tests>
 
 ### False-positive analysis
 <per tripwire: why legitimate traffic can't reach it>
 
 ### Assumptions and residual risks
-<e.g. private repo assumed; per-handler headers a trap can't reproduce; source maps are public>
+<e.g. private repo assumed; source maps are public>
 
 ### Maintenance
-<symbols the team must not delete or call, where the inventory lives, notes added to AGENTS.md/CODEOWNERS, when to revisit (API version bump, new roles, flag cleanups)>
+<the inventory location, markers, the tests that guard each tripwire, notes added to AGENTS.md/CODEOWNERS, when to revisit (API version bump, new roles, flag cleanups, changes to a sibling's chain)>
 ```
