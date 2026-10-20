@@ -100,8 +100,8 @@ An accountant's PATCH with `"myRole": "owner"` produces this event (resource and
 
 ```json
 {
-  "event.name": "trappsec.deception.field_hit",
-  "severity": "WARN",
+  "eventName": "trappsec.deception.field_hit",
+  "severityText": "WARN",
   "body": "honey field hit",
   "attributes": {
     "trappsec.schema.version": "1",

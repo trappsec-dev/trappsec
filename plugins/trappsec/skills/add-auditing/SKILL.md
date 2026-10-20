@@ -51,7 +51,7 @@ Leave out what isn't a user's action: page views, searches and ordinary reads of
 
 - **OpenTelemetry logs are a prerequisite.** Check them first, as references/telemetry.md describes. If they aren't in place, stop and tell the user.
 - **Ownership.** Confirm this is the user's own application.
-- **Existing audit logging.** Find any audit tables, activity feeds or audit-style logs. Extend or align with them rather than creating a parallel trail, and ask before replacing one.
+- **Existing audit logging.** Find any audit tables, activity feeds or audit-style logs. Leave their records, names and storage exactly as they are: customers, reports and compliance evidence may depend on them. Emit the `trappsec.audit.*` events alongside, from the same points in the code, and use the existing action names as the starting point for the registry. Replacing or migrating an existing trail is the user's decision, as a separate change.
 - **Questions.** Ask in one batch, only what the code cannot tell you:
   1. Who reads the trail: the security team, compliance, customers through an audit log API? Any regulation that dictates content or retention?
   2. What sits in front of the app in production (load balancer, CDN, ingress), if the repo doesn't say?

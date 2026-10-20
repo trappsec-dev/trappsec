@@ -15,11 +15,13 @@ If either is missing, stop. Tell the user what you found and that this skill nee
 
 ### Namespace
 
-Event names and attributes these skills define live under the fixed `trappsec` namespace, the same in every app and service and for all three skills, so one set of queries and detections works everywhere. Never invent attributes in OpenTelemetry's own namespaces.
+Event names and attributes these skills define live under the fixed `trappsec` namespace, the same in every app and service and for all three skills, so one schema serves every app. Never invent attributes in OpenTelemetry's own namespaces.
+
+`trappsec` appears only in attribute keys and event names. No attribute value, record body, rule or inventory ID, code identifier, comment or error message contains it: values show up in dashboards, tickets and searches, and code is read by teammates and sometimes by attackers. The recording code is named like the app's other observability code.
 
 ### The event
 
-- One log record per occurrence, emitted as an event: the event name identifies what happened.
+- One log record per occurrence, emitted as an event: the event name identifies what happened. Set it in the log record's own event name field, not as an `event.name` attribute, which is deprecated. Event names never contain dynamic values.
 - Emitted inside the trace context of the request that caused it.
 - Under the app's existing resource, which identifies at least `service.name`, `service.version` and `deployment.environment.name`.
 - The body is a short fixed description. Request data goes in attributes, never in the body.
@@ -69,6 +71,8 @@ Events that flag suspected abuse carry one of these in `security_rule.category`:
 ### Changing the schema
 
 Add attributes freely under `trappsec`. Renaming or removing one, or changing its meaning, raises `trappsec.schema.version`.
+
+Some standard attributes used here are still in Development status in OpenTelemetry's semantic conventions (`user.*`, `session.id`, `security_rule.*`) and may be renamed. When one is, or when OpenTelemetry standardizes something defined here under `trappsec` (tenants, credentials, actors, audit events), move to the standard name and raise `trappsec.schema.version`.
 <!-- END COMMON CORE -->
 
 ## Deception events
