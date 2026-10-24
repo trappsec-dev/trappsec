@@ -30,14 +30,15 @@ Look for these where validation or authorization already rejects them:
 
 - **Values the UI never offers:** an enum outside the options any version of the form showed; a disabled or hidden option; a role, status, plan or scope no screen lets a user pick.
 - **Values the server already knows:** a client-sent price, total, discount, owner, tenant or user ID that must equal the server's own value and doesn't, when the value can't have changed while the client held it. A price staff can edit while a cart is open doesn't qualify; client values that must agree with each other (line totals and the order total) still do.
-- **Objects the caller can't have seen:** an ID belonging to another tenant in a field the client always fills from its own data. IDs in URLs usually don't qualify: shared links, bookmarks and stale tabs carry them legitimately. Telling another tenant's object from one that was deleted may take one lookup of the rejected ID; that lookup is allowed.
+- **Objects the caller can't have seen:** an ID belonging to another tenant in a field the client always fills from its own data. IDs in URLs usually don't qualify: shared links, bookmarks and stale tabs carry them legitimately. Telling another tenant's object from one that was deleted may take one lookup of the rejected ID; that lookup is allowed. Where the app itself grants access across tenants or accounts (break-glass, sharing, support access), objects the caller was granted are excluded: check the links the app renders, not only its forms.
 - **Workflow steps out of order:** approving one's own request, refunding an unpaid order, shipping a cancelled one, skipping a required step, acting on a resource in a state the UI never offers the action for.
-- **Replays and forgeries:** a one-time token, coupon, invitation or nonce used again by another account, or by the same account after its first use completed (the same account repeating it within seconds is a retry); a signed or HMAC'd value that fails verification; an idempotency key reused with a different payload.
+- **Replays:** a one-time token or nonce used again after its first use completed, by an account that is neither the one that used it nor the one it was issued to. A token bound to no recipient (an emailed invitation link, a coupon code people forward) can be used by a different account legitimately: leave it alone. Revisiting an emailed link, or repeating a request within seconds, is never a replay.
+- **Forgeries:** a signed or HMAC'd value that fails verification; an idempotency key reused with a different payload.
 - **Limits the client enforces:** quantities, lengths or counts beyond what the UI allows, where the server also rejects them.
 
 Ordinary validation failures are not detections: typos, expired sessions, values a real user can type, concurrent edits, retries after timeouts, an option retired recently enough that open tabs still send it. Nor are refusals a real user can reach: a permission check after a role was revoked in an open tab, a link to a page the user can no longer use, a state another user's action just produced (shipping an order someone cancelled a moment ago). When a rejection is ambiguous, leave it alone.
 
-What a client can't produce depends on who writes the requests. A form only sends its options; a script against a public API, an SDK or an AI agent can send any value the API's schema allows. A condition qualifies only if none of the app's clients could produce it. For a client you can't read (a mobile build without source), keep to inputs the server already rejects: that client would already be failing on them.
+What a client can't produce depends on who writes the requests. A form only sends its options; a script against a public API, an SDK or an AI agent can send any value the API's schema allows. A condition qualifies only if none of the app's clients could produce it. The examples above qualify only where every client's code prevents them; check each. When some clients can't be read or can send anything (scripts holding API keys), scope the rule to the credential types whose clients you can read, and say so in the inventory. For a client you can't read (a mobile build without source), keep to inputs the server already rejects: that client would already be failing on them.
 
 If you find an impossible state the app *doesn't* reject, that's a vulnerability, not a detection. Report it to the user; don't fix it as part of this work unless they ask.
 
@@ -76,9 +77,9 @@ Unless the user already told you to go ahead, show the plan and wait:
 
 ### 4. Implement
 
-- **Record in the branch that already rejects**, after authentication, with the app's own idioms. The response, status, timing class and side effects stay exactly as they were. A rejection may not be an error status: a server-rendered form that redisplays with an error is one. Record on the specific error (an invalid choice), never on any validation error.
+- **Record in the branch that already rejects**, after authentication, with the app's own idioms. The response, status, timing class and side effects stay exactly as they were. A rejection may not be an error status: a server-rendered form that redisplays with an error is one. Record on the specific error (an invalid choice), never on any validation error. A validator that raises without an error code can be given one; that changes no response.
 - **Never add a new rejection, and never change what the app accepts.**
-- **Evaluate only what the check already evaluates**, plus the one lookup that tells another tenant's object from a deleted one where a rule needs it. Recording adds constant, small work and never walks attacker-supplied structures.
+- **Evaluate only what the check already evaluates**, values already in hand, and the one lookup that tells another tenant's object from a deleted one where a rule needs it. Recording adds constant, small work and never walks attacker-supplied structures.
 - **One recording module** sets the caller's identity on the server span and emits the finding in references/telemetry.md. Recording never fails, blocks or changes a request.
 - **Every rule has a stable ID, a marker in server code naming it at each site that records it, and an entry in one server-side inventory** with its condition, its evidence and its intent.
 
@@ -86,10 +87,11 @@ Unless the user already told you to go ahead, show the plan and wait:
 
 1. **Project checks.** Lint, type checks and the app's existing tests pass.
 2. **Each rule fires.** Send the impossible input as a normal user. The finding matches references/telemetry.md and shares its trace and span IDs with the request's server span, which names the right user, tenant and credential and has `trappsec.flagged` set. Send one with a forged `X-Forwarded-For` too: the span's `client.address` is still the IP the app resolves.
-3. **Behavior unchanged.** The response to the impossible input is identical to the response before your change: status, headers and body. Capture those responses before you edit anything. No data changed that didn't change before.
+3. **Behavior unchanged.** The response to the impossible input is identical to the response before your change: status, headers and body. Capture those responses before the first of these skills edits the code (or from the commit before it), and normalize what changes per response (`Date`, CSRF tokens) before comparing. No data changed that didn't change before.
 4. **Real flows stay silent.** Replay every real client flow through the endpoints you touched, including the edge cases (retries, stale tabs, concurrent edits). Not one finding.
-5. **Robustness.** Make your own recording module fail in a test (not the OpenTelemetry API, which the instrumentation shares); responses don't change.
-6. **Tests.** One test per rule that fires it and asserts the finding and the unchanged response, plus one that replays the real flows and asserts no findings.
+5. **Robustness.** Make your own recording module fail in a test, through one fault point it exposes for this (not the OpenTelemetry API, which the instrumentation shares); responses don't change.
+6. **Namespace.** Search the source for `trappsec`: it appears only in attribute keys, event names, and the tests and plans that cite them.
+7. **Tests.** One test per rule that fires it and asserts the finding and the unchanged response, plus one that replays the real flows and asserts no findings.
 
 ### 6. Report
 
