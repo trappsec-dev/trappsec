@@ -10,6 +10,16 @@ All notable changes to trappsec are documented here. The format follows [Keep a 
 - **`add-auditing`** records user activity on the product's core objects and security-relevant actions as audit records, emitted where the decision is made. Each record holds one complete entry (`trappsec.audit`) with its ID, time, action, outcome, actor, on whose behalf, tenant, origin, resource, related objects, participants and changes, so it stands on its own as evidence.
 - **OpenTelemetry traces and logs are a prerequisite** for all three skills; each stops if they aren't in place. The skills share one telemetry core, kept identical by a CI check: the fixed `trappsec` namespace (in keys and event names only), the caller's identity set once on each request's server span, separate loggers for audit records and findings, and value rules. Deception and detection share one finding shape (`security_rule.*` plus `trappsec.finding.*`) that the backend joins to the span by trace and span ID. Sampling is left to the backend, and spans that a finding touched are flagged so their traces are kept.
 
+### Changed: the skills, after field tests on four stacks
+
+The detection and auditing skills were applied to four apps (FastAPI, Express, Go `net/http`, Django) with their telemetry checked in a log store. The fixes:
+
+- **Findings join the right span.** A handler's current span is often a child, so identity, `trappsec.flagged` and findings went to the wrong span. The skills now say how to reach the server span and emit findings in its context.
+- **`client.address` can't be forged.** HTTP instrumentations take the first `X-Forwarded-For` entry; the request-context module now overwrites it with the IP the app resolves, and verification sends a forged header.
+- **Prerequisites that match real SDKs.** Emitting an event name usually needs the Logs API rather than a logging bridge, and is checked end to end; older attribute names or a missing `http.route` are reported, not a reason to stop; timestamps are set; short-lived processes flush.
+- **Audit entries for the cases that broke the schema:** unknown accounts on failed sign-ins, `denied` versus `failure`, jobs and admin tools (`host`, `job_id`), delegated and deferred actions, redacted fields, regulated names, required justifications, and `changes` only on success.
+- **Fewer false positives in detection:** a value that changed while the client held it (a price), refusals a real user can reach after a role change, states another user just produced, retries of one-time tokens, and API, SDK and AI-agent clients that can send any value the schema allows. Rejected candidates are kept in the plan, and a `workflow_tampering` intent is added.
+
 ### Changed: the `add-deception` skill writes deception into the app's own code
 
 - **No library needed.** The skill now builds decoy routes as real routes in the app's own router, copying the authentication, loaders, permission checks and validation of the route beside them, and adds honey-field checks inside real handlers. Every hit is recorded as one standard OpenTelemetry finding (`trappsec.deception.decoy_hit`, `trappsec.deception.field_hit`), using the telemetry core described above. It works on any stack.

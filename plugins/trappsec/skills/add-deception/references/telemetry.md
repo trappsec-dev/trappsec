@@ -8,11 +8,14 @@ What add-deception emits, and what it needs in place first. The common core is s
 These skills write to OpenTelemetry traces and logs together. Before designing anything, confirm the app already has:
 - an OpenTelemetry SDK initialized at startup, with a tracer provider and a logger provider, both exported (usually OTLP to a Collector);
 - HTTP server instrumentation, so every request has a server span carrying the request: `http.request.method`, `http.route`, `url.path`, `http.response.status_code`, `client.address`, `user_agent.original`;
-- log records emitted during a request carrying that request's trace and span IDs.
+- log records emitted during a request carrying that request's trace and span IDs;
+- a way to emit a log record with an event name through the OpenTelemetry Logs API. Logging-library bridges (Python `logging`, Go `slog`, pino) often can't set one; the recording module then calls the Logs API directly. Confirm it end to end: emit one record and find it, with its event name and trace ID, where the app's telemetry lands.
+
+Instrumentation that emits older attribute names (some need an opt-in, such as `OTEL_SEMCONV_STABILITY_OPT_IN=http` in Python) or leaves one out (Go's `otelhttp` with the standard `ServeMux` sets no `http.route`) is in place: report the gap and the setting or small fix that closes it, and carry on.
 
 If any of these is missing, stop. Tell the user what you found and that this skill needs OpenTelemetry traces and logs in place first. Don't set them up as part of this work; offer to do it as a separate change.
 
-Sampling belongs to the backend, not the app: every server span is exported, and the backend decides what to keep. If the app samples traces itself, findings from requests it drops can't be joined to their caller. Tell the user, and ask before changing the sampler. Audit records don't depend on it.
+Sampling belongs to the backend, not the app: every server span is exported, and the backend decides what to keep. If the app samples traces itself, findings from requests it drops can't be joined to their caller, and `trappsec.flagged` can't bring back a trace the app already dropped. Tell the user, and ask before changing the sampler (a parent-based, always-on sampler is the usual fix). Audit records don't depend on it.
 
 ## Common core
 
@@ -20,7 +23,7 @@ Sampling belongs to the backend, not the app: every server span is exported, and
 
 Event names and attributes these skills define live under the fixed `trappsec` namespace, the same in every app and service and for all three skills. Never invent attributes in OpenTelemetry's own namespaces.
 
-`trappsec` appears only in attribute keys and event names. No attribute value, record body, logger name, rule or inventory ID, code identifier, comment or error message contains it: values show up in dashboards, tickets and searches, and code is read by teammates and sometimes by attackers. The recording code is named like the app's other observability code.
+`trappsec` appears only in attribute keys and event names: the string literals that spell them, and tests that assert them, are the only places it is written. No attribute value, record body, logger name, rule or inventory ID, code identifier, comment or error message contains it: values show up in dashboards, tickets and searches, and code is read by teammates and sometimes by attackers. The recording code is named like the app's other observability code.
 
 ### Three kinds of record
 
@@ -36,14 +39,16 @@ The backend joins each finding to its request's context by trace and span ID. Au
 
 ### Request context
 
-Set once per request on the server span (the local root span the HTTP instrumentation creates), right after authentication, from the app's authenticated state and never from anything the caller sent. One small module does it for all three skills: if another of these skills already added it, reuse it.
+Set once per request on the server span (the local root span the HTTP instrumentation creates), right after authentication, from the app's authenticated state and never from anything the caller sent. On the endpoint that authenticates (sign-in, token exchange), set it once the sign-in succeeds. Omit an attribute whose value is unknown; never set an empty string. One small module does it for all three skills: if another of these skills already added it, reuse it.
+
+**Reaching the server span.** The current span in a handler is often a child (Express's request handler span, a database or framework span), not the server span. Capture the server span where it is known: a server request hook of the instrumentation, `getRPCMetadata(context.active()).span` in Node, or the authentication middleware keeping it in the request context before any child starts. Write the request context and `trappsec.flagged` to that span, and emit findings in its context, so they carry its span ID.
 
 | Span attribute | Type | Value |
 |---|---|---|
 | `user.id` | string | A stable ID for the account the request acted as; not an email |
 | `user.name` | string | That account's login, when the app has one |
 | `user.roles` | string[] | The roles that matter for authorization |
-| `trappsec.tenant.id` | string | The organization or workspace the request acted in |
+| `trappsec.tenant.id` | string | The organization or workspace the request acted in; in a single-tenant app, a fixed ID for the deployment |
 | `session.id` | string | The session, when there is one |
 | `trappsec.credential.type` | string | `session`, `token`, `api_key`, `oauth_client` or `service_account` |
 | `trappsec.credential.id` | string | That credential's ID, so it can be revoked. Never the secret. |
@@ -51,31 +56,34 @@ Set once per request on the server span (the local root span the HTTP instrument
 | `trappsec.actor.id` | string | When someone or something acts as `user.id` (impersonation, support access, an agent working for a person), the real actor |
 | `trappsec.flagged` | boolean | `true` once any finding fires during the request, so the backend keeps the whole trace |
 
-`client.address` must be the IP the app resolves through its trusted-proxy configuration. If the instrumentation reads a forwarding header the app doesn't trust, or records a proxy's address, report it and the setting that would fix it instead of changing proxy or infrastructure configuration yourself.
+`client.address` must be the IP the app resolves through its trusted-proxy configuration. Many HTTP instrumentations take the first `X-Forwarded-For` entry, which the caller controls, or the proxy's own address. When the server span's value differs from the app's resolved IP, the request-context module overwrites `client.address` with the app's value. If the app's own trusted-proxy setting is wrong, report it and the setting that would fix it instead of changing proxy or infrastructure configuration yourself.
 
 ### Log records
 
 - **One record per occurrence, emitted as an event.** The event name goes in the record's own event-name field, not an `event.name` attribute, and never contains dynamic values.
 - **A dedicated logger per family**, named like the app's other loggers: audit records from one (for example `<app>.audit`), findings from another (for example `<app>.security`). The backend routes by logger and event name, so the two never mix with each other or with ordinary logs.
-- **Inside the trace context of the request that caused it**, so the SDK stamps its trace and span IDs; under the app's existing resource (`service.name`, `service.version`, `deployment.environment.name`).
+- **Inside the trace context of the request that caused it**, so the SDK stamps its trace and span IDs; under the app's existing resource (`service.name`, `service.version`, `deployment.environment.name`). Work outside a request (a job, a queue consumer, a script) starts a span of its own and records inside it.
+- **With its timestamp set** when emitting; some SDKs leave it empty.
 - **The body is a short fixed display string**, such as "member role changed". Everything else goes in attributes.
 - **Severity:** audit records `INFO`; findings `WARN` when the caller is identified and `INFO` when anonymous.
 
 ### Intents
 
-Findings carry one of these in `security_rule.category`: `reconnaissance`, `privilege_escalation`, `account_takeover`, `cross_tenant_access`, `data_exfiltration`, `entitlement_abuse`, `payment_fraud`, `mass_assignment`, `defense_evasion`. If none fits, add one to the inventory rather than force a rule into the nearest.
+Findings carry one of these in `security_rule.category`: `reconnaissance`, `privilege_escalation`, `account_takeover`, `cross_tenant_access`, `data_exfiltration`, `entitlement_abuse`, `payment_fraud`, `mass_assignment`, `workflow_tampering`, `defense_evasion`. If none fits, add one to the inventory rather than force a rule into the nearest.
 
 ### Values
 
 - Attacker-controlled strings are truncated to 1024 characters and arrays to 20 elements; objects become compact JSON text.
-- No secrets anywhere (passwords, tokens, keys, session secrets), even when the caller submitted one. No document or message content.
-- IDs, names of actions and rules, and intents come from server code, never from the request.
+- No secrets anywhere (passwords, tokens, keys, session secrets), even when the caller submitted one. No document or message content. A secret in a URL path or query (a share link's token) reaches the server span through the instrumentation: report it.
+- Names of actions and rules, and intents, come from server code, never from the request. An ID the caller sent and the app rejected (another tenant's project, an object that doesn't exist) is recorded as what was sent, never as the actor or tenant.
+- Each record is built from fresh values. Some SDKs drop a whole map-valued attribute without an error when it holds the same object twice (OpenTelemetry JS reads that as a cycle).
 - Listed values are a starting vocabulary. Anything specific to one action or rule goes in its params, declared in the registry or inventory.
 
 ### Emitting
 
 - Emitting never fails, blocks or changes a request: errors while recording are swallowed, and nothing waits on the network in the request path.
 - Its cost is constant and small, whatever the request contains.
+- A short-lived process (a script, a CLI command) flushes or shuts down its logger provider before it exits, on every exit path, or its records are lost.
 - Each skill keeps one inventory or registry in server code of everything that emits, with stable IDs; records refer to those IDs.
 
 ### Changing the schema
@@ -104,7 +112,7 @@ A finding carries what only the rule knows, and the two keys the backend needs t
 
 When a finding fires, also set `trappsec.flagged` = `true` on the server span.
 
-**No server span to join to.** When a finding fires outside a traced request (a job, a queue consumer, a script) or the active span isn't recording, the finding carries the request-context attributes itself, and `client.address` and `user_agent.original` when it has them.
+**No server span to join to.** When a finding fires outside a traced request (a job, a queue consumer, a script) or the server span isn't recording, the finding carries the request-context attributes itself, and `client.address` and `user_agent.original` when it has them.
 <!-- END FINDINGS CORE -->
 
 ## Deception events

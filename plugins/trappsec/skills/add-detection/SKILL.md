@@ -29,13 +29,15 @@ The judgment calls are yours:
 Look for these where validation or authorization already rejects them:
 
 - **Values the UI never offers:** an enum outside the options any version of the form showed; a disabled or hidden option; a role, status, plan or scope no screen lets a user pick.
-- **Values the server already knows:** a client-sent price, total, discount, owner, tenant or user ID that must equal the server's own value and doesn't.
-- **Objects the caller can't have seen:** an ID belonging to another tenant in a field the client always fills from its own data. IDs in URLs usually don't qualify: shared links, bookmarks and stale tabs carry them legitimately.
+- **Values the server already knows:** a client-sent price, total, discount, owner, tenant or user ID that must equal the server's own value and doesn't, when the value can't have changed while the client held it. A price staff can edit while a cart is open doesn't qualify; client values that must agree with each other (line totals and the order total) still do.
+- **Objects the caller can't have seen:** an ID belonging to another tenant in a field the client always fills from its own data. IDs in URLs usually don't qualify: shared links, bookmarks and stale tabs carry them legitimately. Telling another tenant's object from one that was deleted may take one lookup of the rejected ID; that lookup is allowed.
 - **Workflow steps out of order:** approving one's own request, refunding an unpaid order, shipping a cancelled one, skipping a required step, acting on a resource in a state the UI never offers the action for.
-- **Replays and forgeries:** a one-time token, coupon, invitation or nonce used again; a signed or HMAC'd value that fails verification; an idempotency key reused with a different payload.
+- **Replays and forgeries:** a one-time token, coupon, invitation or nonce used again by another account, or by the same account after its first use completed (the same account repeating it within seconds is a retry); a signed or HMAC'd value that fails verification; an idempotency key reused with a different payload.
 - **Limits the client enforces:** quantities, lengths or counts beyond what the UI allows, where the server also rejects them.
 
-Ordinary validation failures are not detections: typos, expired sessions, values a real user can type, concurrent edits, retries after timeouts, an option retired recently enough that open tabs still send it. When a rejection is ambiguous, leave it alone.
+Ordinary validation failures are not detections: typos, expired sessions, values a real user can type, concurrent edits, retries after timeouts, an option retired recently enough that open tabs still send it. Nor are refusals a real user can reach: a permission check after a role was revoked in an open tab, a link to a page the user can no longer use, a state another user's action just produced (shipping an order someone cancelled a moment ago). When a rejection is ambiguous, leave it alone.
+
+What a client can't produce depends on who writes the requests. A form only sends its options; a script against a public API, an SDK or an AI agent can send any value the API's schema allows. A condition qualifies only if none of the app's clients could produce it. For a client you can't read (a mobile build without source), keep to inputs the server already rejects: that client would already be failing on them.
 
 If you find an impossible state the app *doesn't* reject, that's a vulnerability, not a detection. Report it to the user; don't fix it as part of this work unless they ask.
 
@@ -46,7 +48,7 @@ If you find an impossible state the app *doesn't* reject, that's a vulnerability
 - **OpenTelemetry traces and logs are a prerequisite.** Check them first, as references/telemetry.md describes, including how the app samples traces. If they aren't in place, stop and tell the user.
 - **Ownership.** Confirm this is the user's own application.
 - **Questions.** Ask in one batch, only what the code cannot tell you:
-  1. Which clients call the API besides the web UI in this repo: mobile apps and their oldest supported versions, partner integrations, scripts, SDKs?
+  1. Which clients call the API besides the web UI in this repo: mobile apps and their oldest supported versions, partner integrations, scripts, SDKs, AI agents?
   2. What sits in front of the app in production (load balancer, CDN, ingress), if the repo doesn't say?
 
 ### 1. Reconnaissance
@@ -63,7 +65,7 @@ For each candidate rejection, write down:
 - the intent (references/telemetry.md);
 - a stable rule ID.
 
-Keep only the ones whose evidence holds for every client. Prefer fewer, certain detections over many plausible ones.
+Keep only the ones whose evidence holds for every client. Prefer fewer, certain detections over many plausible ones. Keep the candidates you rejected, and why, in the plan: they show the user what was considered and stop the next agent from adding them back.
 
 ### 3. Present the plan
 
@@ -74,19 +76,19 @@ Unless the user already told you to go ahead, show the plan and wait:
 
 ### 4. Implement
 
-- **Record in the branch that already rejects**, after authentication, with the app's own idioms. The response, status, timing class and side effects stay exactly as they were.
+- **Record in the branch that already rejects**, after authentication, with the app's own idioms. The response, status, timing class and side effects stay exactly as they were. A rejection may not be an error status: a server-rendered form that redisplays with an error is one. Record on the specific error (an invalid choice), never on any validation error.
 - **Never add a new rejection, and never change what the app accepts.**
-- **Evaluate only what the check already evaluates.** Recording adds constant, small work and never walks attacker-supplied structures.
+- **Evaluate only what the check already evaluates**, plus the one lookup that tells another tenant's object from a deleted one where a rule needs it. Recording adds constant, small work and never walks attacker-supplied structures.
 - **One recording module** sets the caller's identity on the server span and emits the finding in references/telemetry.md. Recording never fails, blocks or changes a request.
-- **Every rule has a stable ID, a marker in server code naming it, and an entry in one server-side inventory** with its condition, its evidence and its intent.
+- **Every rule has a stable ID, a marker in server code naming it at each site that records it, and an entry in one server-side inventory** with its condition, its evidence and its intent.
 
 ### 5. Verify
 
 1. **Project checks.** Lint, type checks and the app's existing tests pass.
-2. **Each rule fires.** Send the impossible input as a normal user. The finding matches references/telemetry.md and shares its trace and span IDs with the request's server span, which names the right user, tenant and credential and has `trappsec.flagged` set.
-3. **Behavior unchanged.** The response to the impossible input is identical to the response before your change: status, headers and body. No data changed that didn't change before.
+2. **Each rule fires.** Send the impossible input as a normal user. The finding matches references/telemetry.md and shares its trace and span IDs with the request's server span, which names the right user, tenant and credential and has `trappsec.flagged` set. Send one with a forged `X-Forwarded-For` too: the span's `client.address` is still the IP the app resolves.
+3. **Behavior unchanged.** The response to the impossible input is identical to the response before your change: status, headers and body. Capture those responses before you edit anything. No data changed that didn't change before.
 4. **Real flows stay silent.** Replay every real client flow through the endpoints you touched, including the edge cases (retries, stale tabs, concurrent edits). Not one finding.
-5. **Robustness.** Make recording fail in a test; responses don't change.
+5. **Robustness.** Make your own recording module fail in a test (not the OpenTelemetry API, which the instrumentation shares); responses don't change.
 6. **Tests.** One test per rule that fires it and asserts the finding and the unchanged response, plus one that replays the real flows and asserts no findings.
 
 ### 6. Report
@@ -99,7 +101,7 @@ Unless the user already told you to go ahead, show the plan and wait:
 
 ## Keep the team in on it
 
-Every rule is real product code, and someone will eventually refactor the check it lives in. The inventory, the markers and the tests keep the detection alive. In a private repository, add a short note to the repo's agent instructions naming the rules and asking agents to keep them when they change the surrounding validation.
+Every rule is real product code, and someone will eventually refactor the check it lives in. The inventory, the markers and the tests keep the detection alive. In a private repository, add a short note to the repo's agent instructions (`AGENTS.md` or `CLAUDE.md`; create `AGENTS.md` if there are none) naming the rules and asking agents to keep them when they change the surrounding validation.
 
 ## Ground rules
 

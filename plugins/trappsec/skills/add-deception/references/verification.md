@@ -86,7 +86,7 @@ If the gate can be satisfied locally (flipping the flag in devtools, a local-onl
 
 - **No state change.** Snapshot the data the decoy's sibling would change (or the whole store, in a test), hit every decoy as every role with valid bodies, and show the snapshot is unchanged.
 - **Real routes unchanged.** Run the app's existing test suites. For every real route on a path a decoy shares (inferred decoys), replay the real UI's requests and compare with the responses before your change.
-- **Recording never breaks a request.** Make recording fail and fire each decoy and honey field: responses must be unchanged.
+- **Recording never breaks a request.** Make your own recording module fail (not the OpenTelemetry API, which the instrumentation shares) and fire each decoy and honey field: responses must be unchanged.
 
 ## 6. Attribution
 

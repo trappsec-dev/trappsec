@@ -43,7 +43,7 @@ Two kinds of activity, both as audit events in the same schema.
 
 Every allow or deny on a sensitive operation is itself worth recording: the permission evaluated, the decision and the reason.
 
-Leave out what isn't a user's action: page views, searches and ordinary reads of non-sensitive data, background housekeeping, and the app's own internal calls. Those belong in product analytics or traces. If the user wants them too, raise the volume and cost with them first.
+Leave out what isn't a user's action: page views, searches and ordinary reads of non-sensitive data, housekeeping that changes nothing a user would ask about (cache refreshes, cleanup of expired rows), and the app's own internal calls. A job that carries out an audited operation (settles orders, runs an approved deploy) is a path into it and emits. Those belong in product analytics or traces. If the user wants them too, raise the volume and cost with them first.
 
 ## Workflow
 
@@ -67,17 +67,20 @@ Leave out what isn't a user's action: page views, searches and ordinary reads of
 
 1. **The action registry.** For each audited action: its event name (references/telemetry.md), operation type, the resources and participants it records, the parameters and changes that matter, and which outcomes it can have. Keep it in one place in the codebase, versioned with it.
 2. **Sensitive data.** Decide per action what must never be recorded (secrets, content) and what personal data is truly needed.
-3. **Volume.** For bulk and high-volume operations, record one event per operation with a count, not one per item. Autosave and other rapid edits to the same object become one event per editing session or time window, with the fields that changed, if the app already has such a boundary; otherwise one per save.
+3. **Volume.** For bulk and high-volume operations, record one event per operation with a count, not one per item; a job that changes many objects in one run is one bulk operation. Anyone can send failed sign-ins and other unauthenticated failures at any rate: record them, and tell the user that their volume is the caller's choice. Autosave and other rapid edits to the same object become one event per editing session or time window, with the fields that changed, if the app already has such a boundary; otherwise one per save.
 
 ### 3. Present the plan
 
-Unless the user already told you to go ahead, show the registry and wait: actions, event names, where each is emitted, and what it records.
+Unless the user already told you to go ahead, show the registry and wait:
+
+| Action (event name) | Operation | Emitted at | Outcomes | Records | Never records |
+|---|---|---|---|---|---|
 
 ### 4. Implement
 
 - **Emit where the decision is made**, in the domain layer, through one small module that builds each complete audit entry from the registry and the request context. Middleware only knows the request, not what it meant.
 - **Set the request context on the server span** as references/telemetry.md describes, reusing it if add-deception or add-detection already added it. The audit entry still carries its own copy of who and from where.
-- **Success is recorded only once the operation has committed.** Denials and failures are recorded where they happen.
+- **Success is recorded only once the operation has committed** (an after-commit hook, or right after the transaction returns). Denials and failures are recorded where they happen. Some test frameworks never run after-commit hooks inside a test transaction (Django's `TestCase`); make the tests run them.
 - **Every path into an audited operation emits**, including background jobs and admin tools.
 - **Recording never fails, blocks or changes an operation.** If the trail must be guaranteed for an action (some compliance regimes require it), raise that with the user instead of deciding on your own.
 - **Nothing sensitive.** Secrets and content never enter an event.
@@ -88,8 +91,8 @@ Unless the user already told you to go ahead, show the registry and wait: action
 2. **Each action, each outcome.** For every action in the registry, trigger success, denial and failure where they exist. Each produces exactly one audit record that matches references/telemetry.md, with every required key, the right actor, credential, tenant, resource and outcome, and the request's trace and span IDs.
 3. **No false successes.** An operation that fails or rolls back after the decision records a failure or nothing, never a success.
 4. **Every path.** The same action through each entry point (UI, API, job, admin tool) emits the same audit entry.
-5. **Nothing leaks.** Search the emitted records from your test runs for secrets, tokens and content.
-6. **Robustness.** Make recording fail in a test; the operation still behaves exactly as before.
+5. **Nothing leaks.** Search the emitted records and the exported spans from your test runs for secrets, tokens and content.
+6. **Robustness.** Make your own recording module fail in a test (not the OpenTelemetry API, which the instrumentation shares); the operation still behaves exactly as before.
 7. **Tests.** One test per action and outcome, asserting the audit entry.
 
 ### 6. Report
