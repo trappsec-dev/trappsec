@@ -67,7 +67,7 @@ Use the app's casing and authorization model:
 
 Compute per-user expected values from the authenticated caller, never from other fields in the same body.
 
-**Stale but legitimate values.** A tab opened before a demotion still echoes the old role, and a tab from another account echoes that account's IDs. Accept values that are plausible for this caller, and record only impossible ones, such as a role nobody can hold through this endpoint, or a tenant the caller doesn't belong to. Write down any blind spot this creates.
+**Stale but legitimate values.** A tab opened before a demotion still echoes the old role, and a tab from another account echoes that account's IDs. Accept values that are plausible for this caller, and record only impossible ones, such as a role nobody can hold through this endpoint, or a tenant the caller doesn't belong to. Write down any blind spot this creates. An echoed field with a few possible values (a plan) has no impossible value, and recording any difference catches a form left open while it changed: prefer a field the client never sends.
 
 Don't change the client to avoid staleness, for example by re-fetching before each save. Real code that bends around a tripwire is a tell.
 

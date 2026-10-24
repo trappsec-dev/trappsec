@@ -187,9 +187,9 @@ A tripwire you haven't fired is a tripwire you don't have. Commands and details:
    - A tampered value produces an event.
    - The handler never sees the field.
 6. **Response parity.** `node ${CLAUDE_SKILL_DIR}/scripts/compare_responses.mjs` against the sibling: anonymous and with an expired token using `--identical`, and signed in as a normal user.
-7. **Frontend survival.** Build for production, then run `node ${CLAUDE_SKILL_DIR}/scripts/scan_bundle.mjs --dir <build-output> --lure <string> ...`. Every lure must survive the bundler, with nothing near it that reveals intent.
+7. **Frontend survival.** Build for production, then run `node ${CLAUDE_SKILL_DIR}/scripts/scan_bundle.mjs --dir <build-output> --lure <string> ...`. Every lure must survive the bundler, with nothing near it that reveals intent. Also search the HTML shell and anything served outside the build directory for the words the scan looks for.
 8. **False positives.** For each lure, show that no real code path calls it and no real user can pass its gate. For each honey field, show exactly what the real UI sends. Run the e2e suite if there is one.
-9. **Attribution and schema.** For one hit per tripwire, the finding matches references/telemetry.md and shares its trace and span IDs with the request's server span, which names the right user, tenant and credential. A request with a forged `X-Forwarded-For` header does not change the recorded IP, unless it came through a proxy the app trusts.
+9. **Attribution and schema.** For one hit per tripwire, the finding matches references/telemetry.md and shares its trace and span IDs with the request's server span, which names the right user, tenant and credential. For the recorded IP, check the recorded IP twice: a direct request with a forged `X-Forwarded-For` keeps the connection's address unless the app is told to trust a proxy, and through a stand-in proxy that appends the connecting address, the recorded IP is that address, not the forged entry. A direct request alone proves nothing.
 10. **Tripwire robustness.** Make your own recording module fail in a test (not the OpenTelemetry API, which the instrumentation shares), and send an oversized or deeply nested body to every honey-field endpoint; responses and response times must not change.
 
 ### 6. Report

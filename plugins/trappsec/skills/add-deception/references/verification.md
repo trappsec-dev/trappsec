@@ -26,7 +26,7 @@ For each decoy, send every probe below to the decoy and to its sibling, and comp
 | Owner of their own workspace | The decoy's final denial where the sibling succeeds; a `WARN` event. The denial must make sense for an owner. |
 | Unknown, foreign and malformed IDs | Identical responses (the sibling's loader answers both); a `WARN` event. |
 | Malformed JSON, empty body, wrong content type, a body missing required fields | Identical status and shape, in the same order relative to authentication. |
-| Other methods, HEAD, OPTIONS, a CORS preflight | Identical, including `Allow`. |
+| Other methods, HEAD, OPTIONS, a CORS preflight | A decoy method on an existing path: identical, including `Allow`. A decoy on a new path: the same answers its framework gives any route with that one method (`Allow` lists only it), which is why a decoy method on an existing path is preferred. |
 | Trailing slash, different case, `Accept: text/html` | Identical. |
 
 ```bash
@@ -54,8 +54,10 @@ For each honey field:
 node ${CLAUDE_SKILL_DIR}/scripts/compare_responses.mjs \
   --real "http://localhost:3000/api/v2/<sibling-path>" \
   --decoy "http://localhost:3000/api/v2/<decoy-path>" \
-  [--method POST] [--data '{"a":1}'] [-H 'Authorization: Bearer ...'] [--identical] [--runs 5] [--json]
+  [--method POST] [--decoy-method POST] [--data '{"a":1}'] [-H 'Authorization: Bearer ...'] [--identical] [--runs 5] [--json]
 ```
+
+`--decoy-method` sends a different method to the decoy than to the sibling, for a decoy whose sibling answers another verb.
 
 Run it for every probe in §1 where the decoy and its sibling must agree, at least:
 - anonymous and with an expired token, with `--identical`: the bodies must be byte-identical;
@@ -94,7 +96,7 @@ For one hit per tripwire, check the finding and the request's server span agains
 - the finding matches telemetry.md and carries the same trace and span IDs as the server span, and the span has `trappsec.flagged` set;
 - on the span, `user.id`, `user.roles`, `trappsec.tenant.id` and `trappsec.credential.id` name the account and the session, token or API key you used; nothing in either record is the credential's secret;
 - if the app supports acting as another user, an impersonated hit records both the acting admin and the user;
-- `client.address` on the span is your client address. Send the same request with a forged `X-Forwarded-For: 203.0.113.9`: the recorded IP must not change unless the request really came through a proxy the app trusts. If you can run the app behind its real proxy setup (docker compose, a local ingress), check that the recorded IP is the client's, not the proxy's.
+- `client.address` on the span is your client address. Check the recorded IP twice: a direct request with a forged `X-Forwarded-For` keeps the connection's address unless the app is told to trust a proxy, and through a stand-in proxy that appends the connecting address, the recorded IP is that address, not the forged entry. A direct request alone proves nothing.
 
 ## 7. False-positive audit
 
