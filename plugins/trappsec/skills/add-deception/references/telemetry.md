@@ -27,7 +27,7 @@ If any of these is missing, stop. Tell the user what you found and that this ski
 
 The names these skills define are the same in every app, so one query works across services:
 - audit records: event names `audit.<area>.<action>`, with the entry in one attribute, `audit`;
-- findings: event names `security.rule_hit`, `security.decoy_hit` and `security.field_hit`, with their details under `security.finding.*`, beside OpenTelemetry's `security_rule.*`;
+- findings: one event name, `security.finding`, with `security.finding.kind` saying which kind fired and the details under `security.finding.*`, beside OpenTelemetry's `security_rule.*`;
 - the request context on the server span: `tenant.id`, `credential.type`, `credential.id`, `actor.type`, `actor.id` and `security.flagged`, beside OpenTelemetry's `user.*`, `session.id` and `client.address`.
 
 Use OpenTelemetry's own attributes as they are, and never invent new ones in its namespaces. Before writing a name, search the app and its telemetry for it: if the app already emits `audit.*` events or sets one of these attributes with another meaning, stop and ask the user rather than mix two meanings under one name. Name the recording code like the app's other observability code.
@@ -128,11 +128,12 @@ The schema version is `"1"`: `security.schema.version` on findings, `version` in
 <!-- BEGIN FINDINGS CORE: identical in add-deception and add-detection -->
 ## Findings
 
-A finding carries what only the rule knows, and the two keys the backend needs to route and count it before joining it to the request context. Omit an attribute whose value is unknown.
+Every finding is emitted as the event `security.finding`. It carries what only the rule knows, and the two keys the backend needs to route and count it before joining it to the request context. Omit an attribute whose value is unknown.
 
 | Attribute | Type | Value |
 |---|---|---|
 | `security.schema.version` | string | `"1"` |
+| `security.finding.kind` | string | `rule` for a detection rule; `decoy_route` or `honey_field` for a deception tripwire |
 | `tenant.id` | string | Routing key: the tenant the request acted in |
 | `user.id` | string | Routing key: the account; absent when anonymous |
 | `security_rule.name` | string | The rule's stable ID from the inventory |
@@ -147,11 +148,11 @@ When a finding fires, also set `security.flagged` = `true` on the server span. O
 **No server span to join to.** When a finding fires outside a traced request (a job, a queue consumer, a script) or the server span isn't recording, the finding carries the request-context attributes itself, and `client.address` and `user_agent.original` when it has them.
 <!-- END FINDINGS CORE -->
 
-## Deception events
+## Deception findings
 
-| Event name | When | Finding attributes it uses |
+| `security.finding.kind` | When | Finding attributes it uses |
 |---|---|---|
-| `security.decoy_hit` | A decoy route was called | `security.finding.resource.*` when the path names an object |
-| `security.field_hit` | A honey field arrived with a value real clients never send | `security.finding.field.*`, and `security.finding.resource.*` for the object the request targeted |
+| `decoy_route` | A decoy route was called | `security.finding.resource.*` when the path names an object |
+| `honey_field` | A honey field arrived with a value real clients never send | `security.finding.field.*`, and `security.finding.resource.*` for the object the request targeted |
 
 `security_rule.name` is the tripwire's inventory ID and `security_rule.category` its intent.

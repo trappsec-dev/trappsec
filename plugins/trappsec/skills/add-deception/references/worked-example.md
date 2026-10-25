@@ -100,13 +100,14 @@ An accountant's PATCH with `"myRole": "owner"` gets the app's normal 403 and pro
 
 ```json
 {
-  "eventName": "security.field_hit",
+  "eventName": "security.finding",
   "severityText": "WARN",
-  "body": "honey field hit",
+  "body": "honey field sent",
   "traceId": "4bf92f3577b34da6a3ce929d0e0e4736",
   "spanId": "00f067aa0ba902b7",
   "attributes": {
     "security.schema.version": "1",
+    "security.finding.kind": "honey_field",
     "tenant.id": "firm_9kd2",
     "user.id": "usr_41xQ",
     "security_rule.name": "books.my-role",

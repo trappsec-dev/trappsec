@@ -27,7 +27,7 @@ If any of these is missing, stop. Tell the user what you found and that this ski
 
 The names these skills define are the same in every app, so one query works across services:
 - audit records: event names `audit.<area>.<action>`, with the entry in one attribute, `audit`;
-- findings: event names `security.rule_hit`, `security.decoy_hit` and `security.field_hit`, with their details under `security.finding.*`, beside OpenTelemetry's `security_rule.*`;
+- findings: one event name, `security.finding`, with `security.finding.kind` saying which kind fired and the details under `security.finding.*`, beside OpenTelemetry's `security_rule.*`;
 - the request context on the server span: `tenant.id`, `credential.type`, `credential.id`, `actor.type`, `actor.id` and `security.flagged`, beside OpenTelemetry's `user.*`, `session.id` and `client.address`.
 
 Use OpenTelemetry's own attributes as they are, and never invent new ones in its namespaces. Before writing a name, search the app and its telemetry for it: if the app already emits `audit.*` events or sets one of these attributes with another meaning, stop and ask the user rather than mix two meanings under one name. Name the recording code like the app's other observability code.
