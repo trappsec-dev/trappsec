@@ -130,7 +130,7 @@ A lure the bundler removes does not exist. Know what survives:
   - code behind runtime conditions (user role, flag value);
   - string literals. Minifiers rename variables, not URLs.
 - **Server components.** In Next.js and similar frameworks, server components and server actions never reach the browser. Lures must live in client components or client modules.
-- **Verify.** Build for production, then run `scripts/scan_bundle.mjs` with each lure string. Report any lure that is missing.
+- **Verify.** Build for production, then run `scripts/scan_bundle.mjs` with each lure string. Report any lure that is missing. For a decoy method on an existing path, the path matches real calls too: scan for a string only the lure has, such as its client method's name.
 
 ## 5. False-positive hazards
 

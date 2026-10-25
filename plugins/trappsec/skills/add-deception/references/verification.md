@@ -57,7 +57,7 @@ node ${CLAUDE_SKILL_DIR}/scripts/compare_responses.mjs \
   [--method POST] [--decoy-method POST] [--data '{"a":1}'] [-H 'Authorization: Bearer ...'] [--identical] [--runs 5] [--json]
 ```
 
-`--decoy-method` sends a different method to the decoy than to the sibling, for a decoy whose sibling answers another verb.
+`--decoy-method` sends a different method to the decoy than to the sibling, for a decoy whose sibling answers another verb. For the signed-in comparison, pick as the sibling a route that shares the decoy's gate and denies the same caller.
 
 Run it for every probe in §1 where the decoy and its sibling must agree, at least:
 - anonymous and with an expired token, with `--identical`: the bodies must be byte-identical;

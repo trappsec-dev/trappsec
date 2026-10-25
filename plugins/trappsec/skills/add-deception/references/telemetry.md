@@ -11,7 +11,7 @@ These skills write to OpenTelemetry traces and logs together. Before designing a
 - log records emitted in a request carrying its trace and span IDs (test with a record your own code emits; framework access lines are often written after the span ends);
 - a way to emit a log record with an event name through the Logs API (see Stack notes).
 
-Confirm it end to end: emit one record from a request and find it, with its event name and trace ID, where the app's telemetry lands, reading the SDK's own error output as you do.
+Confirm it end to end: emit one record from a throwaway probe request and find it, with its event name and trace ID, where the app's telemetry lands. Turn the SDK's own logging up while you do (`OTEL_LOG_LEVEL=debug`); most SDKs print nothing about a dropped record by default. On a function platform, probe with the process frozen after the response: a missing flush there is work this skill does (below), not a reason to stop.
 
 If any of these is missing, stop. Tell the user what you found and that this skill needs OpenTelemetry traces and logs first, and offer to set them up as a separate change, listing the gaps below in the same message.
 
@@ -43,7 +43,7 @@ The backend joins each finding to its request's context by trace and span ID. Au
 
 ### Request context
 
-One small module, shared by all three skills (reuse it, its inventory and its tests if another skill added it), writes the request context on the server span from the app's own state, never from anything the caller sent:
+One small module, shared by all three skills (reuse it and its tests if another skill added it; each skill keeps its own inventory or registry), writes the request context on the server span from the app's own state, never from anything the caller sent:
 - `client.address` and any missing request attribute as the request starts, so requests that fail authentication carry them too;
 - identity once authentication has succeeded: right after it, or in a response hook while the span is open, which leaves authentication code alone. The endpoint that signs someone in writes it on success; a refusal raised before authentication writes what it knows;
 - the tenant the server resolved (from the session, a token, a row it loaded, or an argument after its membership check), never one the caller merely named. A request acting in several keeps the first; each record carries its own.
@@ -66,12 +66,12 @@ Omit an attribute whose value is unknown; never write an empty string.
 | `trappsec.flagged` | boolean | `true` once any finding fires in the request, so the backend keeps the trace |
 
 **`client.address`** is the address that connected to the outermost proxy the app trusts, and the module writes it on every request, replacing the instrumentation's (many take the first `X-Forwarded-For` entry, which the caller controls):
-- the platform's field where it gives one (API Gateway's `requestContext.http.sourceIp`), never a forwarding header;
-- otherwise the framework's resolver (Rails `remote_ip`, Express `trust proxy`, Werkzeug `ProxyFix`, uvicorn `--forwarded-allow-ips`), reporting what it trusts by default;
+- the platform's field where the caller can't write it (API Gateway's `requestContext.http.sourceIp`), never a forwarding header. A CDN's client-IP header (`CF-Connecting-IP`) is a forwarding header like any other;
+- otherwise the framework's resolver (Rails `remote_ip`, Express `trust proxy`, Werkzeug `ProxyFix`, uvicorn `--forwarded-allow-ips`, Tomcat's `RemoteIpValve`), reporting what it trusts by default. Its setting is the app's own: set it to the proxies' address ranges rather than a hop count where it allows that, and say so. Edge, load balancer and CDN configuration stays the user's;
 - otherwise the smallest setting beside the module: the entry the nearest trusted proxy appended, counting from the right. That is safe only if the app can't be reached except through those proxies; ask, and tell the user what it assumes;
 - an IP literal, or else the connection's own address.
 
-If the app's own setting is wrong, report it and its fix rather than changing proxy or infrastructure configuration. To verify, send a forged `X-Forwarded-For` through a stand-in proxy that appends the connecting address: the recorded IP is that address. A direct request alone proves nothing.
+If the app's own setting is wrong, report it and its fix rather than changing proxy or infrastructure configuration. To verify, send a forged `X-Forwarded-For` through a stand-in proxy that appends the connecting address, from a client address that differs from the proxy's (`127.0.0.2` locally): the recorded IP is the client's. A direct request alone proves nothing.
 
 ### Log records
 
@@ -94,7 +94,7 @@ Findings carry one of these in `security_rule.category`: `reconnaissance`, `priv
 - Build each record from fresh values: some SDKs silently drop a map attribute that holds the same object twice. Where the SDK has no map value or rejects one, write dotted keys under the attribute's name (`trappsec.audit.actor.id`) and tell the user.
 - Listed values are a starting vocabulary; anything specific to one action or rule goes in its declared params. Where one endpoint carries several operations (GraphQL, JSON-RPC), `operation` there names the one recorded.
 
-**Secrets in URLs.** On routes whose path or query holds a secret, the module overwrites every server-span attribute filled from the URL (`url.path`, `url.full`, `url.query`, `http.target`, `http.url`, `http.route`): the path with the route template, which may only be known after routing, and the query with a fixed marker. Then search every exported signal for a real token (child and outbound spans, metric exemplars, span events, the app's logs) and report what only a user setting can stop.
+**Secrets in URLs.** On routes whose path or query holds a secret, the module overwrites each server-span attribute the instrumentation filled from the URL (whichever of `url.path`, `url.full`, `url.query`, `http.target`, `http.url`, `http.route` the exported span carries; never add absent ones): the path with the route template, which may only be known after routing, and the query with a fixed marker. Then search every exported signal for a real token (child and outbound spans, span events, the app's logs, and metric exemplars, which also carry the raw `client.address`) and report what only a user setting can stop (exemplars: `OTEL_METRICS_EXEMPLAR_FILTER=always_off`).
 
 ### Emitting
 
@@ -111,11 +111,11 @@ Known shapes of the advice above; check them against the versions in use.
 | Stack | Server span | Event name and map values |
 |---|---|---|
 | Python (FastAPI, Django, Flask) | The instrumentor's request hook; keep the span on the request (`request.state`, `flask.g`) | `get_logger(name).emit(..., event_name=...)`; the `logging` bridge can't |
-| Node | `getRPCMetadata(context.active()).span` | `logs` from `@opentelemetry/api`, the package the SDK registered; a separate `@opentelemetry/api-logs` silently drops records |
+| Node | `getRPCMetadata(context.active()).span`, from `@opentelemetry/core` (a direct dependency at the SDK's version); a response hook is a wrapper of `res.end` in the module's middleware | `logs` from `@opentelemetry/api` (1.9 or later), the package the SDK registered; a separate `@opentelemetry/api-logs` silently drops records |
 | Go | `trace.SpanFromContext(r.Context())` in the outermost wrapper inside `otelhttp`; with `ServeMux`, `http.route` from `r.Pattern` | The Logs API with `SetEventName`; `slog` can't. Map values move between releases |
 | Ruby (Rack, Rails) | `OpenTelemetry::Instrumentation::Rack.current_span`, from a middleware after the instrumentation's | The logs SDK may reject map values: use dotted keys |
-| Java (agent, Spring) | `Span.current()` in the first servlet filter, before the security chain; never in a controller | `getLogsBridge()` with `setEventName`, `AttributeKey.valueKey` for maps; Logback can't. Match `opentelemetry-api` to the agent |
-| Functions (Lambda) | `get_current_span()` at handler entry, or a decorator on it | Flush every invocation |
+| Java (agent, Spring) | `Span.current()` in the first servlet filter, before the security chain; never in a controller. Identity from a filter after `AnonymousAuthenticationFilter`, and from the login success and logout handlers | `getLogsBridge()` with `setEventName`, `setAttribute(String, Value)` for maps; Logback can't. Match `opentelemetry-api` to the agent's `telemetry.sdk.version`; under Spring Boot's BOM set the `opentelemetry.version` property |
+| Functions (Lambda) | The active span at handler entry (`trace.getActiveSpan()`, `get_current_span()`), or a wrapper of the handler. Request attributes come from the event (`requestContext.http.method`, `sourceIp`, `userAgent`, `routeKey`) | Flush the logger provider in the handler wrapper; in Node, also pass the tracer provider to the Lambda instrumentation (`setTracerProvider`) so the invocation span is flushed |
 
 ### Changing the schema
 
