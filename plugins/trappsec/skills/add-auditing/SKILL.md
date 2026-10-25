@@ -51,7 +51,7 @@ Leave out what isn't a user's action: page views, searches and ordinary reads of
 
 - **OpenTelemetry traces and logs are a prerequisite.** Check them first, as references/telemetry.md describes, including how the app samples traces. If they aren't in place, stop and tell the user.
 - **Ownership.** Confirm this is the user's own application.
-- **Existing audit logging.** Find any audit tables, activity feeds or audit-style logs. Leave their records, names and storage exactly as they are: customers, reports and compliance evidence may depend on them. Emit the `trappsec.audit.*` events alongside, from the same points in the code, and use the existing action names as the starting point for the registry. Replacing or migrating an existing trail is the user's decision, as a separate change.
+- **Existing audit logging.** Find any audit tables, activity feeds or audit-style logs. Leave their records, names and storage exactly as they are: customers, reports and compliance evidence may depend on them. Emit the `audit.*` events alongside, from the same points in the code, and use the existing action names as the starting point for the registry. Replacing or migrating an existing trail is the user's decision, as a separate change.
 - **Questions.** Ask in one batch, only what the code cannot tell you:
   1. Who reads the trail: the security team, compliance, customers through an audit log API? Any regulation that dictates content or retention?
   2. What sits in front of the app in production (load balancer, CDN, ingress), if the repo doesn't say?
@@ -95,7 +95,7 @@ Unless the user already told you to go ahead, show the registry and wait:
 4. **Every path.** The same action through each entry point (UI, API, job, admin tool) emits the same audit entry; bulk paths emit their own action.
 5. **Nothing leaks.** Search the emitted records and the exported spans from your test runs for secrets, tokens and content.
 6. **Robustness.** Make your own recording module fail in a test, through one fault point it exposes (not the OpenTelemetry API, which the instrumentation shares); the operation behaves exactly as before.
-7. **Namespace.** Search the source for `trappsec` as references/telemetry.md describes.
+7. **Names.** Every record and span attribute uses the names in references/telemetry.md, and nothing else in the app uses them with another meaning.
 8. **Tests.** One test per action and outcome, asserting the audit entry.
 
 ### 6. Report

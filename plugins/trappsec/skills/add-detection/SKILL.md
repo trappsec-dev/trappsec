@@ -87,11 +87,11 @@ Unless the user already told you to go ahead, show the plan and wait:
 ### 5. Verify
 
 1. **Project checks.** Lint, type checks and the app's existing tests pass.
-2. **Each rule fires.** Send the impossible input as a normal user. The finding matches references/telemetry.md and shares its trace and span IDs with the request's server span, which names the right user, tenant and credential, has `trappsec.flagged` set, and passes the `client.address` check.
+2. **Each rule fires.** Send the impossible input as a normal user. The finding matches references/telemetry.md and shares its trace and span IDs with the request's server span, which names the right user, tenant and credential, has `security.flagged` set, and passes the `client.address` check.
 3. **Behavior unchanged.** The response to the impossible input is identical to the response before your change: status, headers and body. Capture them before the first of these skills edits the code (a worktree of the commit before it works), and normalize what changes per response: `Date`, request IDs, CSRF and other random tokens, JSON key order. No data changed that didn't change before.
 4. **Real flows stay silent.** Replay every real client flow through the endpoints you touched, including the edge cases (retries, stale tabs, concurrent edits). Not one finding.
 5. **Robustness.** Make your own recording module fail in a test, through one fault point it exposes (not the OpenTelemetry API, which the instrumentation shares); responses don't change.
-6. **Namespace.** Search the source for `trappsec` as references/telemetry.md describes.
+6. **Names.** Every finding and span attribute uses the names in references/telemetry.md, and nothing else in the app uses them with another meaning.
 7. **Tests.** One test per rule that fires it and asserts the finding and the unchanged response, plus one that replays the real flows and asserts no findings.
 
 ### 6. Report

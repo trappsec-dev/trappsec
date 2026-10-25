@@ -100,21 +100,21 @@ An accountant's PATCH with `"myRole": "owner"` gets the app's normal 403 and pro
 
 ```json
 {
-  "eventName": "trappsec.deception.field_hit",
+  "eventName": "security.field_hit",
   "severityText": "WARN",
   "body": "honey field hit",
   "traceId": "4bf92f3577b34da6a3ce929d0e0e4736",
   "spanId": "00f067aa0ba902b7",
   "attributes": {
-    "trappsec.schema.version": "1",
-    "trappsec.tenant.id": "firm_9kd2",
+    "security.schema.version": "1",
+    "tenant.id": "firm_9kd2",
     "user.id": "usr_41xQ",
     "security_rule.name": "books.my-role",
     "security_rule.category": "privilege_escalation",
-    "trappsec.finding.field.name": "myRole",
-    "trappsec.finding.field.value": "owner",
-    "trappsec.finding.resource.type": "book",
-    "trappsec.finding.resource.id": "bk_8Hq2"
+    "security.finding.field.name": "myRole",
+    "security.finding.field.value": "owner",
+    "security.finding.resource.type": "book",
+    "security.finding.resource.id": "bk_8Hq2"
   }
 }
 ```
@@ -135,12 +135,12 @@ Who and from where are on the server span with the same trace and span IDs, whic
     "user.id": "usr_41xQ",
     "user.name": "sam.okafor",
     "user.roles": ["accountant"],
-    "trappsec.tenant.id": "firm_9kd2",
+    "tenant.id": "firm_9kd2",
     "session.id": "sess_7d1c",
-    "trappsec.credential.type": "session",
-    "trappsec.credential.id": "sess_7d1c",
-    "trappsec.actor.type": "user",
-    "trappsec.flagged": true
+    "credential.type": "session",
+    "credential.id": "sess_7d1c",
+    "actor.type": "user",
+    "security.flagged": true
   }
 }
 ```

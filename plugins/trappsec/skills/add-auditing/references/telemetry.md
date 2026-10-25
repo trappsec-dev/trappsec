@@ -19,15 +19,18 @@ If any of these is missing, stop. Tell the user what you found and that this ski
 
 **What this work may touch in the telemetry setup:** a server request hook, or where there is none a small middleware or filter running inside the server span; an opt-in; attributes on the server span; on a function platform, a flush per invocation. Everything else is the user's to decide, so report and ask: exporters, processors, samplers, the resource, inbound trace-context extraction, metric exemplars, and what other instrumentations capture.
 
-**Sampling and inbound context.** If the app samples traces itself, findings from dropped requests can't be joined to their caller, and `trappsec.flagged` can't bring a dropped trace back. Most instrumentations also take their parent from the caller's `traceparent`, so on a public entry point a caller can stop the server span being exported or choose its trace ID. Report either; the usual fixes are a parent-based always-on sampler and ignoring inbound context at public entry points. Audit records don't depend on this, and findings carry the request context themselves when the server span isn't recording.
+**Sampling and inbound context.** If the app samples traces itself, findings from dropped requests can't be joined to their caller, and `security.flagged` can't bring a dropped trace back. Most instrumentations also take their parent from the caller's `traceparent`, so on a public entry point a caller can stop the server span being exported or choose its trace ID. Report either; the usual fixes are a parent-based always-on sampler and ignoring inbound context at public entry points. Audit records don't depend on this, and findings carry the request context themselves when the server span isn't recording.
 
 ## Common core
 
-### Namespace
+### Names
 
-Event names and attributes these skills define live under the fixed `trappsec` namespace, the same everywhere. Never invent attributes in OpenTelemetry's own namespaces.
+The names these skills define are the same in every app, so one query works across services:
+- audit records: event names `audit.<area>.<action>`, with the entry in one attribute, `audit`;
+- findings: event names `security.rule_hit`, `security.decoy_hit` and `security.field_hit`, with their details under `security.finding.*`, beside OpenTelemetry's `security_rule.*`;
+- the request context on the server span: `tenant.id`, `credential.type`, `credential.id`, `actor.type`, `actor.id` and `security.flagged`, beside OpenTelemetry's `user.*`, `session.id` and `client.address`.
 
-`trappsec` is written only in the string literals that spell attribute keys and event names (a constant holding one is fine), the tests that assert them, and plans that cite them. No identifier, file name, comment, logger name, rule ID, record body, attribute value or error message contains it: values reach dashboards and tickets, and code is read by teammates and sometimes by attackers. Name the recording code like the app's other observability code, and before you finish, search the source for the word.
+Use OpenTelemetry's own attributes as they are, and never invent new ones in its namespaces. Before writing a name, search the app and its telemetry for it: if the app already emits `audit.*` events or sets one of these attributes with another meaning, stop and ask the user rather than mix two meanings under one name. Name the recording code like the app's other observability code.
 
 ### Three kinds of record
 
@@ -50,20 +53,20 @@ One small module, shared by all three skills (reuse it and its tests if another 
 
 Omit an attribute whose value is unknown; never write an empty string.
 
-**Reaching the server span.** The current span in a handler is often a child (a controller, framework or database span). Capture the server span where it is known (Stack notes), keep it in the request, write the context and `trappsec.flagged` to it, and emit findings in its context so they carry its span ID. Operations over a long-lived connection (WebSocket, subscriptions) have no per-operation span: start a server-kind span for each.
+**Reaching the server span.** The current span in a handler is often a child (a controller, framework or database span). Capture the server span where it is known (Stack notes), keep it in the request, write the context and `security.flagged` to it, and emit findings in its context so they carry its span ID. Operations over a long-lived connection (WebSocket, subscriptions) have no per-operation span: start a server-kind span for each.
 
 | Span attribute | Type | Value |
 |---|---|---|
 | `user.id` | string | A stable ID for the account the request acted as; not an email. Absent for a credential no person holds |
 | `user.name` | string | That account's login, unless it is personal data the user wants kept out |
 | `user.roles` | string[] | The roles that matter for authorization |
-| `trappsec.tenant.id` | string | The organization or workspace acted in; a fixed ID in a single-tenant app |
+| `tenant.id` | string | The organization or workspace acted in; a fixed ID in a single-tenant app |
 | `session.id` | string | A hash or row ID of the session, never the cookie or key itself |
-| `trappsec.credential.type` | string | `session`, `token`, `api_key`, `oauth_client`, `service_account` or `link` (a signed or one-time URL) |
-| `trappsec.credential.id` | string | The credential's ID, so it can be revoked; omitted when it has none. Never the secret |
-| `trappsec.actor.type` | string | `user`, `service`, `integration` or `agent` |
-| `trappsec.actor.id` | string | The real actor when someone or something acts as `user.id` (impersonation, support access, an agent); an integration's credential ID when there is no `user.id` |
-| `trappsec.flagged` | boolean | `true` once any finding fires in the request, so the backend keeps the trace |
+| `credential.type` | string | `session`, `token`, `api_key`, `oauth_client`, `service_account` or `link` (a signed or one-time URL) |
+| `credential.id` | string | The credential's ID, so it can be revoked; omitted when it has none. Never the secret |
+| `actor.type` | string | `user`, `service`, `integration` or `agent` |
+| `actor.id` | string | The real actor when someone or something acts as `user.id` (impersonation, support access, an agent); an integration's credential ID when there is no `user.id` |
+| `security.flagged` | boolean | `true` once any finding fires in the request, so the backend keeps the trace |
 
 **`client.address`** is the address that connected to the outermost proxy the app trusts, and the module writes it on every request, replacing the instrumentation's (many take the first `X-Forwarded-For` entry, which the caller controls):
 - the platform's field where the caller can't write it (API Gateway's `requestContext.http.sourceIp`), never a forwarding header. A CDN's client-IP header (`CF-Connecting-IP`) is a forwarding header like any other;
@@ -91,7 +94,7 @@ Findings carry one of these in `security_rule.category`: `reconnaissance`, `priv
 - Attacker-controlled strings are cut to 1024 characters and arrays to 20 elements; objects become compact JSON within a fixed budget of nodes and depth. A request document or raw body is recorded as its length and a hash.
 - No secrets (passwords, tokens, keys, session secrets, signed links), even when the caller sent one, and no document or message content.
 - Action and rule names and intents come from server code. An ID the caller sent and the app rejected is recorded as what was sent, never as the actor or tenant.
-- Build each record from fresh values: some SDKs silently drop a map attribute that holds the same object twice. Where the SDK has no map value or rejects one, write dotted keys under the attribute's name (`trappsec.audit.actor.id`) and tell the user.
+- Build each record from fresh values: some SDKs silently drop a map attribute that holds the same object twice. Where the SDK has no map value or rejects one, write dotted keys under the attribute's name (`audit.actor.id`) and tell the user.
 - Listed values are a starting vocabulary; anything specific to one action or rule goes in its declared params. Where one endpoint carries several operations (GraphQL, JSON-RPC), `operation` there names the one recorded.
 
 **Secrets in URLs.** On routes whose path or query holds a secret, the module overwrites each server-span attribute the instrumentation filled from the URL (whichever of `url.path`, `url.full`, `url.query`, `http.target`, `http.url`, `http.route` the exported span carries; never add absent ones): the path with the route template, which may only be known after routing, and the query with a fixed marker. Then search every exported signal for a real token (child and outbound spans, span events, the app's logs, and metric exemplars, which also carry the raw `client.address`) and report what only a user setting can stop (exemplars: `OTEL_METRICS_EXEMPLAR_FILTER=always_off`).
@@ -119,7 +122,7 @@ Known shapes of the advice above; check them against the versions in use.
 
 ### Changing the schema
 
-The schema version is `"1"`: `trappsec.schema.version` on findings, `version` inside audit entries. Add attributes freely under `trappsec`; renaming or removing one, or changing its meaning, raises the version. `user.*`, `session.id` and `security_rule.*` are still in Development in OpenTelemetry's semantic conventions: if one is renamed, follow it and raise the version.
+The schema version is `"1"`: `security.schema.version` on findings, `version` inside audit entries. Add attributes freely under `audit` and `security.finding`; renaming or removing one, or changing its meaning, raises the version. `user.*`, `session.id` and `security_rule.*` are still in Development in OpenTelemetry's semantic conventions: if one is renamed, follow it and raise the version.
 <!-- END COMMON CORE -->
 
 ## Audit records
@@ -128,18 +131,18 @@ An audit record is what customers see in an audit log, export to their own SIEM 
 
 ### Names
 
-Event names are `trappsec.audit.<area>.<action>`, in lower snake case and the product's own language: `trappsec.audit.book.member_role_changed`, `trappsec.audit.auth.sign_in`, `trappsec.audit.export.started`. One name per action, whatever path triggered it; the outcome is part of the entry, never a separate name.
+Event names are `audit.<area>.<action>`, in lower snake case and the product's own language: `audit.book.member_role_changed`, `audit.auth.sign_in`, `audit.export.started`. One name per action, whatever path triggered it; the outcome is part of the entry, never a separate name.
 
 ### The entry
 
-The record has two attributes: `trappsec.audit`, holding the whole entry as a map, and `log.record.uid`, set to the entry's `id`. The entry repeats what the server span says about the caller on purpose: it is evidence and must stand without the span. One recording module fills both from the same values.
+The record has two attributes: `audit`, holding the whole entry as a map, and `log.record.uid`, set to the entry's `id`. The entry repeats what the server span says about the caller on purpose: it is evidence and must stand without the span. One recording module fills both from the same values.
 
 | Key | Required | Value |
 |---|---|---|
 | `id` | Always | A unique, time-sortable ID (a ULID or UUIDv7; a few lines of code, no new dependency), to deduplicate and page through the log |
 | `time` | Always | When it happened, UTC, ISO 8601 with milliseconds |
 | `version` | Always | `"1"` |
-| `action` | Always | The event name without `trappsec.audit.`, such as `book.member_role_changed` |
+| `action` | Always | The event name without `audit.`, such as `book.member_role_changed` |
 | `operation` | Always | Starting vocabulary: `create`, `read`, `update`, `delete`, `share`, `export`, `grant`, `revoke`, `approve`, `reject`, `execute`, `authenticate`, `configure` |
 | `outcome` | Always | `result` (`success`, `denied`, `failure`; below), and a machine-readable `reason` when it isn't a success |
 | `actor` | Always | Who actually did it: `type` (`user`, `service`, `integration`, `agent`), `id`, and `name` at the time. For an unknown login or a rejected token, `type` alone (`unknown` if even that isn't known); for an unattended job, `service` and the job's identity |
@@ -170,7 +173,7 @@ A role change:
 
 ```json
 {
-  "trappsec.audit": {
+  "audit": {
     "id": "01JAB7Q3M2V8K4T0R6YHXN5C1D",
     "time": "2026-10-20T08:55:12.204Z",
     "version": "1",
