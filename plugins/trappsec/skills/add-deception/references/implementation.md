@@ -56,7 +56,7 @@ A honey field is a parameter real clients never send, or always send with one kn
   - A per-user value the UI echoes back: record only values impossible for this caller. Values that are stale but legitimate (a tab opened before a demotion) don't record.
 - **Compare canonically.** Form and query values are strings, JSON values are typed: `"true"` and `true` match, `"5"` and `5` match, arrays compare element by element, and a repeated parameter is tampering unless every value matches.
 - **The endpoint behaves exactly as before for every request.** If it ignores unknown fields, the honey field is discarded after recording, so no later change can start honoring it. If it rejects unknown fields, the honey field is rejected exactly like any other.
-- **Constant work.** Look only at the named top-level field. Never walk arrays or nested objects, never run fuzzy matching over attacker input, and handle values of any type without failing: a crafted body costs the same as a normal one and never becomes a 500.
+- **Bounded work.** Look only at the named top-level field. Never walk arrays or nested objects to decide, never run fuzzy matching over attacker input, and handle values of any type without failing. Recording a value clips it within a fixed budget of nodes and depth (references/telemetry.md, Values). Parsing the body is the app's own cost; the check adds a bounded amount to it and never becomes a 500.
 
 ## 5. Recording hits
 
@@ -72,7 +72,7 @@ One small server-side module records every hit, in the app's style and named lik
 A finding, joined to its request's context, must let a responder find the account, revoke the credential and follow the request's trace.
 
 - **Who comes from the app's authenticated state**, never from anything the caller sent: the user, their roles, their tenant, the session, token or key that authenticated them, and the real person behind the request when someone is acting as another user. Never record a secret.
-- **The client IP is the one the app resolves through its trusted-proxy configuration.** Never parse forwarding headers yourself, and never trust a value the caller could have written. If the app isn't configured for the proxies in front of it, alerts will carry a proxy's address: report that, and the setting that would fix it, instead of changing proxy or infrastructure configuration yourself.
+- **The client IP is the one the app resolves through its trusted proxies**, as references/telemetry.md describes under `client.address`: the platform's field or the framework's resolver where there is one, the smallest setting beside the module where there is none, never a value the caller could have written. Report what it assumes about the proxies in front.
 - **Where it goes:** who and from where are set once on the request's server span; the finding carries the rule's facts and the routing keys, and shares the span's trace and span IDs.
 - **Anonymous requests** are answered by the sibling's authentication before anything records. If the user wants them as low-severity signals, record them from the app's unauthenticated path for decoy routes only, without changing the response. Requests the framework rejects before authentication aren't recorded, the same as for the sibling.
 

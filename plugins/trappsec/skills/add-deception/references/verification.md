@@ -26,7 +26,7 @@ For each decoy, send every probe below to the decoy and to its sibling, and comp
 | Owner of their own workspace | The decoy's final denial where the sibling succeeds; a `WARN` event. The denial must make sense for an owner. |
 | Unknown, foreign and malformed IDs | Identical responses (the sibling's loader answers both); a `WARN` event. |
 | Malformed JSON, empty body, wrong content type, a body missing required fields | Identical status and shape, in the same order relative to authentication. |
-| Other methods, HEAD, OPTIONS, a CORS preflight | Identical, including `Allow`. |
+| Other methods, HEAD, OPTIONS, a CORS preflight | A decoy method on an existing path: identical, including `Allow`. A decoy on a new path: the same answers its framework gives any route with that one method (`Allow` lists only it), which is why a decoy method on an existing path is preferred. |
 | Trailing slash, different case, `Accept: text/html` | Identical. |
 
 ```bash
@@ -42,7 +42,7 @@ If the project has tests, add one per decoy that fires it as a normal user and a
 For each honey field:
 1. **Normal use.** Perform the real UI action, or replay the exact request the frontend sends. Expect no event and unchanged behavior.
 2. **Explicit expected value.** Send the expected value explicitly. Expect no event.
-3. **Tampering.** Send a tampered value. Expect a `trappsec.deception.field_hit` finding naming the field, value and intent. The handler must behave as if the field were absent (the role didn't change, the price wasn't used).
+3. **Tampering.** Send a tampered value. Expect a `honey_field` finding naming the field, value and intent. The handler must behave as if the field were absent (the role didn't change, the price wasn't used).
 4. **Repetition and types.** For query fields, send the parameter twice (`?x=a&x=b`). For JSON fields, try the value as a string and as its typed form (`"true"` and `true`).
 5. **Unknown-field behavior.** Send an unrelated unknown field the same way. The endpoint must treat it exactly as it treats the honey field (both ignored, or both rejected).
 
@@ -54,8 +54,10 @@ For each honey field:
 node ${CLAUDE_SKILL_DIR}/scripts/compare_responses.mjs \
   --real "http://localhost:3000/api/v2/<sibling-path>" \
   --decoy "http://localhost:3000/api/v2/<decoy-path>" \
-  [--method POST] [--data '{"a":1}'] [-H 'Authorization: Bearer ...'] [--identical] [--runs 5] [--json]
+  [--method POST] [--decoy-method POST] [--data '{"a":1}'] [-H 'Authorization: Bearer ...'] [--identical] [--runs 5] [--json]
 ```
+
+`--decoy-method` sends a different method to the decoy than to the sibling, for a decoy whose sibling answers another verb. For the signed-in comparison, pick as the sibling a route that shares the decoy's gate and denies the same caller.
 
 Run it for every probe in §1 where the decoy and its sibling must agree, at least:
 - anonymous and with an expired token, with `--identical`: the bodies must be byte-identical;
@@ -86,15 +88,15 @@ If the gate can be satisfied locally (flipping the flag in devtools, a local-onl
 
 - **No state change.** Snapshot the data the decoy's sibling would change (or the whole store, in a test), hit every decoy as every role with valid bodies, and show the snapshot is unchanged.
 - **Real routes unchanged.** Run the app's existing test suites. For every real route on a path a decoy shares (inferred decoys), replay the real UI's requests and compare with the responses before your change.
-- **Recording never breaks a request.** Make recording fail and fire each decoy and honey field: responses must be unchanged.
+- **Recording never breaks a request.** Make your own recording module fail (not the OpenTelemetry API, which the instrumentation shares) and fire each decoy and honey field: responses must be unchanged.
 
 ## 6. Attribution
 
 For one hit per tripwire, check the finding and the request's server span against what you know about the request:
-- the finding matches telemetry.md and carries the same trace and span IDs as the server span, and the span has `trappsec.flagged` set;
-- on the span, `user.id`, `user.roles`, `trappsec.tenant.id` and `trappsec.credential.id` name the account and the session, token or API key you used; nothing in either record is the credential's secret;
+- the finding matches telemetry.md and carries the same trace and span IDs as the server span, and the span has `security.flagged` set;
+- on the span, `user.id`, `user.roles`, `tenant.id` and `credential.id` name the account and the session, token or API key you used; nothing in either record is the credential's secret;
 - if the app supports acting as another user, an impersonated hit records both the acting admin and the user;
-- `client.address` on the span is your client address. Send the same request with a forged `X-Forwarded-For: 203.0.113.9`: the recorded IP must not change unless the request really came through a proxy the app trusts. If you can run the app behind its real proxy setup (docker compose, a local ingress), check that the recorded IP is the client's, not the proxy's.
+- `client.address` on the span is your client address. It passes the `client.address` check in references/telemetry.md.
 
 ## 7. False-positive audit
 
