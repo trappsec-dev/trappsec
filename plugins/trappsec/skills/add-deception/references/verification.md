@@ -96,7 +96,7 @@ For one hit per tripwire, check the finding and the request's server span agains
 - the finding matches telemetry.md and carries the same trace and span IDs as the server span, and the span has `trappsec.flagged` set;
 - on the span, `user.id`, `user.roles`, `trappsec.tenant.id` and `trappsec.credential.id` name the account and the session, token or API key you used; nothing in either record is the credential's secret;
 - if the app supports acting as another user, an impersonated hit records both the acting admin and the user;
-- `client.address` on the span is your client address. Check the recorded IP twice: a direct request with a forged `X-Forwarded-For` keeps the connection's address unless the app is told to trust a proxy, and through a stand-in proxy that appends the connecting address, the recorded IP is that address, not the forged entry. A direct request alone proves nothing.
+- `client.address` on the span is your client address. It passes the `client.address` check in references/telemetry.md.
 
 ## 7. False-positive audit
 
