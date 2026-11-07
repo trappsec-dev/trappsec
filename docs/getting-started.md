@@ -263,7 +263,7 @@ ts.Watch("/auth/register").
 {: .note }
 > **How do attackers find these traps?** 
 > 
-> Simply defining a trap isn't enough; you need to make sure attackers stumble upon them. Check out the [Baiting & Lures](./baiting-and-lures.md) guide to learn how to plant effective clues (like hidden frontend comments or legacy API mirrors) that lead attackers into your traps.
+> Simply defining a trap isn't enough; you need to make sure attackers stumble upon them. Check out the [Baiting & Lures](./baiting-and-lures.md) guide to learn how to lead attackers to your traps with lures that look discovered rather than planted, derived from your own app's conventions.
 
 ## attribution
 To make alerts actionable, we need to know *who* is attacking.
