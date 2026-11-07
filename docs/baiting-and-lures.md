@@ -46,4 +46,4 @@ For every tripwire, write three lines:
 *   **Think**: the belief it should create.
 *   **Do**: the action that belief leads to. It must be the action that fires the alert.
 
-If you cannot write a plausible Think, the tripwire is not believable. If the Do is not the alerting action, it will not fire.
+If you can't name a belief an attacker would plausibly form, the tripwire won't convince anyone. And if acting on that belief doesn't raise the alert, the tripwire never fires.
