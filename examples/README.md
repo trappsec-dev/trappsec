@@ -9,7 +9,7 @@ The decoys in these apps are deliberately simple and identical across all of the
 - **Paths and fields are shared by every example**, and anything shared across apps becomes a signature attackers learn. Real decoys are derived from your own app's routes, vocabulary and data model.
 - **`lure-frontend/js/api.js` has client methods nothing calls**, pointing at trap routes. Uncalled methods for powerful capabilities are among the lures red-team reviewers most often spot as planted.
 - **The profile honey field is a boolean admin flag.** In an app whose permissions are role-based, a field like that is foreign to the data model and stands out.
-- **Some trap bodies are "too good to be true"**: a 200 with deployment details for any signed-in user, and metrics that change randomly on every call (there to exercise dynamic response bodies). Real decoys return the app's real 403 or stable values derived from the request.
+- **Some trap bodies are "too good to be true"**: a 200 with deployment details for any signed-in user, and metrics that change randomly on every call (there to exercise dynamic response bodies). Real decoys end with a denial the app's real routes also give, in the app's own error format.
 - **Several traps share one generic retired-version response**, written from scratch rather than copied from how the app really answers.
 
 To design deception for your own app, use the [`add-deception` agent skill](../plugins/trappsec/skills/add-deception/) or read [Baiting & Lures](https://trappsec.dev/baiting-and-lures/), which summarizes it.

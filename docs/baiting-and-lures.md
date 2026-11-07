@@ -7,24 +7,24 @@ tagline: "A trap no one finds doesn't fire. Lead attackers to your decoys withou
 
 Traps are only effective if attackers find them. A lure is whatever leads an attacker there: a client-side reference, a field in a response, a path that follows from your API's conventions. A lure that looks planted is worse than none, though. It tells the attacker the app is instrumented, and they become careful.
 
-This page summarizes the approach of the [`add-deception` agent skill](https://github.com/trappsec-dev/trappsec/tree/main/plugins/trappsec/skills/add-deception), which designs lures for your specific app and verifies them. The skill's references hold the detail: [frontend lures](https://github.com/trappsec-dev/trappsec/blob/main/plugins/trappsec/skills/add-deception/references/frontend-lures.md), [decoy routes, honey fields and responses](https://github.com/trappsec-dev/trappsec/blob/main/plugins/trappsec/skills/add-deception/references/backend-traps.md), and a [worked example](https://github.com/trappsec-dev/trappsec/blob/main/plugins/trappsec/skills/add-deception/references/worked-example.md) that contrasts an obvious design with a convincing one.
+This page summarizes the lure design of the [`add-deception` agent skill](https://github.com/trappsec-dev/trappsec/tree/main/plugins/trappsec/skills/add-deception), which designs lures for your specific app and verifies them. The skill writes its decoys in your app's own code and reports through OpenTelemetry rather than through the trappsec library, but the same lure design applies to decoys you define with `trap` and `watch`. The skill's references hold the detail: [frontend lures](https://github.com/trappsec-dev/trappsec/blob/main/plugins/trappsec/skills/add-deception/references/frontend-lures.md), [decoy routes, honey fields and responses](https://github.com/trappsec-dev/trappsec/blob/main/plugins/trappsec/skills/add-deception/references/backend-traps.md), and a [worked example](https://github.com/trappsec-dev/trappsec/blob/main/plugins/trappsec/skills/add-deception/references/worked-example.md) that contrasts an obvious design with a convincing one.
 
 {: .warning }
 > **Don't copy names.** This page deliberately gives no paths, field names or method names. Any concrete name that appears in public docs ends up in many deployments and becomes a signature attackers learn. Derive every name from your own codebase. The same goes for the apps in [`examples/`](https://github.com/trappsec-dev/trappsec/tree/main/examples): they are test fixtures for the end-to-end suite, not deception patterns.
 
 ### Lures that look discovered, not planted
 
-In blind reviews of agent-built deception, red-team reviewers rated how likely each kind of lure was to be planted. Read it as an ordering, from least to most suspicious:
+From least to most suspicious to someone reading your client:
 
-| Lure | Rated likely planted |
-|---|---|
-| Nothing new in the client: decoys inferred from the API's own conventions, honey fields on values the client already reads or sends back | 2–35% |
-| One flag- or role-gated entry point to a decoy | 5–40% |
-| An uncalled client method for a powerful capability | 25–70% |
-| A hidden or disabled field of a kind the app's other forms don't carry | 20–80% |
-| Something nothing uses: an unread `data-` attribute, a handler for a form no page renders, commented-out code, a dangling reference in docs | 40–80% |
+1.  Nothing new in the client: honey fields on values the client already reads or sends back, decoys inferred from the API's own conventions.
+2.  One flag- or role-gated entry point to a decoy.
+3.  An uncalled client method for a powerful capability.
+4.  A hidden or disabled field of a kind the app's other forms don't carry.
+5.  Something nothing uses: an unread `data-` attribute, a handler for a form no page renders, commented-out code, a dangling reference in docs.
 
 So prefer the top of the list, keep visible lures few, and never give two of them the same pattern. Comments that point at a lure ("do not use", "remove before prod", an emoji marker) are the strongest tell of all.
+
+Someone probing the running app sees something else. Honey fields leave nothing to observe from outside. Decoy routes are found by elimination: a tester writes data and reads it back, which clears every real endpoint, and whatever never works for any account is left over. So lead with honey fields, keep decoy routes few (one at most in a small API), and give each one neighbors and a denial that real routes also produce.
 
 ### Principles
 
@@ -33,7 +33,7 @@ So prefer the top of the list, keep visible lures few, and never give two of the
 *   **Avoid paths generic scanners probe** (admin, debug, actuator-style paths). They draw anonymous noise and look generic. An application-specific path is found only by someone who studied your app.
 *   **Give every lure an innocent reason to exist.** Real dead code has a story: behind a flag, gated on a role, kept for an older client. Write the one-sentence cover story first; it decides naming, placement and response.
 *   **Bait honey fields with what's already there.** The best honey field is one an attacker would try on that endpoint anyway: a value the real client already reads in a response, or a value the real form never offers. A field foreign to your data model (say, a boolean admin flag in an app whose permissions are role-based) stands out.
-*   **Keep every layer consistent.** If the client calls a decoy with POST, the trap accepts POST. The decoy's errors, IDs, timestamps and content type match its real siblings. Its responses are stable: derive synthetic values from the request rather than randomizing them per call, and prefer the app's real 403 over a success that looks too good to be true.
+*   **Keep every layer consistent.** If the client calls a decoy with POST, the trap accepts POST. The decoy's errors, IDs, timestamps and content type match its real siblings. End a decoy with a denial your real routes also give, such as a feature that isn't enabled for the account, in the app's own error format. Don't answer with a success: it looks too good to be true, and it implies follow-ups (fetching or listing what was created) that the rest of the API won't corroborate.
 *   **Chain the breadcrumbs.** Let one tripwire lead to the next, for example a decoy's 403 that names a permission, and a honey field that accepts it. The second alert removes doubt about intent.
 *   **Leave no fingerprints.** Nothing shipped to the browser may hint at its purpose: identifiers, strings, comments, file and chunk names, storage keys, flag names. Never ship trappsec's default responses; set [default responses](/api/#default-responses) to your app's real ones.
 *   **A false positive is a bug.** No real user, crawler, prefetcher or test may ever reach a decoy or send a honey field. Gate client lures on something no real user can satisfy, and fire every tripwire yourself before relying on it.
