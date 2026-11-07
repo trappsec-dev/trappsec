@@ -70,7 +70,7 @@ Before writing code, write these three lines for every tripwire:
 - **Think**: the belief it should create. Example from the worked example: "bulk ledger export exists, and only a client-side flag hides it."
 - **Do**: the action that belief leads to. It must be the action that fires the alert (e.g. an authenticated POST to the decoy).
 
-If you cannot write a plausible Think, the tripwire is not believable. If the Do is not the alerting action, the tripwire will not fire.
+If you can't name a belief an attacker would plausibly form, the tripwire won't convince anyone. And if acting on that belief doesn't raise the alert, the tripwire never fires.
 
 ## Workflow
 
