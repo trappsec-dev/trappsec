@@ -1,6 +1,6 @@
 ---
 name: add-detection
-description: Turn an application's existing validation and authorization into high-signal detections of someone probing its business logic. Finds the checks that reject inputs and states the app's real clients can never produce (values the UI never offers, client-sent totals that disagree with the server, workflow steps out of order, another tenant's IDs, replayed one-time tokens) and makes each one emit an OpenTelemetry finding tied to the caller's identity, without changing any response. Use this whenever the user wants to detect tampering, impossible states, business-logic abuse, mass assignment or IDOR attempts in their own app, or wants security alerts from existing validation. Not for adding new validation, fixing vulnerabilities, rate limiting, WAF rules or audit logging.
+description: Turn an application's existing validation and authorization into high-signal detections of someone probing its business logic. Finds the checks that reject inputs and states the app's real clients can never produce (values the UI never offers, client-sent totals that disagree with the server, workflow steps out of order, another tenant's IDs, replayed one-time tokens) and makes each one emit an OpenTelemetry finding tied to the caller's identity, without changing any response. Use this whenever the user wants to detect tampering, impossible states, business-logic abuse, mass assignment or IDOR attempts in their own app, or wants security alerts from existing validation. Inputs the app ignores rather than refuses (fields no handler reads, routes nothing serves) are add-deception's. Not for adding new validation, fixing vulnerabilities, rate limiting, WAF rules or audit logging.
 license: MIT
 ---
 
@@ -30,7 +30,7 @@ Look for these where validation or authorization already rejects them:
 
 - **Values the UI never offers:** an enum outside the options any version of the form showed; a disabled or hidden option; a role, status, plan or scope no screen lets a user pick.
 - **Values the server already knows:** a client-sent price, total, owner, tenant or user ID that must equal the server's own value, when it can't have changed while the client held it (a price staff can edit while a cart is open can). Client values that must agree with each other (line totals and the order total) qualify, unless one can legitimately be empty or the server drops rows.
-- **Objects the caller can't have seen:** another tenant's ID in a field the client fills from its own data, including an API path it builds from its own list (`/requests/${id}/approve`). IDs in page URLs usually don't qualify: shared links, bookmarks and stale tabs carry them. One lookup of the rejected ID, to tell another tenant's object from a deleted one, is allowed. Objects the app itself lets the caller reach across tenants (break-glass, sharing, support access) are excluded: check the links it renders, not only its forms.
+- **Objects the caller can't have seen:** another tenant's ID in a field the client fills from its own data, including an API path it builds from its own list (`/requests/${id}/approve`). IDs in page URLs usually don't qualify: shared links, bookmarks and stale tabs carry them. One lookup of the rejected ID, to tell another tenant's object from a deleted one, is allowed; make it on every rejection of that kind, so response time doesn't tell the caller which IDs exist. Objects the app itself lets the caller reach across tenants (break-glass, sharing, support access) are excluded: check the links it renders, not only its forms.
 - **Workflow steps out of order:** approving one's own request, refunding an unpaid order, acting on a resource in a state the UI never offers the action for.
 - **Replays:** a one-time token used again, after its first use completed, by an account that is neither the one that used it nor its intended recipient. Tokens bound to no recipient (an emailed invitation, a forwarded coupon) or held only by possession (a signing or magic link) have no second party to compare: leave them to the audit trail. Revisiting a link, or repeating a request within seconds, is never a replay.
 - **Forgeries:** a signature that fails on a value of the shape the app issues, not one that expired, was cut short or was re-encoded by a mail client (check the signature alone, then the shape by length and character class only); an idempotency key reused with a different payload.
@@ -39,7 +39,7 @@ Look for these where validation or authorization already rejects them:
 
 Not detections: typos, expired sessions, values a real user can type, concurrent edits, retries, an option retired recently enough that open tabs still send it, and refusals a real user can reach (a role revoked under an open tab, a state another user just produced). When a rejection is ambiguous, leave it alone.
 
-**Which clients.** A form sends only its options; a script on a public API, an SDK or an AI agent can send anything the schema allows. A condition qualifies only if no client of the app could produce it, so check each example against every client's code. Where some clients can send anything (scripts on API keys), scope the rule to the credential types whose clients you can read, and say so in the inventory; tokens issued by one login endpoint are one class, so scope by issuer (a claim), never by "bearer". For a client you can't read (a mobile build without source), keep to inputs the server already rejects.
+**Which clients.** A form sends only its options; a script on a public API, an SDK or an AI agent can send anything the schema allows. A condition qualifies only if no client of the app could produce it, so check each example against every client's code. Where some clients can send anything (scripts on API keys), scope the rule to the credential types whose clients you can read, and say so in the inventory; tokens issued by one login endpoint are one class, so scope by issuer (a claim), never by "bearer". For a client you can't read (a mobile build without source), take the evidence from the server instead: what it ever hands that account. A client holds only the IDs and values the server listed or returned to it, so a request for a record the server never showed the account (another employee's payslip, when the list is filtered to the caller's own and a payslip never changes owner) is impossible from any client, readable or not. Check the one way it isn't: a person who holds two accounts and switches between them in one browser, where a page or tab loaded as the first sends the second's session. Where the client keeps such state across a sign-in, the rule needs a fact stale state can't supply, or it isn't a detection. A missing client source never takes a whole surface off the map.
 
 If you find an impossible state the app *doesn't* reject, that's a vulnerability, not a detection. Report it; don't fix it as part of this work unless the user asks.
 
@@ -49,12 +49,14 @@ If you find an impossible state the app *doesn't* reject, that's a vulnerability
 
 - **OpenTelemetry traces and logs are a prerequisite.** Check them first, as references/telemetry.md describes, including how the app samples traces. If they aren't in place, stop and tell the user.
 - **Ownership.** Confirm this is the user's own application.
+- **Stay in scope.** Change only what the plan says, and ask before touching auth, infrastructure or CI.
 - **Questions.** Ask in one batch, only what the code cannot tell you:
   1. Which clients call the API besides the web UI in this repo: mobile apps and their oldest supported versions, partner integrations, scripts, SDKs, AI agents?
   2. What sits in front of the app in production (load balancer, CDN, ingress), if the repo doesn't say?
 
 ### 1. Reconnaissance
 
+- **Attack paths.** Map the routes an attacker takes and their chokepoints as references/attack-paths.md describes, starting from add-deception's map and hand-offs if it has run. Every refusal at a chokepoint is a candidate; refusals elsewhere that pass the bar are candidates too.
 - **Every client's real behavior.** For each endpoint you consider, find what every real client sends: the form's options, the values it computes, what it echoes back, how it retries. Include older client versions still in use.
 - **Every rejection.** Find where the app rejects input or state: validators, schema constraints, permission checks, state-machine guards, signature checks, explicit error branches in domain code.
 - **Who and from where.** Where the authenticated principal lives after authentication (user, tenant, credential, impersonation), and how the client IP reaches the app through its proxies.
@@ -62,27 +64,30 @@ If you find an impossible state the app *doesn't* reject, that's a vulnerability
 ### 2. Design
 
 For each candidate rejection, write down:
+- the attack path, stage and chokepoint, when it sits on one;
 - the condition, in one sentence;
 - why no real client can produce it, with evidence from the client code;
 - the intent (references/telemetry.md);
 - a stable rule ID.
 
-Keep only the ones whose evidence holds for every client; fewer, certain detections beat many plausible ones. List the rejected candidates and why in the plan, so the next agent doesn't add them back.
+Keep every candidate whose evidence holds for every client, and only those: a plausible rule is a false positive waiting, and a certain one is worth keeping however many there are. List the rejected candidates and why in the plan, so the next agent doesn't add them back. Inputs at a chokepoint that the app ignores rather than refuses are handed off to add-deception, and inputs it accepts are vulnerabilities (references/attack-paths.md).
 
 ### 3. Present the plan
 
 Unless the user already told you to go ahead, show the plan and wait:
 
-| # | Rule ID | Endpoint / operation | Condition | Why no real client produces it | Intent |
-|---|---|---|---|---|---|
+| # | Path / stage | Rule ID | Endpoint / operation | Condition | Why no real client produces it | Intent |
+|---|---|---|---|---|---|---|
+
+Then list, from the attack-path map, the inputs handed off to add-deception and the chokepoints left uncovered and why.
 
 ### 4. Implement
 
-- **Record in the branch that already rejects**, after authentication, with the app's own idioms; the response, status, timing class and side effects stay exactly as they were. A rejection need not be an error status: a form redisplayed with an error, a redirect with a flash message, a GraphQL `errors` entry in a 200. Record on the specific error (Django's `invalid_choice`, Rails' `errors.of_kind?(:role, :inclusion)`), never on any validation error; a validator without an error code may be given one. Never pass the classification through the response.
+- **Record in the branch that already rejects**, with the app's own idioms, and with the caller's identity where it is known; a refusal before authentication (a forged link, an anonymous request) records what it knows. The response, status, timing class and side effects stay exactly as they were. A rejection need not be an error status: a form redisplayed with an error, a redirect with a flash message, a GraphQL `errors` entry in a 200. Record on the specific error code or kind the check raises, never on any validation error; a validator without an error code may be given one where the code never reaches the response. Where one error answers several refusals, record in the branch that decides, not on the error. A check the app also uses to filter what it lists (a permission test behind a list endpoint) records where a request is refused, never inside the shared check. Never pass the classification through the response.
 - **Never add a new rejection, and never change what the app accepts.**
 - **Evaluate only what the check already evaluates**, values already in hand, and the one lookup above; never walk attacker-supplied structures. A rule behind an earlier permission check only sees callers who passed it: report the blind spot, don't reorder the checks.
 - **One recording module** sets the caller's identity on the server span and emits the finding in references/telemetry.md. Recording never fails, blocks or changes a request.
-- **Every rule has a stable ID, a marker in server code naming it at each site that records it, and an entry in one server-side inventory** with its condition, its evidence and its intent.
+- **Every rule has a stable ID, a marker in server code naming it at each site that records it, and an entry in one server-side inventory** with its condition, its evidence and its intent. The same inventory lists the inputs handed off to add-deception and the chokepoints left uncovered, with their reasons, so add-deception and the next agent can read them.
 
 ### 5. Verify
 
@@ -92,11 +97,12 @@ Unless the user already told you to go ahead, show the plan and wait:
 4. **Real flows stay silent.** Replay every real client flow through the endpoints you touched, including the edge cases (retries, stale tabs, concurrent edits). Not one finding.
 5. **Robustness.** Make your own recording module fail in a test, through one fault point it exposes (not the OpenTelemetry API, which the instrumentation shares); responses don't change.
 6. **Names.** Every finding and span attribute uses the names in references/telemetry.md, and nothing else in the app uses them with another meaning.
-7. **Tests.** One test per rule that fires it and asserts the finding and the unchanged response, plus one that replays the real flows and asserts no findings.
+7. **Tests.** One test per rule that fires it and asserts the finding and the unchanged response, plus one that replays the real flows and asserts no findings. Where the suite's own infrastructure can't run here (a database it needs), write them anyway, verify live instead, and say which ran.
 
 ### 6. Report
 
 - The rule inventory, with file:line for each rule.
+- The attack-path map with every input's outcome: covered, handed off to add-deception, uncovered with its reason, or vulnerability (references/attack-paths.md).
 - For each rule, a command that triggers it.
 - The false-positive evidence: what each real client sends, and why it can't match.
 - Impossible states you found that the app doesn't reject (vulnerabilities to fix separately).
@@ -104,16 +110,9 @@ Unless the user already told you to go ahead, show the plan and wait:
 
 ## Keep the team in on it
 
-Every rule is real product code, and someone will eventually refactor the check it lives in. The inventory, the markers and the tests keep the detection alive. In a private repository, add a short note to the repo's agent instructions (`AGENTS.md` or `CLAUDE.md`; create `AGENTS.md` if there are none) naming the rules and asking agents to keep them when they change the surrounding validation.
-
-## Ground rules
-
-- **A false positive is a bug.** If a real client can produce it, it isn't a detection.
-- **Never change behavior.** Same responses, same acceptance, same side effects.
-- **Don't fix, report.** Missing validation is a vulnerability for the user to decide on.
-- **No secrets in events**, even when the caller submitted one.
-- **Stay in scope.** Ask before touching auth, infrastructure or CI.
+Every rule is real product code, and someone will eventually refactor the check it lives in. The inventory, the markers and the tests keep the detection alive. In a private repository, add a short note to the repo's agent instructions (`AGENTS.md` or `CLAUDE.md`; create `AGENTS.md` if there are none) naming the rules and asking agents to keep them when they change the surrounding validation. In a public repository the inventory and markers are visible too; a detection still works when it is known, because the check refuses anyway, so keep them, add no note, and tell the user.
 
 ## Reference files
 
+- **references/attack-paths.md**: the attack-path map and the test that divides its inputs between add-detection and add-deception, shared with add-deception.
 - **references/telemetry.md**: the OpenTelemetry prerequisite, the request context and records shared with add-auditing and add-deception, and the detection finding.

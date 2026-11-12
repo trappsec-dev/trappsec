@@ -1,6 +1,6 @@
 ---
 name: add-auditing
-description: Add an audit trail to an application the user owns. Records what people, services and agents do in the product: everyday activity on its core objects (creating, editing, deleting, reading sensitive records) and the security-relevant actions (sign-ins, role and permission changes, sharing, exports, API keys, admin settings) as domain events in the product's own terms, with who did it, on whose behalf, to what, from where and with what outcome, emitted as self-contained OpenTelemetry audit records. Use this whenever the user wants audit logs, a user activity log or history, an audit trail, compliance logging (SOC 2, ISO 27001, HIPAA), a customer-facing audit log API, or a record of authorization decisions. Not for debugging logs, metrics, tracing setup or detecting attacks.
+description: Add an audit trail to an application the user owns: what people, services and agents do in the product, from everyday changes to its core objects to sign-ins, permission changes, sharing and exports, as self-contained OpenTelemetry audit records in the product's own terms. Use this whenever the user wants audit logs, a user activity log or history, an audit trail, compliance logging (SOC 2, ISO 27001, HIPAA), a customer-facing audit log API, or a record of authorization decisions. Not for debugging logs, metrics, tracing setup or detecting attacks.
 license: MIT
 ---
 
@@ -18,9 +18,9 @@ The judgment calls are yours:
 
 | Property | In practice |
 |---|---|
-| Domain-native | Events are product actions with stable names, not routes. An analyst understands each one without reading code. |
-| Complete | Every success, denial and failure of an audited action produces exactly one event. No action escapes through a second code path. |
-| Truthful | An event says what really happened: no success recorded for an operation that rolled back. |
+| Domain-native | Records are product actions with stable names, not routes. An analyst understands each one without reading code. |
+| Complete | Every success, denial and failure of an audited action produces exactly one record. No action escapes through a second code path. |
+| Truthful | A record says what really happened: no success recorded for an operation that rolled back. |
 | Attributed | Actor, the person behind an impersonation or agent, credential, session, tenant and origin. |
 | Self-contained | Enough context (resource, participants, changes, consequence) that a reader needs no other source. |
 | Safe | No secrets, no content, minimal personal data. |
@@ -28,7 +28,7 @@ The judgment calls are yours:
 
 ## What to audit
 
-Two kinds of activity, both as audit events in the same schema.
+Two kinds of activity, both as audit records in the same schema.
 
 **What users do with the product.** Creating, editing, deleting, restoring, moving and archiving the product's core objects (the projects, documents, orders, records, tickets the product is about), changes of status and assignment, and reads of records that are sensitive in this product (a patient's chart, a payroll run, a customer's payment details). This is the trail that answers "who changed this, and when", for support, customers and investigations alike. Record what changed, not the content.
 
@@ -41,7 +41,7 @@ Two kinds of activity, both as audit events in the same schema.
 - administration: security and organization settings, billing and plan changes, deletions, restores;
 - impersonation and support access, and actions taken by automated agents.
 
-Every allow or deny on a sensitive operation is itself worth recording: the permission evaluated, the decision and the reason.
+The action's own record carries the authorization decision (`authz.permission`): an allow is its success, a deny its `denied`. A permission check that guards no audited action records nothing.
 
 Leave out what isn't a user's action: page views, searches and ordinary reads of non-sensitive data, housekeeping no user would ask about (cache refreshes, cleanup of expired rows), and the app's own internal calls. Those belong in product analytics or traces; if the user wants them too, raise the volume and cost first. A job that carries out an audited operation (settling orders, running an approved deploy) is a path into it and emits.
 
@@ -50,7 +50,7 @@ Leave out what isn't a user's action: page views, searches and ordinary reads of
 ### 0. Prerequisites and questions
 
 - **OpenTelemetry traces and logs are a prerequisite.** Check them first, as references/telemetry.md describes, including how the app samples traces. If they aren't in place, stop and tell the user.
-- **Ownership.** Confirm this is the user's own application.
+- **Ownership and scope.** Confirm this is the user's own application. Ask before touching auth, infrastructure, the telemetry pipeline or CI.
 - **Existing audit logging.** Find any audit tables, activity feeds or audit-style logs. Leave their records, names and storage exactly as they are: customers, reports and compliance evidence may depend on them. Emit the `audit.*` events alongside, from the same points in the code, and use the existing action names as the starting point for the registry. Replacing or migrating an existing trail is the user's decision, as a separate change.
 - **Questions.** Ask in one batch, only what the code cannot tell you:
   1. Who reads the trail: the security team, compliance, customers through an audit log API? Any regulation that dictates content or retention?
@@ -79,10 +79,11 @@ Unless the user already told you to go ahead, show the registry and wait:
 ### 4. Implement
 
 - **Emit where the decision is made**, in the domain layer, through one small module that builds each complete audit entry from the registry and the request context. Middleware only knows the request, not what it meant.
-- **Refusals raised before the domain code belong to the action too**: an authentication or membership dependency, a guard on a group of routes, method-level authorization, request validation, the CSRF check. Name the action beside the route or handler (a dependency parameter, an annotation, a class macro) so the guard, or the framework's central handler (Rails `rescue_from`, Spring's `AccessDeniedHandler` and `AuthenticationEntryPoint`), records the refusal, then returns or re-raises exactly what it did before. Where guards are mounted before any route matches (Express routers), keep a method-and-path table in the registry for them to look up. Refusals made before the action is known (an unparseable body) or before the app's code runs (a gateway's own check, a WAF, a 401 for a missing credential) go under Gaps, naming where their record lives.
+- **Refusals raised before the domain code belong to the action too**: an authentication or membership dependency, a guard on a group of routes, method-level authorization, request validation, the CSRF check. Name the action beside the route or handler (a dependency parameter, an annotation, a class macro) so the guard, or the framework's central error handler, records the refusal, then returns or re-raises exactly what it did before. Where guards run before any route matches (middleware mounted on a router), keep a method-and-path table in the registry for them to look up, consulted only for a request that matched a route: an unmatched path is the framework's 404, not an action's failure. Refusals made before the action is known (an unparseable body) or before the app's code runs (a gateway's own check, a WAF, a 401 for a missing credential) go under Gaps, naming where their record lives.
 - **Authorizers.** An authorizer function the team wrote is app code: it records its rejections under an `auth.*` action. Its cached results hide repeats and delay revocation: tell the user.
 - **Set the request context on the server span** as references/telemetry.md describes, reusing it if add-deception or add-detection already added it. The audit entry still carries its own copy of who and from where.
-- **Success is recorded only once the operation has committed** (an after-commit hook, or right after the transaction returns); a sensitive read, once the response is built. Denials and failures are recorded where they happen. Capture the request's span when the entry is built; an after-commit callback can run outside it. Model hooks fire for saves that changed nothing and from seeds and consoles, and miss nested records: record real changes with an origin (a request, a job, a script) only. ORM callbacks that run before commit are not emit points. Make the tests run after-commit hooks (Django: `captureOnCommitCallbacks(execute=True)`; Spring: tests without `@Transactional`).
+- **Success is recorded only once the operation has committed** (an after-commit hook, or right after the transaction returns); a sensitive read, once the response is built. Denials and failures are recorded where they happen. Capture the request's span when the entry is built; an after-commit callback can run outside it. Model hooks fire for saves that changed nothing and from seeds and consoles, and miss nested records: record real changes with an origin (a request, a job, a script) only. A change a person makes in a production console is audited like a script where the app can hook it; otherwise it goes under Gaps. ORM callbacks that run before commit are not emit points. A test wrapped in a transaction often never runs after-commit hooks: make the tests run them the way the test framework allows, and never move the emit point to make a test pass.
+- **Old values.** Where the handler or ORM no longer holds a field's old value when the change commits, read the row once before the operation, in the same request, and carry it to the emit point; if that read fails, record the change without `old`. A bulk action reads no old values. Take names from objects the operation already loaded. The trail may add a read only for old values and to tell another tenant's object from a deleted one; list each in the plan.
 - **Every path into an audited operation emits**, including background jobs and admin tools.
 - **Recording never fails, blocks or changes an operation.** If the trail must be guaranteed for an action (some compliance regimes require it), raise that with the user instead of deciding on your own.
 - **Nothing sensitive.** Secrets and content never enter an event.
@@ -90,13 +91,12 @@ Unless the user already told you to go ahead, show the registry and wait:
 ### 5. Verify
 
 1. **Project checks.** Lint, type checks and the app's existing tests pass.
-2. **Each action, each outcome.** For every action in the registry, trigger success, denial and failure where they exist. Each produces exactly one audit record that matches references/telemetry.md, with every required key, the right actor, credential, tenant, resource and outcome, and the request's trace and span IDs.
+2. **Each action, each outcome, in tests.** One test per action and outcome where they exist, asserting exactly one audit record that matches references/telemetry.md, with every required key, the right actor, credential, tenant, resource and outcome, and the request's trace and span IDs. Then run a few actions end to end, one per credential type, and find them in the backend.
 3. **No false successes.** An operation that fails or rolls back after the decision records a failure or nothing, never a success.
 4. **Every path.** The same action through each entry point (UI, API, job, admin tool) emits the same audit entry; bulk paths emit their own action.
-5. **Nothing leaks.** Search the emitted records and the exported spans from your test runs for secrets, tokens and content.
+5. **Nothing leaks.** Search the emitted records, the app's other log records and the exported spans from your test runs for secrets, tokens, content and the personal data the user keeps out.
 6. **Robustness.** Make your own recording module fail in a test, through one fault point it exposes (not the OpenTelemetry API, which the instrumentation shares); the operation behaves exactly as before.
 7. **Names.** Every record and span attribute uses the names in references/telemetry.md, and nothing else in the app uses them with another meaning.
-8. **Tests.** One test per action and outcome, asserting the audit entry.
 
 ### 6. Report
 
@@ -106,13 +106,6 @@ Unless the user already told you to go ahead, show the registry and wait:
 - Recommendations for the pipeline the user runs, which this skill doesn't change: audit records routed by their logger to their own pipeline without sampling, a durable queue, write-once storage as the system of record, a copy to the SIEM, and alerting on producers that go silent. A record lives only in memory until its batch is exported, so a crash right after commit loses it; a local collector narrows that window.
 - Existing logs that already carry what the trail must not (a typed login on a failed sign-in, a token in a URL): report them; don't change them.
 - Assumptions and residual risks.
-
-## Ground rules
-
-- **Never change behavior.** The audited operation works exactly as before.
-- **Never record secrets or content.**
-- **Truthful over complete.** An event must never claim something that didn't happen.
-- **Stay in scope.** Ask before touching auth, infrastructure, the telemetry pipeline or CI.
 
 ## Reference files
 

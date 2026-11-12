@@ -4,6 +4,60 @@ All notable changes to trappsec are documented here. The format follows [Keep a 
 
 ## Unreleased
 
+### Added: `add-telemetry` skill
+
+- **`add-telemetry`** sets up OpenTelemetry traces, logs and metrics in an app that has none, so the other three skills no longer stop there with nowhere to go. It starts the SDK in every entry point, before the framework loads and after any fork; adds the framework's HTTP, database and outbound-client instrumentation; forwards the app's existing logs with their trace IDs without changing the console output; leaves a request and response hook for the other skills' request context; and stays off until an OTLP endpoint is set. It verifies end to end against a local Collector or the user's backend, including with the backend down.
+- **One prerequisite list.** The list of what the other skills check for is now shared word for word with `add-telemetry` and kept identical by the CI check, so the setup finishes exactly where they start. Their stop message now offers `add-telemetry`.
+- **Field-tested on Django** (Horilla 2.3.1, Python SDK 1.45). The setup reached the prerequisite; the fixes from the run: logs go through `opentelemetry-instrumentation-logging`, attached after the app's logging configuration and to loggers that don't propagate; values the exporter can't encode are filtered; one shutdown, not two; environment resource attributes win over code; jobs get a span each; URLs with tokens are rewritten on the server span; exclusions are tested against the full URL; verification runs through the production server and works without a Collector; and the shared text no longer says Python's SDK reads `OTEL_LOG_LEVEL` or that its logging bridge can't set an event name. A second run on a fresh clone confirmed each of these, and its fixes are in too: the bridge is named in the app's own logging configuration for loggers that don't propagate, access loggers are left out because they carry raw URLs, token values are scrubbed from outbound spans and the framework's log lines as well, every management command gets a span, `OTEL_*` values from an `.env` file are read after it loads, and an installed vendor SDK that doesn't trace is no reason to stop.
+- **No stack table.** `add-telemetry` names no stack's packages or APIs, so an unlisted or in-house stack gets the same result as a common one. Its first field test showed why: the Python notes were wrong in four places on their first real use, and the checks, not the notes, caught each one. The skill now has the agent research the stack from the installed SDK code first and the project's current documentation second, answering a fixed list of questions in the plan; turns each lesson from the field tests into a rule that holds on every stack; and makes the verification checks the authority over any example.
+- **No stack table in the shared text either.** The telemetry core shared by `add-auditing`, `add-deception` and `add-detection` replaced its per-stack table (Python, Node, Go, Ruby, Java, Lambda) with "Learning the stack": the questions each skill answers from the installed SDK code and the project's documentation (where to hold the server span, where code runs once the response is known, which API emits an event, map values, matching versions, attribute names, the SDK's own errors, function platforms), each proven by the end-to-end probe. The pitfalls the table warned of, such as a second copy of the API package that silently drops every record, are kept as general rules.
+- **All four skills field-tested on Node** (Ghost 6.76, OpenTelemetry JS SDK 3.x), run in order on one checkout and exporting to a real backend. Each reached its checks. The fixes from the runs:
+  - **`add-telemetry`:** it chooses between the SDK's starter and hand-built providers, and wires the `OTEL_*` variables hand-built providers ignore. A hook's name doesn't say when it runs. The exporter's own requests are left out of outbound instrumentation. Job and command spans start where those run. Code that exits the process itself is flushed before, or reported. Access lines sharing a logger with other lines are filtered by shape. Development stand-ins that log message text (a mail transport) stay out of the bridge. Pinning follows the app's catalog and release-age rules. The leak check covers personal data.
+  - **Shared text:**
+    - The forged-address check now uses an address the app doesn't trust; under loopback trust, `127.0.0.2` is trusted too.
+    - The record body is a label true for every outcome.
+    - Personal data the user keeps out is handled like a secret.
+    - An existing request-context module is checked for missing attributes.
+    - "Learning the stack" adds two questions: what a hook receives, and constructor shapes that silently build nothing.
+    - One tripwire may watch several fields.
+  - **`add-auditing`:** the method-and-path table only covers requests that matched a route. One read before the operation supplies old values the ORM lost. An integration's own ID is the actor. The IDs-only rule names whom it covers.
+  - **`add-detection`:**
+    - Two accounts in one browser are checked before a "never shown" rule counts.
+    - The tell-apart lookup runs on every rejection of its kind, so response time doesn't reveal which IDs exist.
+    - Shared checks that also filter lists aren't recorded inside the check.
+    - Hand-offs live in the inventory.
+    - Public repositories keep their markers.
+    - Untestable suites are verified live.
+  - **`add-deception`:**
+    - A honey field is no longer removed from the request, because removing it made it answer differently from other unknown fields.
+    - Where authentication is one bundle with a post-auth rejection, the request is marked before it and recorded at the response.
+    - Public apps weigh decoy routes against upstream behavior.
+    - A value the handler silently drops is a honey value.
+    - Parity checks allow for a random error ID.
+    - Tripwire tests turn recording on.
+- **A review pass for simplicity, reliability and cost.**
+  - **The worked example follows the rules.** Its honey field is now one no client sends, left in the request, and its decoy's "not enabled" denial matches the app's real routes.
+  - **Telemetry setup:**
+    - Shutdown is bounded, and the backend-down check includes a backend that never answers.
+    - Only the signals with an endpoint get an exporter.
+    - A failed start under a set endpoint logs one warning.
+  - **Auditing:**
+    - The authorization decision is part of the action's own record, not a second one.
+    - The after-commit test rule says why tests miss commits.
+  - **Detection and deception overlap.** A field an endpoint refuses is add-detection's, not a honey field.
+  - **`scan_bundle.mjs`** no longer fails on app vocabulary such as `ghost`.
+  - **`compare_responses.mjs`:**
+    - It gains `--timeout`, `--insecure` and `--ignore-json`.
+    - It compares `Location`.
+  - **Shared text:**
+    - It drops its remaining stack names.
+    - URLs are scrubbed per key, the same as `add-telemetry`.
+    - The client-address check can run as a unit test.
+    - Research reads the docs first and confirms version-specific answers in code.
+    - The plan lists only the answers that shaped a decision.
+    - Finding severity and intents move to the findings text, so `add-auditing` no longer carries them.
+  - **Restated rules cut.** Each rule now lives in one place, about 80 lines across `add-deception` and the Ground rules sections.
+
 ### Added: `add-detection` and `add-auditing` skills; OpenTelemetry is required
 
 - **`add-detection`** turns the app's existing validation and authorization into detections: checks that reject inputs and states no real client can produce report who tried, without changing any response. Values the real UI never offers moved here from `add-deception`.
@@ -34,7 +88,10 @@ The detection and auditing skills were applied to four apps (FastAPI, Express, G
 
 - **No library needed.** The skill now builds decoy routes as real routes in the app's own router, copying the authentication, loaders, permission checks and validation of the route beside them, and adds honey-field checks inside real handlers. Every hit is recorded as one standard OpenTelemetry finding (`trappsec.deception.decoy_hit`, `trappsec.deception.field_hit`), using the telemetry core described above. It works on any stack.
 - **Why.** Probing the same decoys built both ways in nine framework setups, trappsec traps still gave themselves away on 7–19 probes per framework after every workaround (unknown IDs, owner accounts, validation order, headers, body bytes, method handling), and native decoys on none. In end-to-end runs, native changes also carried fewer safety risks.
-- **Design guidance from black-box testing.** Honey fields and value rules were never detected from behavior, while decoy routes were found by elimination, so portfolios now lead with honey fields and keep decoy routes few and gated by checks real routes share.
+- **Design guidance from black-box testing.** Honey fields and value rules were never detected from behavior, while decoy routes were found by elimination, so decoy routes are gated by checks real routes share, hidden among real refusals and varied against each other.
+- **Placement follows attack paths, not a portfolio size.** The skill maps each attacker's route through the app (orient, escalate, reach, act or persist), lists the chokepoints at each stage, and places a tripwire at every one where a tripwire passes the bar. A chokepoint is left uncovered only for a stated reason about effectiveness, and the plan and report list those. The fixed counts (4–8 tripwires, 2–4 honey fields, one decoy route in a small API) are gone: discoverability is handled by camouflage, not by placing fewer. Every decoy route needs a lure or a strong inference from a route the attacker has already used (another method on it, the collection behind items whose IDs they hold, its previous version); a route found only by guessing a name is not placed.
+- **One attack-path map for detection and deception.** Both skills now map the attacker's routes and chokepoints from one shared reference (`attack-paths.md`, kept identical by the CI check) and divide each input by what the app does with it today: one it refuses goes to `add-detection`, one it ignores goes to `add-deception`, and one it accepts though no real client sends it is reported as a vulnerability. Each report lists every input's outcome, including what it handed to the other skill, so a chokepoint can't fall between them. When both run, detection runs first.
+- **Detection covers APIs whose clients you can't read.** For a mobile build or other client without source, `add-detection` now takes its evidence from what the server ever hands that account (the IDs it lists, the values it returns), so a request for a record the account was never shown still qualifies. A missing client source no longer takes the whole API off the map.
 - **Sharper verification.** `compare_responses.mjs` now uses raw HTTP and compares header presence, case and order, byte-identical bodies (`--identical`), JSON key order and values, and interleaved latency. `scan_bundle.mjs` also flags revealing phrases near lures and revealing words in shipped file names.
 
 ### Changed: minimum supported versions raised

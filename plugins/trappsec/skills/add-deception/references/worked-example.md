@@ -15,13 +15,15 @@ House-style dossier, from recon:
   - anonymous: `401 {"error":{"type":"unauthenticated","detail":"Sign in to continue."}}`
   - forbidden: `403 {"error":{"type":"forbidden","detail":"You need the owner role for this."}}`
   - unknown book: `404 {"error":{"type":"not_found","detail":"Book not found."}}`
+  - a module not enabled for the firm: `403 {"error":{"type":"forbidden","detail":"Bank feeds aren't enabled for this firm yet."}}`
+- **Unreleased modules:** bank feeds and payroll sync have real routes that answer every caller, owners included, with that "not enabled for this firm" denial until support enables the module. A self-serve owner sees it on both.
 - **Pipeline:** cookie sessions via global middleware. Each book route runs `requireSession`, `loadBook` (404 for books the caller isn't a member of), `requireRole(...)`, then `validate(schema)`. Each book has roles `owner | accountant | viewer`, loaded into `req.session.memberships`. Firms sign up self-serve, so anyone can own a book.
 - **Frontend:**
   - an axios instance `http` in `src/lib/http.ts`;
   - per-domain API objects (`exportsApi`, `booksApi`) in `src/api/`;
   - react-query hooks and i18next;
   - homegrown flags: `useFlag(name)` reads `session.flags`, which lists only enabled flags; unknown names return false;
-  - the book settings form sends back the fetched book object with edits (`{...book, name}`).
+  - the book settings form sends only the fields it edits (`{ name, fiscalYearStart }`).
 - **History:** per-account CSV exports shipped last year. An issue asks for "full ledger export per book".
 - **Telemetry:** the OpenTelemetry SDK is initialized in `server/src/telemetry`, exporting traces and logs over OTLP, with HTTP server instrumentation and the default always-on sampler.
 - **Deployment:** behind an AWS load balancer; the app already sets `app.set('trust proxy', 1)`, so `req.ip` is the client. Requests carry an `X-Request-Id` the access log records.
@@ -49,7 +51,7 @@ export const getConfig = () => fetch('/admin/config');
 Why it fails:
 - **Generic path.** `/admin/config` is on every scanner wordlist, so it collects anonymous noise. It also fits nothing in a `/api/v3/books/...` API.
 - **No chain.** It skips `requireSession`, so it answers anonymous callers with 200 where every real route answers 401. One unauthenticated request separates it from the real API.
-- **Too good to be true.** `200 {"debug": true}` reads as bait.
+- **Too good to be true.** `200 {"debug": true}` reads as planted.
 - **Foreign field.** Ledgerly models permissions as roles; `is_admin` appears nowhere else in it.
 - **No identity, no structure.** A bare `console.log` with no user, no intent and a revealing message.
 - **The lure undermines itself:**
@@ -66,12 +68,12 @@ Why it fails:
 - **Think:** "Bulk export exists but is hidden behind a client-side flag; maybe the server only checks the flag."
 - **Do:** call the endpoint, or flip the flag. Either sends an authenticated POST → alert (`data_exfiltration`).
 - **Chain copied:** `close-periods`, the owner-only action beside it: `requireSession`, then the tripwire, `loadBook`, `requireRole('owner')`, `validate(...)`.
-- **Responses:** every probe gets what `close-periods` gives it (401, 404 for foreign books, 403 "You need the owner role for this." for accountants and viewers, 422 for bad bodies). An owner, who passes every check, gets the final denial: `403 forbidden` "Ledger exports aren't enabled for this firm yet." That makes sense to an owner, and it uses an error type the app already returns.
+- **Responses:** every probe gets what `close-periods` gives it (401, 404 for foreign books, 403 "You need the owner role for this." for accountants and viewers, 422 for bad bodies). An owner, who passes every check, gets the final denial: `403 forbidden` "Ledger exports aren't enabled for this firm yet." That is the denial owners already get from the bank-feeds and payroll-sync routes, so it makes sense to an owner and isn't something only the decoy says.
 
 ### 2. Honey field: `myRole` on the book update
 
-- **Cover story:** none needed. `GET /api/v3/books/:bookId` already returns `myRole`, the UI uses it for gating, and the settings form echoes it back. The server derives roles from memberships and never reads `myRole` on PATCH. The bait already exists; extrapolate from it.
-- **Check:** at the top of `PATCH /api/v3/books/:bookId`, after `requireSession`: compare `myRole` with the caller's real role from the session. Owners saving settings echo their own role and record nothing. An accountant who sends `"myRole": "owner"` records an alert (`privilege_escalation`). The settings schema ignores unknown fields, so the check removes `myRole` after recording, and the endpoint behaves exactly as before.
+- **Cover story:** none needed. `GET /api/v3/books/:bookId` already returns `myRole`, and the UI uses it for gating. The settings form sends only the fields it edits, so no real client ever sends `myRole`, and the server derives roles from memberships and never reads it on PATCH. The bait already exists; extrapolate from it.
+- **Check:** at the top of `PATCH /api/v3/books/:bookId`, after `requireSession`: any `myRole` in the body records an alert (`privilege_escalation`), whatever its value. Because no real client sends the field, there is no stale value to allow for. The settings schema ignores unknown fields, so the request is left as it is: `myRole` is dropped like any other unknown field, and the endpoint behaves exactly as before.
 
 ### Chain
 
@@ -79,20 +81,19 @@ For accountants and viewers, the decoy's 403 says the owner role is required. Th
 
 ### Code
 
-A new `server/src/security/` module, next to the app's other telemetry code, does two things. Its `setRequestContext` middleware runs right after `requireSession` on every route and sets the caller's identity on the request's server span. Its route middleware records hits as findings through a dedicated `ledgerly.security` logger: `recordProbe` for the decoy and `checkField` for the honey field, both keyed by inventory ID.
+A new `server/src/security/` module, next to the app's other telemetry code, does three things. Its `setRequestContext` middleware runs right after `requireSession` on every route and sets the caller's identity on the request's server span. Its route middleware records hits as findings through a dedicated `ledgerly.security` logger: `recordHit` for the decoy and `checkField` for the honey field, both keyed by inventory ID. Its `tripwires.js` is the inventory.
 
 ```js
 // server/src/routes/books.js (existing router)
 router.post('/:bookId/close-periods', requireSession, loadBook, requireRole('owner'), validate(closePeriodSchema), closePeriods);
 
-// Security tripwire: full-ledger export, dark-launched behind ledgerExportsBeta and never enabled. See docs/security/tripwires.md.
-router.post('/:bookId/ledger-exports', requireSession, recordProbe('books.ledger-exports'), loadBook, requireRole('owner'),
+// Security tripwire: full-ledger export, dark-launched behind ledgerExportsBeta and never enabled. See server/src/security/tripwires.js.
+router.post('/:bookId/ledger-exports', requireSession, recordHit('books.ledger-exports'), loadBook, requireRole('owner'),
   validate(ledgerExportSchema),
   (req, res, next) => next(new HttpError(403, 'forbidden', "Ledger exports aren't enabled for this firm yet.")));
 
-// Security tripwire: myRole is echoed by the settings form; roles come from memberships. See docs/security/tripwires.md.
-router.patch('/:bookId', requireSession,
-  checkField('books.my-role', 'myRole', (req) => req.session.memberships?.[req.params.bookId]),
+// Security tripwire: myRole is returned by GET but never sent by any client; roles come from memberships. See server/src/security/tripwires.js.
+router.patch('/:bookId', requireSession, checkField('books.my-role', 'myRole'),
   loadBook, requireRole('owner'), validate(bookSettingsSchema), updateBook);
 ```
 
@@ -120,31 +121,7 @@ An accountant's PATCH with `"myRole": "owner"` gets the app's normal 403 and pro
 }
 ```
 
-Who and from where are on the server span with the same trace and span IDs, which the backend joins to the finding:
-
-```json
-{
-  "kind": "SERVER",
-  "name": "PATCH /api/v3/books/:bookId",
-  "attributes": {
-    "http.request.method": "PATCH",
-    "http.route": "/api/v3/books/:bookId",
-    "url.path": "/api/v3/books/bk_8Hq2",
-    "http.response.status_code": 403,
-    "client.address": "198.51.100.23",
-    "user_agent.original": "Mozilla/5.0 ...",
-    "user.id": "usr_41xQ",
-    "user.name": "sam.okafor",
-    "user.roles": ["accountant"],
-    "tenant.id": "firm_9kd2",
-    "session.id": "sess_7d1c",
-    "credential.type": "session",
-    "credential.id": "sess_7d1c",
-    "actor.type": "user",
-    "security.flagged": true
-  }
-}
-```
+Who and from where (the user, their role in that book, the session, `client.address`) are on the request's server span, with the same trace and span IDs and `security.flagged` set, as references/telemetry.md describes; the backend joins the two.
 
 ```ts
 // src/api/exports.ts (existing module; one method added, same style as its neighbors)
@@ -181,16 +158,18 @@ const createLedgerExport = useMutation({ mutationFn: (format: ExportFormat) => e
   - viewer and accountant: identical 403, plus an alert carrying the user and their role in that book;
   - owner of their own book: the final denial on the decoy, 201 on the sibling, plus an alert.
 - **Honey field.**
-  - PATCH as owner with the echoed form: no event, same response as before.
+  - PATCH as owner with the settings form's exact request: no event, same response as before.
   - PATCH as accountant with `myRole: "owner"`: an alert, the same 403 as before, and the role unchanged.
+  - PATCH as owner with `myRole: "owner"`: an alert, the same 200 as before, and `myRole` still dropped.
   - An unrelated unknown field is ignored exactly like `myRole`.
 - **Inert.** A test hits the decoy as each role and asserts no export job, no file and no change to the book.
 - **Robust.** A test makes the security logger throw; every response is unchanged.
 - **Attribution and schema.** Each finding matches references/telemetry.md and shares its trace and span IDs with the request's server span, which names the user, their role in that book, the firm, the session and the credential. A forged `X-Forwarded-For` didn't change the recorded IP.
 - **Parity.** `compare_responses.mjs` against `close-periods` reported no differences: anonymous and with an expired cookie (`--identical`), and as a viewer.
-- **Elimination.** As a self-serve owner, every other book endpoint can be made to work. `ledger-exports` can't, but it is gated by the same owner check testers see failing on `close-periods`, and it sits behind a client flag like the app's other unreleased features.
+- **Elimination.** As a self-serve owner, every other book endpoint can be made to work except the bank-feeds and payroll-sync routes. `ledger-exports` can't either, and it refuses owners with the same "not enabled for this firm" denial those real routes give, behind the same owner check testers see failing on `close-periods`.
 - **Survival.** `scan_bundle.mjs --dir dist --lure /ledger-exports --lure ledgerExportsBeta`: both found, no findings.
 - **False positives.**
   - `ledgerExportsBeta` is not in the flag config, and `session.flags` lists only enabled flags, so its absence looks like any other disabled flag. Its name is recorded in the inventory so nobody reuses it.
   - `createLedgerExport` has exactly one call site, behind the flag.
-- **Team.** `docs/security/tripwires.md` lists both tripwires with their files and tests. AGENTS.md names `exportsApi.createLedgerExport`, the flag and the two routes as security sensors not to remove, call or complete. CODEOWNERS sends `server/src/security/`, `server/src/routes/books.js` and the two frontend files to the security team.
+  - The settings form and the e2e tests, the endpoint's only clients, build their PATCH bodies without `myRole`.
+- **Team.** `server/src/security/tripwires.js` lists both tripwires with their files and tests. AGENTS.md names `exportsApi.createLedgerExport`, the flag and the two routes as security tripwires not to remove, call or complete. CODEOWNERS sends `server/src/security/`, `server/src/routes/books.js` and the two frontend files to the security team.

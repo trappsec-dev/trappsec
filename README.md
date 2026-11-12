@@ -39,10 +39,13 @@ trappsec can integrate directly into your existing workflows. Events are written
 
 ### Let Your Coding Agent Do It
 
-Three agent skills turn your coding agent into a security engineer for your own app. Each writes its changes in your app's own code, adds no dependency, works on any stack, and reports through **OpenTelemetry**, which the app must already have set up with traces and logs. All three share one schema: the caller's identity is set once on each request's server span, findings from deception and detection carry only the rule's facts and join to it, and audit records are complete on their own.
+Three agent skills turn your coding agent into a security engineer for your own app. Each writes its changes in your app's own code, adds no dependency, works on any stack, and reports through **OpenTelemetry**, which the app must already have set up with traces and logs. A fourth, `add-telemetry`, sets that up when it's missing. All three share one schema: the caller's identity is set once on each request's server span, findings from deception and detection carry only the rule's facts and join to it, and audit records are complete on their own.
 
 * **`add-deception`** designs honey fields and decoy routes that match your API's conventions, built from the same authentication, loaders and validation as the routes beside them, plus frontend lures that look like your team wrote them. It verifies that every tripwire fires and that no real user can ever trigger one.
 * **`add-detection`** turns validation your app already does into detections: it finds the checks that reject inputs and states no real client can produce (values the UI never offers, totals that disagree with the server, steps out of order, another tenant's IDs) and makes each one report who tried, without changing any response.
+
+  The two plan from one map of how an attacker moves through your app and split it by what the app does with each input today: what it already refuses becomes a detection, what it ignores becomes a tripwire, and what it wrongly accepts is reported as a vulnerability.
+* **`add-telemetry`** sets up OpenTelemetry traces, logs and metrics in every process your app runs, exported over OTLP and off until you set an endpoint. It's the one skill that adds dependencies: the OpenTelemetry SDK and the official instrumentations for your framework, database and HTTP clients. It finishes where the other three start.
 * **`add-auditing`** records what users do in your product, from everyday edits to its core objects to security-relevant actions (sign-ins, role changes, sharing, exports, API keys, settings), as self-contained audit records with actor, on whose behalf, tenant, origin, resource, changes and outcome.
 
 **Claude Code:**
@@ -52,7 +55,7 @@ Three agent skills turn your coding agent into a security engineer for your own 
 /plugin install trappsec@trappsec
 ```
 
-Then ask it to *add deception*, *add detection* or *add audit logging* to your app, or run `/trappsec:add-deception`, `/trappsec:add-detection` or `/trappsec:add-auditing`.
+Then ask it to *add OpenTelemetry*, *add deception*, *add detection* or *add audit logging* to your app, or run `/trappsec:add-telemetry`, `/trappsec:add-deception`, `/trappsec:add-detection` or `/trappsec:add-auditing`.
 
 **Other agents** that support [Agent Skills](https://agentskills.io): copy the skills in [`plugins/trappsec/skills`](plugins/trappsec/skills) into your agent's skills directory.
 
