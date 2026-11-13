@@ -35,6 +35,12 @@ All notable changes to trappsec are documented here. The format follows [Keep a 
     - A value the handler silently drops is a honey value.
     - Parity checks allow for a random error ID.
     - Tripwire tests turn recording on.
+- **`add-auditing` now proves every path is covered, instead of only saying it must be.** On Horilla the web views were audited and the REST API, a parallel app writing the same objects through its own handlers, recorded nothing; deleting a leave request was audited on no path. Every field test had graded the records, not the coverage, so none caught it. The fixes:
+  - Reconnaissance finds every handler that writes each audited object by searching for the writes, across every surface, and notes whether the surfaces share a domain layer.
+  - The plan has one row per action per entry point, keeps a row for each path it won't cover with the reason, and gives a per-surface count of writing handlers against covered ones.
+  - Where each surface's handlers decide on their own, each handler is an emit point, or the decision is extracted into one function, which the user chooses.
+  - Each core object's create, change and delete are audited or listed under Gaps.
+  - Check 4 is a test per action per entry point, followed by a repeat of the inventory search; the report gives the coverage count, which field tests now compare as well as the records.
 - **A review pass for simplicity, reliability and cost.**
   - **The worked example follows the rules.** Its honey field is now one no client sends, left in the request, and its decoy's "not enabled" denial matches the app's real routes.
   - **Telemetry setup:**

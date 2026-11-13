@@ -30,7 +30,7 @@ The judgment calls are yours:
 
 Two kinds of activity, both as audit records in the same schema.
 
-**What users do with the product.** Creating, editing, deleting, restoring, moving and archiving the product's core objects (the projects, documents, orders, records, tickets the product is about), changes of status and assignment, and reads of records that are sensitive in this product (a patient's chart, a payroll run, a customer's payment details). This is the trail that answers "who changed this, and when", for support, customers and investigations alike. Record what changed, not the content.
+**What users do with the product.** Creating, editing, deleting, restoring, moving and archiving the product's core objects (the projects, documents, orders, records, tickets the product is about), changes of status and assignment, and reads of records that are sensitive in this product (a patient's chart, a payroll run, a customer's payment details). This is the trail that answers "who changed this, and when", for support, customers and investigations alike. Record what changed, not the content. For each core object, creating, changing and deleting it are each audited, or listed under Gaps with the reason: auditing an object's approvals says nothing about who deleted it.
 
 **Actions a security team or a customer's admin would ask about:**
 - authentication: sign-in success and failure, sign-out, MFA and password changes, session revocation;
@@ -58,7 +58,9 @@ Leave out what isn't a user's action: page views, searches and ordinary reads of
 
 ### 1. Reconnaissance
 
-- **Where decisions are made.** Find the domain code that grants roles, shares things, deletes, exports and changes settings, not the routes that call it. Note every path into each operation: UI, API, background jobs, framework admin sites (Django admin, Rails admin) and their bulk actions, management commands and scripts. Built-in and developer-only commands (creating a superuser, seeding data) go under Gaps.
+- **Where decisions are made.** Find the domain code that grants roles, shares things, deletes, exports and changes settings, not the routes that call it.
+- **Every path in, found by search.** For each audited object, search the whole codebase for code that writes it (saves, deletes, creates, updates, bulk updates, serializer saves, raw SQL on its table) and list every handler that reaches one, by surface: web views, each API and API version, background jobs, framework admin sites (Django admin, Rails admin) and their bulk actions, management commands and scripts. Don't stop at the surface you started from: a second API, an older API version or a mobile backend often writes the same objects through its own handlers. This inventory, not a reading of the main flow, is what the plan covers. Built-in and developer-only commands (creating a superuser, seeding data) go under Gaps.
+- **Is there one domain layer?** Note whether the surfaces call shared functions that make the decision, or each handler does its own checks and writes. The second shape decides how much the change touches (step 4).
 - **Authorization.** How permissions are evaluated, and where allows and denies happen.
 - **Who and from where.** Where the authenticated principal lives (user, tenant, credential, session, impersonation, agents), and how the client IP reaches the app through its proxies.
 - **Vocabulary.** The product's own names for things, from the UI, docs and code.
@@ -71,20 +73,22 @@ Leave out what isn't a user's action: page views, searches and ordinary reads of
 
 ### 3. Present the plan
 
-Unless the user already told you to go ahead, show the registry and wait:
+Unless the user already told you to go ahead, show the registry and wait. It has one row per action per entry point from the inventory, so a surface that won't be covered is visible before the user approves:
 
-| Action (event name) | Operation | Emitted at | Outcomes | Records | Never records |
+| Action (event name) | Entry point | Emitted at | Outcomes | Records | Never records |
 |---|---|---|---|---|---|
+
+An entry point you won't cover keeps its row, with the reason in place of the emit point. Under the table, give the count per surface: handlers that write audited objects, and how many of them the plan covers. If covering a surface is large (a parallel API with hundreds of handlers), say so here and let the user choose; never leave it out of the plan.
 
 ### 4. Implement
 
-- **Emit where the decision is made**, in the domain layer, through one small module that builds each complete audit entry from the registry and the request context. Middleware only knows the request, not what it meant.
+- **Emit where the decision is made**, in the domain layer, through one small module that builds each complete audit entry from the registry and the request context. Middleware only knows the request, not what it meant. Where there is no domain layer and each surface's handlers decide and write on their own, every one of those handlers is an emit point. Either emit in each, or extract the shared decision into one function they all call; extracting changes the app's structure, so ask the user which.
 - **Refusals raised before the domain code belong to the action too**: an authentication or membership dependency, a guard on a group of routes, method-level authorization, request validation, the CSRF check. Name the action beside the route or handler (a dependency parameter, an annotation, a class macro) so the guard, or the framework's central error handler, records the refusal, then returns or re-raises exactly what it did before. Where guards run before any route matches (middleware mounted on a router), keep a method-and-path table in the registry for them to look up, consulted only for a request that matched a route: an unmatched path is the framework's 404, not an action's failure. Refusals made before the action is known (an unparseable body) or before the app's code runs (a gateway's own check, a WAF, a 401 for a missing credential) go under Gaps, naming where their record lives.
 - **Authorizers.** An authorizer function the team wrote is app code: it records its rejections under an `auth.*` action. Its cached results hide repeats and delay revocation: tell the user.
 - **Set the request context on the server span** as references/telemetry.md describes, reusing it if add-deception or add-detection already added it. The audit entry still carries its own copy of who and from where.
 - **Success is recorded only once the operation has committed** (an after-commit hook, or right after the transaction returns); a sensitive read, once the response is built. Denials and failures are recorded where they happen. Capture the request's span when the entry is built; an after-commit callback can run outside it. Model hooks fire for saves that changed nothing and from seeds and consoles, and miss nested records: record real changes with an origin (a request, a job, a script) only. A change a person makes in a production console is audited like a script where the app can hook it; otherwise it goes under Gaps. ORM callbacks that run before commit are not emit points. A test wrapped in a transaction often never runs after-commit hooks: make the tests run them the way the test framework allows, and never move the emit point to make a test pass.
 - **Old values.** Where the handler or ORM no longer holds a field's old value when the change commits, read the row once before the operation, in the same request, and carry it to the emit point; if that read fails, record the change without `old`. A bulk action reads no old values. Take names from objects the operation already loaded. The trail may add a read only for old values and to tell another tenant's object from a deleted one; list each in the plan.
-- **Every path into an audited operation emits**, including background jobs and admin tools.
+- **Every path into an audited operation emits**: every entry point in the inventory, including background jobs and admin tools, or it stays in the plan's table with its reason.
 - **Recording never fails, blocks or changes an operation.** If the trail must be guaranteed for an action (some compliance regimes require it), raise that with the user instead of deciding on your own.
 - **Nothing sensitive.** Secrets and content never enter an event.
 
@@ -93,14 +97,15 @@ Unless the user already told you to go ahead, show the registry and wait:
 1. **Project checks.** Lint, type checks and the app's existing tests pass.
 2. **Each action, each outcome, in tests.** One test per action and outcome where they exist, asserting exactly one audit record that matches references/telemetry.md, with every required key, the right actor, credential, tenant, resource and outcome, and the request's trace and span IDs. Then run a few actions end to end, one per credential type, and find them in the backend.
 3. **No false successes.** An operation that fails or rolls back after the decision records a failure or nothing, never a success.
-4. **Every path.** The same action through each entry point (UI, API, job, admin tool) emits the same audit entry; bulk paths emit their own action.
+4. **Every path, in tests.** One test per action per entry point in the plan (UI, each API, job, admin tool), asserting the same audit entry as check 2; bulk paths emit their own action. Then repeat the inventory search: every handler that writes an audited object either emits or is listed under Gaps. A handler added since the plan counts too.
 5. **Nothing leaks.** Search the emitted records, the app's other log records and the exported spans from your test runs for secrets, tokens, content and the personal data the user keeps out.
 6. **Robustness.** Make your own recording module fail in a test, through one fault point it exposes (not the OpenTelemetry API, which the instrumentation shares); the operation behaves exactly as before.
 7. **Names.** Every record and span attribute uses the names in references/telemetry.md, and nothing else in the app uses them with another meaning.
 
 ### 6. Report
 
-- The action registry, with file:line for each emission point.
+- The action registry, with file:line for each emission point, one per entry point.
+- Coverage per surface: handlers that write audited objects, and how many emit.
 - What each event records, and what it deliberately leaves out.
 - Gaps: operations you couldn't audit and why.
 - Recommendations for the pipeline the user runs, which this skill doesn't change: audit records routed by their logger to their own pipeline without sampling, a durable queue, write-once storage as the system of record, a copy to the SIEM, and alerting on producers that go silent. A record lives only in memory until its batch is exported, so a crash right after commit loses it; a local collector narrows that window.
