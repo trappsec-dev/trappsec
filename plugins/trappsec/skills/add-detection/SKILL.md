@@ -87,7 +87,7 @@ Then list, from the attack-path map, the inputs handed off to add-deception and 
 - **Never add a new rejection, and never change what the app accepts.**
 - **Evaluate only what the check already evaluates**, values already in hand, and the one lookup above; never walk attacker-supplied structures. A rule behind an earlier permission check only sees callers who passed it: report the blind spot, don't reorder the checks.
 - **One recording module** sets the caller's identity on the server span and emits the finding in references/telemetry.md. Recording never fails, blocks or changes a request.
-- **Every rule has a stable ID, a marker in server code naming it at each site that records it, and an entry in one server-side inventory** with its condition, its evidence and its intent. The same inventory lists the inputs handed off to add-deception and the chokepoints left uncovered, with their reasons, so add-deception and the next agent can read them.
+- **Every rule has a stable ID, a marker in server code naming it at each site that records it, and an entry in one server-side inventory** with its label, condition, evidence, detector, intent and severity. The same inventory lists the inputs handed off to add-deception and the chokepoints left uncovered, with their reasons, so add-deception and the next agent can read them.
 
 ### 5. Verify
 

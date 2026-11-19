@@ -29,7 +29,7 @@ If any of these is missing, stop. Tell the user what you found and that this ski
 
 The names these skills define are the same in every app, so one query works across services:
 - audit records: event names `audit.<area>.<action>`, with the entry in one attribute, `audit`;
-- findings: one event name, `security.finding`, with `security.finding.kind` saying which kind fired and the details under `security.finding.*`, beside OpenTelemetry's `security_rule.*`;
+- findings: every finding marked `log.type` = `detection`, with the rule's stable ID as its event name, `detector`, `intent` and `severity` saying what fired, and the details under `security.finding.*`;
 - the request context on the server span: `tenant.id`, `credential.type`, `credential.id`, `actor.type`, `actor.id` and `security.flagged`, beside OpenTelemetry's `user.*`, `session.id` and `client.address`.
 
 Use OpenTelemetry's own attributes as they are, and never invent new ones in its namespaces. Before writing a name, search the app and its telemetry for it: if the app already emits `audit.*` events or sets one of these attributes with another meaning, stop and ask the user rather than mix two meanings under one name. Name the recording code like the app's other observability code.
@@ -42,9 +42,9 @@ Each fact is said once, where it is known.
 |---|---|---|
 | Request context, on the server span | Who called and from where | Once per request |
 | Audit record, a log record | The complete audit entry: who did what, for whom, to what, from where, with what result | When an audited action succeeds, is denied or fails |
-| Finding, a log record | Which deception or detection rule fired, on what, plus the tenant and account as routing keys | When a rule fires |
+| Finding, a log record | Which deception or detection rule fired, on what, and the actor's keys a backend groups it by | When a rule fires |
 
-The backend joins each finding to its request's context by trace and span ID. Audit records stand on their own, without the join, the span or sampling. A request carrying several actions or findings (a GraphQL document, a batch) emits one record for each, all on the request's span.
+The backend joins each finding to its request's context by trace and span ID, and groups findings by the actor keys each one carries. Audit records stand on their own, without the join, the span or sampling. A request carrying several actions or findings (a GraphQL document, a batch) emits one record for each, all on the request's span.
 
 ### Request context
 
@@ -80,7 +80,7 @@ If the app's own setting is wrong, report it and its fix rather than changing pr
 
 ### Log records
 
-- **One record per occurrence, emitted as an event**, with the event name in the record's event-name field (never an `event.name` attribute) and no dynamic values in it.
+- **One record per occurrence, emitted as an event**, with the event name in the record's event-name field (never an `event.name` attribute) and no dynamic values in it: an audit record's is its action, a finding's is its rule's stable ID from server code.
 - **A dedicated logger per family**, named like the app's others: audit records from one (`<app>.audit`), findings from another (`<app>.security`), so the backend can route them apart from each other and from ordinary logs.
 - **In the trace context of the request that caused it**, under the app's existing resource. Work outside a request (a job, a consumer, a script) records in the span its instrumentation starts, or starts one: one per message for a batch consumer. Work a request starts in-process inherits its context; start it detached, with a link, when it should stand alone.
 - **With its timestamp set**; some SDKs leave it empty.
@@ -124,41 +124,46 @@ Every answer is then proven by the end-to-end probe above, which is the authorit
 
 ### Changing the schema
 
-The schema version is `"1"`: `security.schema.version` on findings, `version` inside audit entries. Add attributes freely under `audit` and `security.finding`; renaming or removing one, or changing its meaning, raises the version. `user.*`, `session.id` and `security_rule.*` are still in Development in OpenTelemetry's semantic conventions: if one is renamed, follow it and raise the version.
+Findings are at schema version `"2"` (`security.schema.version`), audit entries at `"1"` (`version` inside the entry). Add attributes freely under `audit` and `security.finding`; renaming or removing one, or changing its meaning, raises that record's version. `user.*` and `session.id` are still in Development in OpenTelemetry's semantic conventions: if one is renamed, follow it and raise the version.
 <!-- END COMMON CORE -->
 
 <!-- BEGIN FINDINGS CORE: identical in add-deception and add-detection -->
 ## Findings
 
-Every finding is emitted as the event `security.finding`. It carries what only the rule knows, and the two keys the backend needs to route and count it before joining it to the request context. Omit an attribute whose value is unknown.
+Every finding is a log record whose event name is the rule's stable ID from the inventory (`books.my-role`) and whose body is the rule's short label as a person reads it (`Book role change attempted`), fixed in server code. It carries what only the rule knows, and the actor's keys a backend groups it by, so it reads as a detection on its own before any join to the request context. A backend that acts on findings, such as kat, finds them by `log.type` and turns each into a signal with no rule of its own. Omit an attribute whose value is unknown.
 
 | Attribute | Type | Value |
 |---|---|---|
-| `security.schema.version` | string | `"1"` |
-| `security.finding.kind` | string | `rule` for a detection rule; `decoy_route` or `honey_field` for a deception tripwire |
-| `tenant.id` | string | Routing key: the tenant the request acted in |
-| `user.id` | string | Routing key: the account; absent when anonymous |
-| `security_rule.name` | string | The rule's stable ID from the inventory |
-| `security_rule.category` | string | Its intent |
+| `log.type` | string | `detection`, on every finding and nothing else |
+| `security.schema.version` | string | `"2"` |
+| `detector` | string | How it detects: `decoy_route` or `honey_field` for a deception tripwire; `impossible_input` or `access_probe` (a request for an object the caller was never shown) for a detection rule |
+| `intent` | string | What the caller was attempting (Intents, below) |
+| `severity` | string | `low`, `medium`, `high` or `critical`, from the inventory (below) |
+| `outcome` | string | `refused` when the app denied the request, `allowed` when it went ahead (a honey field the handler dropped) |
+| `test` | boolean | `true` only on a finding verification emits through the recording module itself; never set from anything a caller sends, so no request can mark its own finding a test |
+| `tenant.id` | string | The tenant the request acted in |
+| `user.id` | string | The account; absent when anonymous |
+| `credential.id` | string | The credential used, as on the server span; never the secret |
+| `client.address` | string | The caller's address, as the request-context module resolved it |
 | `security.finding.field.name` | string | The honey field or impossible input |
 | `security.finding.field.value` | string | What was sent, as text; `[redacted]` when the inventory marks the field secret (a token, a password, a signed link) or personal data the user keeps out |
 | `security.finding.resource.type`, `security.finding.resource.id` | string | The object involved, such as another tenant's project |
 | `security.finding.params.<name>` | any | Anything specific to the rule, declared in the inventory |
 
-Severity is `WARN` when the caller is identified (a user or a credential), `INFO` when anonymous. When a finding fires, also set `security.flagged` = `true` on the server span. One request can trip a deception tripwire and a detection rule on different fields; each is its own finding. One tripwire may watch several fields of one intent; each field present is its own finding. One input never fires two rules.
+The log level (`severityText`) is `WARN` when the caller is identified (a user or a credential), `INFO` when anonymous; the `severity` attribute is the rule's own. The inventory declares each rule's severity: `high` for a decoy route or honey field, `medium` for a detection rule, and `critical` where the intent is `privilege_escalation`, `cross_tenant_access` or `payment_fraud`, unless the user sets another. When a finding fires, also set `security.flagged` = `true` on the server span. One request can trip a deception tripwire and a detection rule on different fields; each is its own finding. One tripwire may watch several fields of one intent; each field present is its own finding. One input never fires two rules.
 
-**No server span to join to.** When a finding fires outside a traced request (a job, a queue consumer, a script) or the server span isn't recording, the finding carries the request-context attributes itself, and `client.address` and `user_agent.original` when it has them.
+**No server span to join to.** When a finding fires outside a traced request (a job, a queue consumer, a script) or the server span isn't recording, the finding carries the rest of the request-context attributes itself, and `user_agent.original` when it has it.
 
 ### Intents
 
-Findings carry one of these in `security_rule.category`: `reconnaissance`, `privilege_escalation`, `account_takeover`, `cross_tenant_access` (another organization's data), `cross_account_access` (another user's, inside one), `data_exfiltration`, `entitlement_abuse`, `payment_fraud`, `mass_assignment` (a field the handler must not honor), `parameter_tampering` (a value the client never offers, in a field the handler reads), `workflow_tampering`, `defense_evasion`. Where privilege or entitlement is the evident aim, that intent wins. If none fits, add one to the inventory.
+Findings carry one of these in `intent`: `reconnaissance`, `privilege_escalation`, `account_takeover`, `cross_tenant_access` (another organization's data), `cross_account_access` (another user's, inside one), `data_exfiltration`, `entitlement_abuse`, `payment_fraud`, `mass_assignment` (a field the handler must not honor), `parameter_tampering` (a value the client never offers, in a field the handler reads), `workflow_tampering`, `defense_evasion`. Where privilege or entitlement is the evident aim, that intent wins. If none fits, add one to the inventory.
 <!-- END FINDINGS CORE -->
 
 ## Detection findings
 
-A detection finding has `security.finding.kind` = `rule`, emitted when an existing check rejected an input or state no real client can produce.
+A detection finding has `detector` = `impossible_input`, or `access_probe` for a request naming an object the server never showed the caller, emitted when an existing check rejected an input or state no real client can produce. Its `outcome` is `refused`.
 
-- `security_rule.name` is the rule's inventory ID and `security_rule.category` its intent.
+- The event name is the rule's inventory ID, and `intent` its intent.
 - `security.finding.field.*` names the impossible input, when one field carries it.
 - `security.finding.resource.*` names the object involved: the order refunded twice, the other tenant's project.
 - `security.finding.params.*` holds what a responder needs to judge the rule, when it is safe to record: the server's price behind a tampered total, the state the workflow was in.

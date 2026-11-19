@@ -101,18 +101,22 @@ An accountant's PATCH with `"myRole": "owner"` gets the app's normal 403 and pro
 
 ```json
 {
-  "eventName": "security.finding",
+  "eventName": "books.my-role",
   "severityText": "WARN",
-  "body": "honey field sent",
+  "body": "Book role change attempted",
   "traceId": "4bf92f3577b34da6a3ce929d0e0e4736",
   "spanId": "00f067aa0ba902b7",
   "attributes": {
-    "security.schema.version": "1",
-    "security.finding.kind": "honey_field",
+    "log.type": "detection",
+    "security.schema.version": "2",
+    "detector": "honey_field",
+    "intent": "privilege_escalation",
+    "severity": "critical",
+    "outcome": "refused",
     "tenant.id": "firm_9kd2",
     "user.id": "usr_41xQ",
-    "security_rule.name": "books.my-role",
-    "security_rule.category": "privilege_escalation",
+    "credential.id": "ses_7Tq0",
+    "client.address": "198.51.100.23",
     "security.finding.field.name": "myRole",
     "security.finding.field.value": "owner",
     "security.finding.resource.type": "book",
@@ -121,7 +125,7 @@ An accountant's PATCH with `"myRole": "owner"` gets the app's normal 403 and pro
 }
 ```
 
-Who and from where (the user, their role in that book, the session, `client.address`) are on the request's server span, with the same trace and span IDs and `security.flagged` set, as references/telemetry.md describes; the backend joins the two.
+The rest of who and from where (their role in that book, the session) is on the request's server span, with the same trace and span IDs and `security.flagged` set, as references/telemetry.md describes; the backend joins the two.
 
 ```ts
 // src/api/exports.ts (existing module; one method added, same style as its neighbors)

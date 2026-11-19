@@ -63,7 +63,7 @@ Every hit is recorded through the request-context module and the findings in ref
 Decoys look exactly like real code, which is what gets them deleted, wired into the real UI or "finished" by a teammate or a coding agent, and then the alert channel floods.
 
 - **A marker on every decoy and check** in server code, naming its cover story and its inventory ID.
-- **One inventory** in server code: every decoy, check and lure with its ID, file, cover story and intent. The tripwire IDs in findings come from it. It appears in the report and never in anything shipped to browsers.
+- **One inventory** in server code: every decoy, check and lure with its ID, label, file, cover story, detector, intent and severity. The tripwire IDs in findings come from it. It appears in the report and never in anything shipped to browsers.
 - **A test per tripwire**, with recording on through the app's test setup or the recording module's own seam (with no endpoint set nothing records), that fires it as a normal user and as an owner, and asserts the response, the recorded finding and that no data changed, plus a test that every inventory entry has one. Follow the project's test conventions.
 - **In a private repository**, a short note in the repo's agent instructions (AGENTS.md, CLAUDE.md) naming the decoys and lure symbols and asking agents not to remove, call or complete them, and suggested CODEOWNERS entries so the security team reviews changes to those files.
 - **Commit messages and PR descriptions** describe the change accurately for reviewers.

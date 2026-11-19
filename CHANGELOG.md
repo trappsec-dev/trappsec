@@ -4,6 +4,21 @@ All notable changes to trappsec are documented here. The format follows [Keep a 
 
 ## Unreleased
 
+### Changed: findings are detection records a backend can act on (schema 2)
+
+- **A finding now stands on its own as a detection.** A backend that turns detection records into alerts (kat does, with no rule written) can now take a finding as one. Before, every finding shared the one event name `security.finding` and named its actor only on the server span, so such a backend would have counted every tripwire in an app as one and couldn't tell attackers apart.
+- **The new shape** (`security.schema.version` `"2"`):
+  - `log.type` = `detection` marks every finding. It replaces the one event name as the query that works across services.
+  - The event name is the rule's stable ID from the inventory (`books.my-role`), and the body is its label (`Book role change attempted`).
+  - `detector` replaces `security.finding.kind`. Deception tripwires keep `decoy_route` and `honey_field`; a detection rule is `impossible_input`, or `access_probe` for an object the caller was never shown.
+  - `intent` replaces `security_rule.category`, with the same vocabulary.
+  - `severity` (`low` to `critical`) comes from the inventory. The default is `high` for a tripwire and `medium` for a detection rule, and `critical` for privilege escalation, cross-tenant access and payment fraud. The log level stays `WARN` or `INFO`.
+  - `outcome` is `refused` or `allowed`.
+  - `test` marks a finding emitted by verification, and only one emitted through the recording module itself, so a caller can't mark its own trip as a test.
+  - Every finding now carries `credential.id` and `client.address` beside `tenant.id` and `user.id`, so findings can be grouped by actor without joining them to their spans.
+- **Inventories** now give each rule its label, detector and severity.
+- **Audit entries are unchanged** and stay at version `"1"`.
+
 ### Added: `add-telemetry` skill
 
 - **`add-telemetry`** sets up OpenTelemetry traces, logs and metrics in an app that has none, so the other three skills no longer stop there with nowhere to go. It starts the SDK in every entry point, before the framework loads and after any fork; adds the framework's HTTP, database and outbound-client instrumentation; forwards the app's existing logs with their trace IDs without changing the console output; leaves a request and response hook for the other skills' request context; and stays off until an OTLP endpoint is set. It verifies end to end against a local Collector or the user's backend, including with the backend down.

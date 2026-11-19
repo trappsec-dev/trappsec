@@ -29,7 +29,7 @@ If any of these is missing, stop. Tell the user what you found and that this ski
 
 The names these skills define are the same in every app, so one query works across services:
 - audit records: event names `audit.<area>.<action>`, with the entry in one attribute, `audit`;
-- findings: one event name, `security.finding`, with `security.finding.kind` saying which kind fired and the details under `security.finding.*`, beside OpenTelemetry's `security_rule.*`;
+- findings: every finding marked `log.type` = `detection`, with the rule's stable ID as its event name, `detector`, `intent` and `severity` saying what fired, and the details under `security.finding.*`;
 - the request context on the server span: `tenant.id`, `credential.type`, `credential.id`, `actor.type`, `actor.id` and `security.flagged`, beside OpenTelemetry's `user.*`, `session.id` and `client.address`.
 
 Use OpenTelemetry's own attributes as they are, and never invent new ones in its namespaces. Before writing a name, search the app and its telemetry for it: if the app already emits `audit.*` events or sets one of these attributes with another meaning, stop and ask the user rather than mix two meanings under one name. Name the recording code like the app's other observability code.
@@ -42,9 +42,9 @@ Each fact is said once, where it is known.
 |---|---|---|
 | Request context, on the server span | Who called and from where | Once per request |
 | Audit record, a log record | The complete audit entry: who did what, for whom, to what, from where, with what result | When an audited action succeeds, is denied or fails |
-| Finding, a log record | Which deception or detection rule fired, on what, plus the tenant and account as routing keys | When a rule fires |
+| Finding, a log record | Which deception or detection rule fired, on what, and the actor's keys a backend groups it by | When a rule fires |
 
-The backend joins each finding to its request's context by trace and span ID. Audit records stand on their own, without the join, the span or sampling. A request carrying several actions or findings (a GraphQL document, a batch) emits one record for each, all on the request's span.
+The backend joins each finding to its request's context by trace and span ID, and groups findings by the actor keys each one carries. Audit records stand on their own, without the join, the span or sampling. A request carrying several actions or findings (a GraphQL document, a batch) emits one record for each, all on the request's span.
 
 ### Request context
 
@@ -80,7 +80,7 @@ If the app's own setting is wrong, report it and its fix rather than changing pr
 
 ### Log records
 
-- **One record per occurrence, emitted as an event**, with the event name in the record's event-name field (never an `event.name` attribute) and no dynamic values in it.
+- **One record per occurrence, emitted as an event**, with the event name in the record's event-name field (never an `event.name` attribute) and no dynamic values in it: an audit record's is its action, a finding's is its rule's stable ID from server code.
 - **A dedicated logger per family**, named like the app's others: audit records from one (`<app>.audit`), findings from another (`<app>.security`), so the backend can route them apart from each other and from ordinary logs.
 - **In the trace context of the request that caused it**, under the app's existing resource. Work outside a request (a job, a consumer, a script) records in the span its instrumentation starts, or starts one: one per message for a batch consumer. Work a request starts in-process inherits its context; start it detached, with a link, when it should stand alone.
 - **With its timestamp set**; some SDKs leave it empty.
@@ -124,7 +124,7 @@ Every answer is then proven by the end-to-end probe above, which is the authorit
 
 ### Changing the schema
 
-The schema version is `"1"`: `security.schema.version` on findings, `version` inside audit entries. Add attributes freely under `audit` and `security.finding`; renaming or removing one, or changing its meaning, raises the version. `user.*`, `session.id` and `security_rule.*` are still in Development in OpenTelemetry's semantic conventions: if one is renamed, follow it and raise the version.
+Findings are at schema version `"2"` (`security.schema.version`), audit entries at `"1"` (`version` inside the entry). Add attributes freely under `audit` and `security.finding`; renaming or removing one, or changing its meaning, raises that record's version. `user.*` and `session.id` are still in Development in OpenTelemetry's semantic conventions: if one is renamed, follow it and raise the version.
 <!-- END COMMON CORE -->
 
 ## Audit records
