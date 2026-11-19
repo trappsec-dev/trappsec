@@ -28,7 +28,7 @@ If any of these is missing, stop. Tell the user what you found and that this ski
 ### Names
 
 The names these skills define are the same in every app, so one query works across services:
-- audit records: event names `audit.<area>.<action>`, with the entry in one attribute, `audit`;
+- audit records: event names `audit.<area>.<action>`, marked `log.type` = `audit`, with the entry in one attribute, `audit`;
 - findings: every finding marked `log.type` = `detection`, with the rule's stable ID as its event name, `detector`, `intent` and `severity` saying what fired, and the details under `security.finding.*`;
 - the request context on the server span: `tenant.id`, `credential.type`, `credential.id`, `actor.type`, `actor.id` and `security.flagged`, beside OpenTelemetry's `user.*`, `session.id` and `client.address`.
 

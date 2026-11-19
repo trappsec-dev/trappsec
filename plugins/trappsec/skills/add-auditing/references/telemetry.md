@@ -28,7 +28,7 @@ If any of these is missing, stop. Tell the user what you found and that this ski
 ### Names
 
 The names these skills define are the same in every app, so one query works across services:
-- audit records: event names `audit.<area>.<action>`, with the entry in one attribute, `audit`;
+- audit records: event names `audit.<area>.<action>`, marked `log.type` = `audit`, with the entry in one attribute, `audit`;
 - findings: every finding marked `log.type` = `detection`, with the rule's stable ID as its event name, `detector`, `intent` and `severity` saying what fired, and the details under `security.finding.*`;
 - the request context on the server span: `tenant.id`, `credential.type`, `credential.id`, `actor.type`, `actor.id` and `security.flagged`, beside OpenTelemetry's `user.*`, `session.id` and `client.address`.
 
@@ -137,7 +137,7 @@ Event names are `audit.<area>.<action>`, in lower snake case and the product's o
 
 ### The entry
 
-The record has two attributes: `audit`, holding the whole entry as a map, and `log.record.uid`, set to the entry's `id`. The entry repeats what the server span says about the caller on purpose: it is evidence and must stand without the span. One recording module fills both from the same values.
+The record has three attributes: `log.type`, set to `audit`, which a backend that keeps audit records apart (kat routes them to the dataset's `audit` stream) reads to find them; `audit`, holding the whole entry as a map; and `log.record.uid`, set to the entry's `id`. The entry repeats what the server span says about the caller on purpose: it is evidence and must stand without the span. One recording module fills both from the same values.
 
 | Key | Required | Value |
 |---|---|---|
@@ -194,6 +194,7 @@ A role change:
     "participants": [{ "id": "usr_41xQ", "name": "Sam Okafor" }],
     "changes": { "role": { "old": "senior_accountant", "new": "accountant" } }
   },
+  "log.type": "audit",
   "log.record.uid": "01JAB7Q3M2V8K4T0R6YHXN5C1D"
 }
 ```

@@ -17,7 +17,7 @@ All notable changes to trappsec are documented here. The format follows [Keep a 
   - `test` marks a finding emitted by verification, and only one emitted through the recording module itself, so a caller can't mark its own trip as a test.
   - Every finding now carries `credential.id` and `client.address` beside `tenant.id` and `user.id`, so findings can be grouped by actor without joining them to their spans.
 - **Inventories** now give each rule its label, detector and severity.
-- **Audit entries are unchanged** and stay at version `"1"`.
+- **Audit records are marked too.** Each one now carries `log.type` = `audit` beside the entry, so a backend that keeps audit records apart can find them; kat stores them in the dataset's `audit` stream. The entry itself is unchanged and stays at version `"1"`.
 
 ### Added: `add-telemetry` skill
 
