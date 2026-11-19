@@ -16,7 +16,7 @@ Contents
 
 Start the app the way its developers run it locally, so you can see the events it records. Get credentials through the app's real login flow or its test fixtures for at least: a normal user, and the owner of their own workspace (or whatever the most privileged self-service role is).
 
-For each decoy, send every probe below to the decoy and to its sibling, and compare:
+For each decoy, send every probe below to the decoy and to its sibling, and compare the two with `compare_responses.mjs` (§3):
 
 | Probe | Expect |
 |---|---|
@@ -33,9 +33,7 @@ For each decoy, send every probe below to the decoy and to its sibling, and comp
 curl -s -i -X POST "http://localhost:$PORT/<decoy-path>" -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' -d '{"<field>":"<value>"}'
 ```
 
-Any difference other than the final denial and field names in validation messages is a tell. Fix the chain, not the response.
-
-If the project has tests, add one per decoy that fires it as a normal user and as an owner and asserts the response, the recorded event, and that no data changed. Follow the project's test conventions.
+Any difference other than the final denial and field names in validation messages is a tell. Fix the chain, not the response. Then add each tripwire's test (implementation.md §6).
 
 ## 2. Exercise every honey field
 
@@ -44,23 +42,24 @@ For each honey field:
 2. **Explicit expected value.** Send the expected value explicitly. Expect no event.
 3. **Tampering.** Send a tampered value. Expect a `honey_field` finding naming the field, value and intent. The handler must behave as if the field were absent (the role didn't change, the price wasn't used).
 4. **Repetition and types.** For query fields, send the parameter twice (`?x=a&x=b`). For JSON fields, try the value as a string and as its typed form (`"true"` and `true`).
-5. **Unknown-field behavior.** Send an unrelated unknown field the same way. The endpoint must treat it exactly as it treats the honey field (both ignored, or both rejected).
+5. **Unknown-field behavior.** Send an unrelated unknown field the same way. The endpoint must treat it exactly as it treats the honey field: both ignored.
 
 ## 3. Response parity
 
-`scripts/compare_responses.mjs` sends the same request to a real endpoint and to a decoy over raw HTTP, so header names keep the case and order the server wrote. It reports differences in the status line, header presence, case, order and values, body bytes, JSON key order and values, stability across repeated requests, and median latency with the requests interleaved. Only the values of per-request headers (date, request IDs, ETag, content length) are ignored; their presence is still compared. It needs only Node 18+.
+`scripts/compare_responses.mjs` sends the same request to a real endpoint and to a decoy over raw HTTP, so header names keep the case and order the server wrote. It reports differences in the status line, header presence, case, order and values, body bytes, JSON key order and values, stability across repeated requests, and median latency with the requests interleaved. Only the values of per-request headers (date, request IDs, ETag, content length) are ignored; their presence is still compared. A `Location` value is compared, since a redirect somewhere else is a tell. A request that gets no answer within `--timeout` seconds (default 10) is reported as a difference. It needs only Node 18+.
 
 ```bash
 node ${CLAUDE_SKILL_DIR}/scripts/compare_responses.mjs \
-  --real "http://localhost:3000/api/v2/<sibling-path>" \
-  --decoy "http://localhost:3000/api/v2/<decoy-path>" \
-  [--method POST] [--decoy-method POST] [--data '{"a":1}'] [-H 'Authorization: Bearer ...'] [--identical] [--runs 5] [--json]
+  --real "http://localhost:$PORT/api/v2/<sibling-path>" \
+  --decoy "http://localhost:$PORT/api/v2/<decoy-path>" \
+  [--method POST] [--decoy-method POST] [--data '{"a":1}'] [-H 'Authorization: Bearer ...'] \
+  [--identical] [--ignore-json <path>] [--ignore-header <name>] [--runs 5] [--timeout 10] [--insecure] [--json]
 ```
 
-`--decoy-method` sends a different method to the decoy than to the sibling, for a decoy whose sibling answers another verb. For the signed-in comparison, pick as the sibling a route that shares the decoy's gate and denies the same caller.
+`--decoy-method` sends a different method to the decoy than to the sibling, for a decoy whose sibling answers another verb. `--insecure` accepts a self-signed certificate on a local HTTPS server. For the signed-in comparison, pick as the sibling a route that shares the decoy's gate and denies the same caller.
 
 Run it for every probe in §1 where the decoy and its sibling must agree, at least:
-- anonymous and with an expired token, with `--identical`: the bodies must be byte-identical;
+- anonymous and with an expired token, with `--identical`: the bodies must be byte-identical. Where the app puts a random value in every error body (an error ID), add `--ignore-json` with its dotted path (`--ignore-json errors.0.id`), so that value is masked and every other byte must still match;
 - signed in as a normal user, where the sibling denies too.
 
 Values that differ are listed separately; they're expected only where the decoy's final denial or validation names its own feature. The exit code is 0 when nothing differs.
@@ -77,7 +76,7 @@ node ${CLAUDE_SKILL_DIR}/scripts/scan_bundle.mjs --dir dist \
 Pass every distinctive string a lure depends on: the decoy path (or its static prefix, if it's built from template literals), the flag name, the gated component's name. Then read the result:
 
 - **Found.** Every lure must appear in the shipped files. MISSING means it was tree-shaken, dead-code-eliminated, or lives in a server-only module.
-- **HIGH findings.** A revealing word near a lure. Fix them. LOW findings (the same words far from any lure, often inside libraries such as focus-trap) are counted but usually harmless.
+- **HIGH findings.** A revealing word near a lure. Fix them. LOW findings (the same words far from any lure, often inside libraries such as focus-trap, or a weak word the bundle uses often enough to be its own vocabulary) are counted but usually harmless.
 - **Source maps.** If maps are present, the report shows each lure's original source file and any comments next to it, as an attacker holding the maps would see them. Read those comments yourself: the scanner only matches single words.
 
 For server-rendered apps, scan what browsers receive, not the raw templates. Save the rendered pages as each kind of user (anonymous, customer, staff...) into a directory, then scan it together with the static assets.
@@ -119,8 +118,12 @@ Run the project's test suites (unit, integration, e2e). Tests that snapshot API 
 ## Deception added
 <one paragraph: the threat narrative and what was added>
 
-| # | Tripwire | Kind | Cover story | Lure location(s) | See → Think → Do | Chain copied / final denial | Intent |
-|---|---|---|---|---|---|---|---|
+| # | Path / stage | Tripwire | Kind | Cover story | Lure location(s) | See → Think → Do | Chain copied / final denial | Intent |
+|---|---|---|---|---|---|---|---|---|
+<the plan's table, with file:line for every decoy, honey-field check and lure>
+
+### Attack-path map
+<per path, stage and chokepoint, each input's outcome (attack-paths.md): covered by which tripwire; handed off to add-detection, with what the app does with it today; uncovered, with why every candidate failed the bar (would look planted, a legitimate client could trip it, or it would give away a tripwire next to it); or vulnerability>
 
 ### Fire each tripwire
 <curl commands, as a normal user and as an owner, with the expected response and event>

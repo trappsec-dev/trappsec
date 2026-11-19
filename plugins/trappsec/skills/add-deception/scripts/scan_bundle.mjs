@@ -9,6 +9,13 @@
 // and chunk names reveal intent? Source maps are inspected the way an attacker holding
 // them would: original file of each lure, comments and revealing words around it.
 //
+// Weak words (WEAK) are also ordinary vocabulary: an app may have mock servers or sensor
+// readings, and libraries ship focusTrap. Two rules keep them from failing a clean build:
+// - a weak word inside an occurrence of a lure string is not counted (the lure itself is the
+//   author's choice; a strong word inside it still is);
+// - a weak word found at least COMMON_WEAK times away from every lure (farther than
+//   --proximity) is the app's or a library's vocabulary: its hits near a lure are LOW, not HIGH.
+//
 // Exit code: 0 = every lure found and no HIGH findings, 1 = otherwise, 2 = usage error.
 // Node 18+, no dependencies.
 
@@ -16,7 +23,9 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 const STRONG = ['decoy', 'honeypot', 'honeyfield', 'honeytoken', 'tripwire', 'lure', 'canarytoken', 'deception', 'deceptive'];
-const WEAK = ['trap', 'honey', 'bait', 'canary', 'fake', 'dummy', 'ghost', 'sensor', 'mock', 'bogus', 'sham', 'phony', 'snare'];
+const WEAK = ['trap', 'honey', 'bait', 'canary', 'fake', 'dummy', 'sensor', 'mock', 'bogus', 'sham', 'phony', 'snare'];
+// A weak word seen this many times away from every lure is treated as vocabulary (see above).
+const COMMON_WEAK = 5;
 // Phrases a teammate writes next to a deliberate lure; they reveal it as surely as a word.
 const PHRASES = [
   /do not (use|call|remove|delete|touch|ship)/i, /don'?t (use|call|remove|delete|touch)/i, /never (enabled|called|used|shipped)/i,
@@ -113,6 +122,9 @@ function lineOf(text, index) {
   return line;
 }
 
+// True when index falls inside one of the given lure occurrences ({ index, end }).
+const insideLure = (hits, index) => hits.some((h) => index >= h.index && index < h.end);
+
 function scanPhrases(text) {
   const hits = [];
   for (const re of PHRASES) {
@@ -158,6 +170,9 @@ function main() {
   };
 
   const maps = [];
+  const vocabHits = [];
+  const nameHits = [];
+  const farWeak = {};
 
   for (const file of files) {
     const stat = fs.statSync(file);
@@ -191,22 +206,15 @@ function main() {
       if (idx.length) {
         l.files.push(rel);
         l.occurrences += idx.length;
-        for (const i of idx) lureHits.push({ lure: li, index: i });
+        for (const i of idx) lureHits.push({ lure: li, index: i, end: i + l.lure.length });
       }
     });
 
     // File and chunk names ship too (AdminTools-3f9a.js); check them like identifiers.
+    // Classified after every file is read, when the bundle's common weak words are known.
     for (const w of STRONG.concat(WEAK)) {
       if (wordHits(path.basename(file), w).length) {
-        const strong = STRONG.includes(w) || lureHits.length > 0;
-        result.findings.push({
-          severity: strong ? 'HIGH' : 'MEDIUM',
-          file: rel,
-          offset: 0,
-          word: w,
-          reason: lureHits.length ? 'revealing word in the name of a file that holds a lure' : 'revealing word in a shipped file name',
-          context: path.basename(file),
-        });
+        nameHits.push({ word: w, weak: WEAK.includes(w), rel, lureHere: lureHits.length > 0, context: path.basename(file) });
       }
     }
 
@@ -218,6 +226,8 @@ function main() {
     }
 
     for (const hit of scanVocab(text)) {
+      // A weak word inside the lure string itself is the lure's own name, judged on its own.
+      if (hit.strength === 'weak' && insideLure(lureHits, hit.index)) continue;
       // Minified bundles pack unrelated modules side by side, so weak words (often library
       // code such as focusTrap) only count as HIGH when they sit right next to a lure.
       const nearest = lureHits.reduce((best, h) => {
@@ -225,31 +235,54 @@ function main() {
         return !best || d < best.d ? { d, lure: h.lure } : best;
       }, null);
       const highWindow = hit.strength === 'strong' ? opts.proximity : Math.min(120, opts.proximity);
-      const isHigh = nearest && nearest.d <= highWindow;
-      const isNear = nearest && nearest.d <= opts.proximity;
-      if (isHigh || isNear) {
-        result.findings.push({
-          severity: isHigh ? 'HIGH' : 'MEDIUM',
-          file: rel,
-          offset: hit.index,
-          word: hit.word,
-          reason: `revealing word ${nearest.d} chars from lure "${result.lures[nearest.lure].lure}"`,
-          context: snippet(text, hit.index),
-        });
-      } else if (hit.strength === 'strong') {
-        result.findings.push({
-          severity: 'MEDIUM',
-          file: rel,
-          offset: hit.index,
-          word: hit.word,
-          reason: 'strong revealing word in a shipped file (far from lures; check whether it is yours or a library\'s)',
-          context: snippet(text, hit.index),
-        });
-      } else {
-        result.weakFar[hit.word] = (result.weakFar[hit.word] || 0) + 1;
-        if (opts.verbose) {
-          result.findings.push({ severity: 'LOW', file: rel, offset: hit.index, word: hit.word, reason: 'weak word far from lures', context: snippet(text, hit.index) });
-        }
+      const isHigh = Boolean(nearest && nearest.d <= highWindow);
+      const isNear = Boolean(nearest && nearest.d <= opts.proximity);
+      if (hit.strength === 'weak' && !isNear) farWeak[hit.word] = (farWeak[hit.word] || 0) + 1;
+      vocabHits.push({ hit, rel, nearest, isHigh, isNear, context: snippet(text, hit.index) });
+    }
+  }
+
+  // Weak words common away from every lure are vocabulary, not tells.
+  const common = new Set(Object.keys(farWeak).filter((w) => farWeak[w] >= COMMON_WEAK));
+  result.weakCommon = [...common];
+
+  for (const n of nameHits) {
+    if (n.weak && common.has(n.word)) continue;
+    result.findings.push({
+      severity: !n.weak || n.lureHere ? 'HIGH' : 'MEDIUM',
+      file: n.rel,
+      offset: 0,
+      word: n.word,
+      reason: n.lureHere ? 'revealing word in the name of a file that holds a lure' : 'revealing word in a shipped file name',
+      context: n.context,
+    });
+  }
+
+  for (const { hit, rel, nearest, isHigh, isNear, context } of vocabHits) {
+    const vocabulary = hit.strength === 'weak' && common.has(hit.word);
+    if ((isHigh || isNear) && !vocabulary) {
+      result.findings.push({
+        severity: isHigh ? 'HIGH' : 'MEDIUM',
+        file: rel,
+        offset: hit.index,
+        word: hit.word,
+        reason: `revealing word ${nearest.d} chars from lure "${result.lures[nearest.lure].lure}"`,
+        context,
+      });
+    } else if (hit.strength === 'strong') {
+      result.findings.push({
+        severity: 'MEDIUM',
+        file: rel,
+        offset: hit.index,
+        word: hit.word,
+        reason: 'strong revealing word in a shipped file (far from lures; check whether it is yours or a library\'s)',
+        context,
+      });
+    } else {
+      result.weakFar[hit.word] = (result.weakFar[hit.word] || 0) + 1;
+      if (opts.verbose) {
+        const reason = isNear ? `weak word near a lure, but common in the bundle (${farWeak[hit.word]}x away from lures)` : 'weak word far from lures';
+        result.findings.push({ severity: 'LOW', file: rel, offset: hit.index, word: hit.word, reason, context });
       }
     }
   }
@@ -259,7 +292,7 @@ function main() {
     const sources = Array.isArray(map.sources) ? map.sources : [];
     const contents = Array.isArray(map.sourcesContent) ? map.sourcesContent : [];
     sources.forEach((src, si) => {
-      const strongInPath = STRONG.concat(WEAK).filter((w) => wordHits(String(src), w).length);
+      const strongInPath = STRONG.concat(WEAK).filter((w) => !common.has(w) && wordHits(String(src), w).length);
       const content = typeof contents[si] === 'string' ? contents[si] : null;
       let lureHere = false;
       if (content) {
@@ -271,7 +304,12 @@ function main() {
             const window = [];
             for (let k = Math.max(1, ln - 5); k <= Math.min(lines.length, ln + 5); k++) window.push({ n: k, text: lines[k - 1] });
             const comments = commentLines(window);
-            const vocab = window.flatMap(({ n, text }) => scanVocab(text).concat(scanPhrases(text)).map((h) => ({ n, word: h.word, text })));
+            // Same weak-word rules as the shipped files: not inside a lure, not bundle vocabulary.
+            const vocab = window.flatMap(({ n, text }) => {
+              const lureSpans = result.lures.flatMap((x) => allIndexes(text, x.lure).map((j) => ({ index: j, end: j + x.lure.length })));
+              const words = scanVocab(text).filter((h) => h.strength === 'strong' || (!common.has(h.word) && !insideLure(lureSpans, h.index)));
+              return words.concat(scanPhrases(text)).map((h) => ({ n, word: h.word, text }));
+            });
             l.sourceOrigins.push({ map: file, source: src, line: ln, comments });
             for (const v of vocab) {
               result.findings.push({
@@ -342,7 +380,10 @@ function report(r, opts) {
   const weak = Object.entries(r.weakFar);
   if (weak.length && !opts.verbose) {
     const total = weak.reduce((s, [, n]) => s + n, 0);
-    console.log(`  LOW    ${total} weak-word occurrence(s) far from any lure (${weak.map(([w, n]) => `${w} x${n}`).join(', ')}); usually library code. --verbose lists them.`);
+    console.log(`  LOW    ${total} weak-word occurrence(s) far from any lure or common in the bundle (${weak.map(([w, n]) => `${w} x${n}`).join(', ')}); usually library code. --verbose lists them.`);
+  }
+  if (r.weakCommon.length) {
+    console.log(`  note   treated as vocabulary (${COMMON_WEAK}+ occurrences away from lures): ${r.weakCommon.join(', ')}`);
   }
   console.log('');
 

@@ -16,20 +16,20 @@ This page summarizes the lure design of the [`add-deception` agent skill](https:
 
 From least to most suspicious to someone reading your client:
 
-1.  Nothing new in the client: honey fields on values the client already reads or sends back, decoys inferred from the API's own conventions.
+1.  Nothing new in the client: honey fields on values the client already reads or sends back, decoys at a strong inference from a route the attacker has already used.
 2.  One flag- or role-gated entry point to a decoy.
 3.  An uncalled client method for a powerful capability.
 4.  A hidden or disabled field of a kind the app's other forms don't carry.
 5.  Something nothing uses: an unread `data-` attribute, a handler for a form no page renders, commented-out code, a dangling reference in docs.
 
-So prefer the top of the list, keep visible lures few, and never give two of them the same pattern. Comments that point at a lure ("do not use", "remove before prod", an emoji marker) are the strongest tell of all.
+So prefer the top of the list, give every visible lure a precedent (a pattern your client already uses for a real feature), and never give two of them the same pattern. Comments that point at a lure ("do not use", "remove before prod", an emoji marker) are the strongest tell of all.
 
-Someone probing the running app sees something else. Honey fields leave nothing to observe from outside. Decoy routes are found by elimination: a tester writes data and reads it back, which clears every real endpoint, and whatever never works for any account is left over. So lead with honey fields, keep decoy routes few (one at most in a small API), and give each one neighbors and a denial that real routes also produce.
+Someone probing the running app sees something else. Honey fields leave nothing to observe from outside. Decoy routes are found by elimination: a tester writes data and reads it back, which clears every real endpoint, and whatever never works for any account is left over. So put honey fields on every real endpoint along an attacker's path, and give every decoy route neighbors and a denial that real routes also produce, so it is one refusal among many rather than the one route that never works.
 
 ### Principles
 
 *   **Extrapolate, don't invent.** Derive each decoy from something real: a sibling of a real resource, the previous version of a real route, a role next to your real roles, a field that sits naturally beside real fields. Use your app's own vocabulary and URL scheme.
-*   **Prefer decoys that need no lure.** Attackers enumerate around every resource they see: other methods on it, the collection behind an item, the previous API version. A decoy at such a path leaves nothing in the client to scrutinize and catches exactly the people who probe.
+*   **A strong inference is as good as a lure.** Attackers probe around every route they've used: other methods on it, the collection behind an item whose IDs they hold, the previous API version. A decoy at such a path leaves nothing in the client to scrutinize and catches exactly the people who probe. A route found only by guessing a name (a missing member of a URL family, a wordlist path) isn't an inference; give it a lure or leave it out.
 *   **Avoid paths generic scanners probe** (admin, debug, actuator-style paths). They draw anonymous noise and look generic. An application-specific path is found only by someone who studied your app.
 *   **Give every lure an innocent reason to exist.** Real dead code has a story: behind a flag, gated on a role, kept for an older client. Write the one-sentence cover story first; it decides naming, placement and response.
 *   **Bait honey fields with what's already there.** The best honey field is one an attacker would try on that endpoint anyway: a value the real client already reads in a response, or a value the real form never offers. A field foreign to your data model (say, a boolean admin flag in an app whose permissions are role-based) stands out.

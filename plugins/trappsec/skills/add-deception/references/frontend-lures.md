@@ -9,14 +9,14 @@ Contents
 4. Surviving the build
 5. False-positive hazards
 6. Tells
-7. Framework notes
+7. What ships to the client
 8. Apps without a frontend, or a frontend you can't change
 
 ## 1. How attackers read a frontend
 
 Signed-in attackers (curious customers, bug bounty hunters, someone using a stolen account, automated tools) usually map an app from its client before touching the API:
 
-- **Bundles and chunks.** They download every JavaScript chunk, found through the HTML, the bundler manifest, or Next.js's `_buildManifest.js`. Then they grep for:
+- **Bundles and chunks.** They download every JavaScript chunk, found through the HTML and the framework's build manifest. Then they grep for:
   - path-like strings (`/api/`, `fetch(`, `axios`);
   - role and permission names;
   - words such as admin, internal, export, impersonate, billing, beta, legacy, v1.
@@ -97,7 +97,7 @@ If the spec is published, the decoy is discoverable there too. That is fine as l
 
 When the backend starts returning a bait field (references/backend-traps.md §2), add it to the frontend type for that resource, declared like the real optional fields. Showing it read-only somewhere natural, such as a badge or a disabled input, makes it more convincing: the UI uses the field, so surely the server cares about it.
 
-The real UI must either never send the field or send back exactly what the server returned. Check how the app builds write payloads. If forms spread the whole fetched object back (`{...user, name}`), the field gets echoed, and the check must expect exactly what the server returned.
+The real UI must either never send the field or send back exactly what the server returned. Check how the app builds write payloads. If forms spread the whole fetched object back (`{...user, name}`), the field gets echoed, and the check records only values backend-traps.md §2 calls impossible for this caller; prefer a field the forms don't echo.
 
 ### G. Hidden inputs in server-rendered forms
 
@@ -129,7 +129,7 @@ A lure the bundler removes does not exist. Know what survives:
   - class methods and object properties, even when unused;
   - code behind runtime conditions (user role, flag value);
   - string literals. Minifiers rename variables, not URLs.
-- **Server components.** In Next.js and similar frameworks, server components and server actions never reach the browser. Lures must live in client components or client modules.
+- **Server-only code** never reaches the browser (§7).
 - **Verify.** Build for production, then run `scripts/scan_bundle.mjs` with each lure string. Report any lure that is missing. For a decoy method on an existing path, the path matches real calls too: scan for a string only the lure has, such as its client method's name.
 
 ## 5. False-positive hazards
@@ -137,8 +137,8 @@ A lure the bundler removes does not exist. Know what survives:
 A legitimate request to a decoy is a false alert, and it erodes trust in every future alert. Never put a decoy URL anywhere something fetches without a person choosing to:
 
 - `<a href>`, `<form action>`, `<img src>`, `<link rel="prefetch|preload">`;
-- router link prefetching (Next.js `<Link>`), service-worker precache lists, sitemaps, `robots.txt`;
-- effects, data loaders and query prefetchers that run on render (`useEffect`, react-query/SWR prefetch, route loaders);
+- a router's link prefetching, service-worker precache lists, sitemaps, `robots.txt`;
+- effects, data loaders and query prefetchers that run on render or on navigation;
 - retry or polling logic, analytics beacons;
 - navigation arrays rendered with `.map`, where one filter bug would show the item to everyone;
 - anything link-preview bots, crawlers, uptime monitors, synthetic checks, Lighthouse or e2e crawl tests visit.
@@ -149,7 +149,7 @@ Also consider: older app versions still in users' hands, partner integrations, i
 
 Before finishing, look at each lure the way an attacker would, and remove:
 
-- **Revealing words** anywhere that ships: trap, decoy, honey, honeypot, lure, bait, canary, tripwire, fake, dummy, sensor, deception. Check identifiers, strings, comments, file and chunk names, CSS classes, `data-testid`, storage keys, flag names, locale keys.
+- **Revealing words** anywhere that ships: the words `scripts/scan_bundle.mjs` looks for, such as decoy, honeypot, tripwire and bait. Check identifiers, strings, comments, file and chunk names, CSS classes, `data-testid`, storage keys, flag names, locale keys.
 - **Style that differs from the neighbors:**
   - a different HTTP helper, quote style or casing;
   - missing types where everything else is typed;
@@ -167,18 +167,16 @@ Before finishing, look at each lure the way an attacker would, and remove:
 - **Mismatches with the backend:** a different method, a path that answers 404, a response that doesn't fit the type the frontend declares.
 - **Anything copied from this skill's examples.**
 
-## 7. Framework notes
+## 7. What ships to the client
 
-- **React (Vite, CRA, React Router/Remix).** API modules and hooks are natural homes. Gated routes in the router config with `lazy()` produce named chunks. Vite emits source maps only when `build.sourcemap` is set.
-- **Next.js.**
-  - Lures belong in `"use client"` components and client-side modules.
-  - Page routes appear in build manifests; API calls made from client components appear in chunks.
-  - `productionBrowserSourceMaps` controls public source maps.
-  - If the API itself is Next.js route handlers, decoys are route handlers too: call the same helpers as the sibling handler, in the same order.
-- **Vue / Nuxt.** Composables and API service modules; route meta for role gates. Nuxt server routes are backend code.
-- **Angular.** Injectable services are classes, so unused methods survive. Route guards (`canActivate`) are the natural role gate.
-- **Svelte / SvelteKit.** Use client modules. Loaders (`+page.ts`) run on navigation, so never put a decoy call in a loader that real users trigger. `+page.server.ts` never ships.
-- **Server-rendered templates (Django, Jinja, ERB-style, Go templates, EJS).** Content inside a server-side role check (`{% if user.is_staff %}`) never reaches other users, so it is not a lure. What everyone receives is hidden inputs, data attributes, the app's static JavaScript, and response fields of JSON endpoints.
+Every framework draws the line between server and client code in its own way; learn where this app draws it before placing a lure.
+
+- **Server-only code never ships.** Server components and server actions, server-side loaders and route modules, and content inside a server-side template's role check never reach other users' browsers, so none of it is a lure. Lures live in client components and client modules: the app's API modules, hooks and service classes are natural homes.
+- **Render-time code runs for real users.** A loader or data hook that runs on navigation or render fires for everyone who reaches it, so never put a decoy call in one real users trigger.
+- **The router's own idioms** (route metadata, guards, lazy routes) are the natural role gate and produce named chunks (B). Route manifests list page routes.
+- **Source maps** are switched on by a build setting; find it, and whether the deploy serves the maps.
+- **An API written as the frontend framework's route handlers** is backend code: decoys there are route handlers that call the sibling handler's helpers in the same order.
+- **Server-rendered pages.** What everyone receives is hidden inputs, data attributes, the app's static JavaScript, and response fields of JSON endpoints.
 
   Client-side lures are weak here. A script hook for markup no page ever renders (a submit handler for a form that never appears) is a dangling reference. Hidden inputs that duplicate state the server already holds (the user's own shop ID, a single-currency site's currency) look planted too.
 
@@ -186,7 +184,7 @@ Before finishing, look at each lure the way an attacker would, and remove:
   1. honey fields the real JSON already exposes (backend-traps.md §2);
   2. inferred decoys (backend-traps.md §1).
 
-  Values the real forms never offer, in fields they already submit, are covered by the add-detection skill.
+  Values the real forms never offer, in fields they already submit, are covered by the add-detection skill when the app refuses them (references/attack-paths.md).
 
   A design built only from these adds nothing to the pages. The trade-off is that such tripwires are found only by probing. They catch active testers, not people reading the page source. Give at least one a breadcrumb that probing turns up, such as the `405` and `Allow` header some frameworks send for other methods on the decoy's path, or an error that names a permission.
 - **Mobile apps.** Decompilers read endpoint strings out of the binary. The same patterns apply, but slow release cycles make lures harder to maintain.

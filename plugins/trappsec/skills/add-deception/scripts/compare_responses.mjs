@@ -5,16 +5,25 @@
 //                              --decoy http://localhost:3000/api/v2/reports/1/exports \
 //                              [--method POST] [--decoy-method POST] [--data '{"format":"csv"}']
 //                              [-H 'Authorization: Bearer ...'] [--identical] [--runs 5]
-//                              [--ignore-header x-foo] [--json]
+//                              [--ignore-header x-foo] [--ignore-json errors.0.id]
+//                              [--timeout 10] [--insecure] [--json]
 //
 // Sends the same request to both URLs over raw HTTP, so header names keep their case and order
 // as the server wrote them. Reports differences in the status line, header names (presence,
 // case, order), header values, body bytes, JSON key order and values, stability across runs,
 // and median latency (requests interleaved). Only the values of inherently per-request headers
 // (date, request ids, etag, content-length...) are ignored; their presence is still compared.
+// A Location value is compared: a redirect somewhere else is a tell.
 //
-// --identical  require byte-identical bodies (use it for anonymous and invalid-token probes,
-//              where the decoy and its sibling must answer exactly alike).
+// --identical      require byte-identical bodies (use it for anonymous and invalid-token probes,
+//                  where the decoy and its sibling must answer exactly alike).
+// --ignore-json P  ignore the JSON body value at the dotted path P (errors.0.id), for apps that
+//                  put a random value such as an error ID in every body. The value must be a
+//                  string; it is masked in the parsed body and wherever its JSON text appears in
+//                  the raw body, so --identical still compares every other byte. Repeatable.
+// --timeout S      seconds to wait for each response (default 10). A request that gets no
+//                  answer in time is reported as a difference, not waited on.
+// --insecure       accept a self-signed certificate (local HTTPS only).
 //
 // Exit code: 0 = no differences, 1 = differences, 2 = usage or network error.
 // Node 18+, no dependencies.
@@ -26,7 +35,6 @@ const VOLATILE_VALUE = new Set([
   'date', 'age', 'etag', 'last-modified', 'expires', 'set-cookie', 'content-length',
   'x-request-id', 'request-id', 'x-correlation-id', 'x-trace-id', 'traceparent', 'tracestate',
   'x-response-time', 'server-timing', 'x-runtime', 'cf-ray', 'x-amzn-requestid', 'x-amz-cf-id',
-  'location',
 ]);
 const HOP_BY_HOP = new Set(['connection', 'keep-alive']);
 
@@ -34,12 +42,13 @@ function usage(msg) {
   if (msg) console.error(`error: ${msg}\n`);
   console.error('usage: node compare_responses.mjs --real <url> --decoy <url> [--method M] [--decoy-method M]');
   console.error('                                  [-H "Name: value" ...] [--data <body>] [--identical] [--runs N]');
-  console.error('                                  [--ignore-header name] [--json]');
+  console.error('                                  [--ignore-header name] [--ignore-json path] [--timeout S]');
+  console.error('                                  [--insecure] [--json]');
   process.exit(2);
 }
 
 function parseArgs(argv) {
-  const opts = { headers: {}, runs: 5, method: 'GET', decoyMethod: null, data: undefined, ignore: new Set(), json: false, identical: false };
+  const opts = { headers: {}, runs: 5, method: 'GET', decoyMethod: null, data: undefined, ignore: new Set(), ignoreJson: [], timeout: 10, insecure: false, json: false, identical: false };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     const next = () => {
@@ -47,12 +56,17 @@ function parseArgs(argv) {
       return argv[++i];
     };
     if (a === '--real') opts.real = next();
-    else if (a === '--decoy' || a === '--trap') opts.decoy = next();
+    else if (a === '--decoy') opts.decoy = next();
     else if (a === '--method' || a === '-X') opts.method = next().toUpperCase();
-    else if (a === '--decoy-method' || a === '--trap-method') opts.decoyMethod = next().toUpperCase();
+    else if (a === '--decoy-method') opts.decoyMethod = next().toUpperCase();
     else if (a === '--data' || a === '-d') opts.data = next();
     else if (a === '--runs') opts.runs = Math.max(1, Number(next()) || 1);
     else if (a === '--ignore-header') opts.ignore.add(next().toLowerCase());
+    else if (a === '--ignore-json') opts.ignoreJson.push(next());
+    else if (a === '--timeout') {
+      opts.timeout = Number(next());
+      if (!(opts.timeout > 0)) usage('--timeout needs a positive number of seconds');
+    } else if (a === '--insecure') opts.insecure = true;
     else if (a === '--identical') opts.identical = true;
     else if (a === '--json') opts.json = true;
     else if (a === '-H' || a === '--header') {
@@ -71,6 +85,7 @@ function parseArgs(argv) {
 }
 
 // One request over raw HTTP. rawHeaders keeps the server's order and case.
+// Resolves { timedOut: true } when no complete response arrives within --timeout.
 function send(url, method, opts) {
   return new Promise((resolve, reject) => {
     const u = new URL(url);
@@ -79,10 +94,28 @@ function send(url, method, opts) {
     const body = method === 'GET' || method === 'HEAD' ? undefined : opts.data;
     if (body !== undefined) headers['Content-Length'] = Buffer.byteLength(body);
     const t0 = performance.now();
-    const req = lib.request(u, { method, headers, agent: false }, (res) => {
+    const options = { method, headers, agent: false };
+    if (opts.insecure && lib === https) options.rejectUnauthorized = false;
+    let done = false;
+    const fail = (e) => {
+      if (done) return;
+      done = true;
+      clearTimeout(timer);
+      reject(e);
+    };
+    const timer = setTimeout(() => {
+      done = true;
+      req.destroy();
+      resolve({ timedOut: true, ms: performance.now() - t0 });
+    }, opts.timeout * 1000);
+    const req = lib.request(u, options, (res) => {
       const chunks = [];
       res.on('data', (c) => chunks.push(c));
+      res.on('error', fail);
       res.on('end', () => {
+        if (done) return;
+        done = true;
+        clearTimeout(timer);
         const raw = res.rawHeaders;
         const pairs = [];
         for (let i = 0; i < raw.length; i += 2) pairs.push([raw[i], raw[i + 1]]);
@@ -95,7 +128,7 @@ function send(url, method, opts) {
         });
       });
     });
-    req.on('error', reject);
+    req.on('error', fail);
     if (body !== undefined) req.write(body);
     req.end();
   });
@@ -153,6 +186,38 @@ function diffValues(a, b, p = '$', out = []) {
   return out;
 }
 
+// The value at a dotted path (errors.0.id), or undefined.
+function getPath(v, p) {
+  for (const k of p.split('.')) {
+    if (v === null || typeof v !== 'object') return undefined;
+    v = v[k];
+  }
+  return v;
+}
+
+function setPath(v, p, x) {
+  const keys = p.split('.');
+  const last = keys.pop();
+  const parent = keys.length ? getPath(v, keys.join('.')) : v;
+  if (parent !== null && typeof parent === 'object' && last in parent) parent[last] = x;
+}
+
+// The body to compare: each --ignore-json string value replaced by a fixed marker, in the
+// parsed body and wherever its JSON text appears in the raw body.
+function masked(run, paths) {
+  const json = parseJson(run.body);
+  let text = run.body;
+  if (json.ok) {
+    for (const p of paths) {
+      const v = getPath(json.value, p);
+      if (typeof v !== 'string') continue;
+      text = text.split(JSON.stringify(v)).join('"<ignored>"');
+      setPath(json.value, p, '<ignored>');
+    }
+  }
+  return { text, json };
+}
+
 const median = (xs) => {
   const s = [...xs].sort((x, y) => x - y);
   return s[Math.floor(s.length / 2)];
@@ -178,6 +243,32 @@ async function main() {
     console.error(`request failed: ${e.message}`);
     process.exit(2);
   }
+
+  // No answer in time: a difference when only one side stalls, an error when both always do.
+  const stalled = (runs) => runs.filter((r) => r.timedOut).length;
+  const rStalled = stalled(realRuns);
+  const dStalled = stalled(decoyRuns);
+  if (rStalled || dStalled) {
+    if (rStalled === opts.runs && dStalled === opts.runs) {
+      console.error(`request failed: neither URL answered within ${opts.timeout}s`);
+      process.exit(2);
+    }
+    const problems = [];
+    if (rStalled) problems.push(`real gave no response within ${opts.timeout}s on ${rStalled} of ${opts.runs} run(s)`);
+    if (dStalled) problems.push(`decoy gave no response within ${opts.timeout}s on ${dStalled} of ${opts.runs} run(s)`);
+    if (opts.json) {
+      const side = (url, method) => ({ url, method });
+      console.log(JSON.stringify({ real: side(opts.real, opts.method), decoy: side(opts.decoy, decoyMethod), problems, valueDiffs: [], notes: [], match: false }, null, 2));
+    } else {
+      console.log(`real:  ${opts.method} ${opts.real}`);
+      console.log(`decoy: ${decoyMethod} ${opts.decoy}\n`);
+      console.log('Differences');
+      for (const p of problems) console.log(`  DIFF  ${p}`);
+      console.log('\nResult: DIFFERENT');
+    }
+    process.exit(1);
+  }
+
   const real = realRuns[0];
   const decoy = decoyRuns[0];
   const problems = [];
@@ -207,17 +298,19 @@ async function main() {
     if (other && !VOLATILE_VALUE.has(n.toLowerCase()) && other[1] !== v) problems.push(`header value differs: ${n}: real=${v} decoy=${other[1]}`);
   }
 
-  // Body.
-  const rj = parseJson(real.body);
-  const dj = parseJson(decoy.body);
+  // Body, with any --ignore-json values masked.
+  const rm = masked(real, opts.ignoreJson);
+  const dm = masked(decoy, opts.ignoreJson);
+  const rj = rm.json;
+  const dj = dm.json;
   let valueDiffs = [];
   if (opts.identical) {
-    if (real.body !== decoy.body) problems.push(`bodies are not byte-identical (real ${real.body.length} bytes, decoy ${decoy.body.length} bytes)`);
+    if (rm.text !== dm.text) problems.push(`bodies are not byte-identical (real ${real.body.length} bytes, decoy ${decoy.body.length} bytes)`);
   }
   if (rj.ok && dj.ok) {
     for (const d of diffShapes(shape(rj.value), shape(dj.value))) problems.push(`body: ${d}`);
     valueDiffs = diffValues(rj.value, dj.value);
-    if (!opts.identical && real.body !== decoy.body && JSON.stringify(rj.value) === JSON.stringify(dj.value)) {
+    if (!opts.identical && rm.text !== dm.text && JSON.stringify(rj.value) === JSON.stringify(dj.value)) {
       problems.push('body: same JSON, different bytes (spacing, escaping or a trailing newline)');
     }
   } else if (rj.ok !== dj.ok) {
@@ -227,7 +320,7 @@ async function main() {
   }
 
   // Stability: a decoy whose body changes between identical requests, when the real one doesn't.
-  const varies = (runs) => new Set(runs.map((r) => r.body)).size > 1;
+  const varies = (runs) => new Set(runs.map((r) => masked(r, opts.ignoreJson).text)).size > 1;
   if (varies(decoyRuns) && !varies(realRuns)) problems.push('decoy body changes between identical requests; the real one does not');
 
   // Latency.

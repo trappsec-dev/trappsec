@@ -9,7 +9,7 @@
     {
       "name": "trappsec",
       "source": "./plugins/trappsec",
-      "description": "Agent skills that add deception, detection and auditing to your own application, in its own code, reporting through OpenTelemetry.",
+      "description": "Agent skills that add deception, detection and auditing to your own application, in its own code, reporting through OpenTelemetry, plus one that sets OpenTelemetry up.",
       "category": "security",
       "tags": ["security", "deception", "honeypot", "detection", "audit", "opentelemetry", "api"]
     }
