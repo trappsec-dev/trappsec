@@ -4,9 +4,9 @@ What add-telemetry must leave in place, how to learn the app's stack, and the ru
 
 ## The prerequisite it meets
 
-add-auditing, add-deception and add-detection each stop unless the app already has the list below. It is shared with them word for word, so this skill finishes exactly where they start:
+add-auditing, add-deception, add-detection and add-response each stop unless the app already has the list below. It is shared with them word for word, so this skill finishes exactly where they start:
 
-<!-- BEGIN PREREQUISITE CORE: identical in add-auditing, add-deception, add-detection and add-telemetry -->
+<!-- BEGIN PREREQUISITE CORE: identical in add-auditing, add-deception, add-detection, add-response and add-telemetry -->
 - an OpenTelemetry SDK with a tracer provider and a logger provider, both exported (usually OTLP to a Collector), initialized in every entry point that will emit: the web server, workers, each CLI, script or management command;
 - a server span for every request, from HTTP server instrumentation or, on a function platform, the invocation span;
 - log records emitted in a request carrying its trace and span IDs (test with a record your own code emits; framework access lines are often written after the span ends);

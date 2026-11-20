@@ -27,7 +27,7 @@ A chokepoint usually holds several inputs an attacker could try: a field, a valu
 | Refuses it, and no real client can produce it | A detection | add-detection: a rule in the branch that refuses |
 | Ignores it: no handler reads the field, or no route serves the path | A tripwire | add-deception: a honey field or a decoy route |
 | Accepts it and acts on it, though no real client sends it | A vulnerability | Neither: report it, and don't instrument it |
-| Refuses it, but a real client can reach that refusal | Nothing certain | Neither: an uncovered input, with the reason |
+| Refuses it, but a real client can reach that refusal | A weak signal | add-detection: a refusal on the server span, counted per actor, never a finding |
 
 Mass assignment shows the split. A field the endpoint refuses is a detection, a field it silently drops is a honey field, and a field it saves is a vulnerability.
 
@@ -37,7 +37,8 @@ Each skill reports every chokepoint on the map with one outcome per input:
 
 - **covered**, with the rule or tripwire ID;
 - **handed off** to the other skill, naming the input and what the app does with it today;
-- **uncovered**, with a reason about effectiveness (a real client could produce it, or every candidate would give itself or another away);
+- **counted**, for a refusal real clients also reach: no rule, but the refusal is on the server span with its kind and reason (references/telemetry.md, Request outcome);
+- **uncovered**, with a reason about effectiveness (every candidate would give itself or another away, or the refusal happens where the app's code can't record it);
 - **vulnerability**, reported for the user to fix.
 
 Before mapping, read the other skill's server-side inventory if one exists: an input it already covers needs nothing from you, and an input it handed off is yours to cover or to report as uncovered. A handed-off input stays in each report until a report shows it covered. When both skills are applied to one app, run add-detection first: it changes no behavior, and its map and hand-offs become add-deception's starting point.

@@ -1,6 +1,6 @@
 ---
 name: add-auditing
-description: Add an audit trail to an application the user owns: what people, services and agents do in the product, from everyday changes to its core objects to sign-ins, permission changes, sharing and exports, as self-contained OpenTelemetry audit records in the product's own terms. Use this whenever the user wants audit logs, a user activity log or history, an audit trail, compliance logging (SOC 2, ISO 27001, HIPAA), a customer-facing audit log API, or a record of authorization decisions. Not for debugging logs, metrics, tracing setup or detecting attacks.
+description: Add an audit trail to an application the user owns: what people, services and agents do in the product, from everyday changes to its core objects to sign-ins, permission changes, sharing and exports, as self-contained OpenTelemetry audit records in the product's own terms. Use this whenever the user wants audit logs, a user activity log or history, an audit trail, compliance logging (SOC 2, ISO 27001, HIPAA), a customer-facing audit log API, a record of authorization decisions, or a measure of how much sensitive data each caller reads. Not for debugging logs, metrics, tracing setup or detecting attacks.
 license: MIT
 ---
 
@@ -45,6 +45,14 @@ The action's own record carries the authorization decision (`authz.permission`):
 
 Leave out what isn't a user's action: page views, searches and ordinary reads of non-sensitive data, housekeeping no user would ask about (cache refreshes, cleanup of expired rows), and the app's own internal calls. Those belong in product analytics or traces; if the user wants them too, raise the volume and cost first. A job that carries out an audited operation (settling orders, running an approved deploy) is a path into it and emits.
 
+## Reads are measured, not audited
+
+Most reads are left out of the trail because there are too many of them, and that is exactly where data leaves: an account that pages through every customer, or a key that reads a hundred times its usual day, performs no audited action. So every response that carries data the product treats as sensitive says so on its request's server span: which classes of data, and how many records (references/telemetry.md, Request outcome). It costs no record, and it gives the backend what it needs to notice volume: records read per account, credential and tenant, against that actor's own history.
+
+- **A data map** in server code, beside the action registry: each operation that returns sensitive data (a route, a GraphQL field, an export, a report), the classes it returns, and where its handler holds the count. Classes come from the map, fixed per operation, never from looking at the response.
+- **The count** is one the handler already has: the page's length, the rows an export wrote, 1 for a single record. Where the handler streams without counting, add a counter to the loop that writes the rows; never read the result twice or buffer it.
+- Reads that the trail does audit (a patient's chart) get both: the audit record is the evidence, the span attribute keeps the count whole.
+
 ## Workflow
 
 ### 0. Prerequisites and questions
@@ -64,12 +72,14 @@ Leave out what isn't a user's action: page views, searches and ordinary reads of
 - **Authorization.** How permissions are evaluated, and where allows and denies happen.
 - **Who and from where.** Where the authenticated principal lives (user, tenant, credential, session, impersonation, agents), and how the client IP reaches the app through its proxies.
 - **Vocabulary.** The product's own names for things, from the UI, docs and code.
+- **Where sensitive data leaves.** Every operation whose response carries personal, financial, health, credential or internal data, on every surface: lists, detail views, search, exports, reports, file downloads, GraphQL fields, and API serializers that include more than the page shows.
 
 ### 2. Design
 
 1. **The action registry.** For each audited action: its event name (references/telemetry.md), operation type, the resources and participants it records, the parameters and changes that matter, and which outcomes it can have. Keep it in one place in the codebase, versioned with it.
 2. **Sensitive data.** Decide per action what must never be recorded (secrets, content) and what personal data is truly needed.
-3. **Volume.** Bulk operations, including a job that changes many objects in one run, are one event with a count. Autosave and rapid edits to one object are one event per editing session or window where the app has such a boundary, otherwise one per save. Unauthenticated failures (failed sign-ins) arrive at the caller's chosen rate: record them, and tell the user. For an API that authenticates every request with a token, record failed authentication only; a success is the request's span. Where a regulation treats listing records as access (a patient roster), ask whether listings are audited, one entry per page with a count.
+3. **The data map.** For each operation from reconnaissance: its classes, where the count comes from, and where the span attributes are written. Add a class to the vocabulary only when none fits, and say so.
+4. **Volume.** Bulk operations, including a job that changes many objects in one run, are one event with a count. Autosave and rapid edits to one object are one event per editing session or window where the app has such a boundary, otherwise one per save. Unauthenticated failures (failed sign-ins) arrive at the caller's chosen rate: record them, and tell the user. For an API that authenticates every request with a token, record failed authentication only; a success is the request's span. Where a regulation treats listing records as access (a patient roster), ask whether listings are audited, one entry per page with a count.
 
 ### 3. Present the plan
 
@@ -77,6 +87,8 @@ Unless the user already told you to go ahead, show the registry and wait. It has
 
 | Action (event name) | Entry point | Emitted at | Outcomes | Records | Never records |
 |---|---|---|---|---|---|
+
+Then the data map: operation, classes, where the count comes from, and the operations that return sensitive data the map won't cover, with the reason.
 
 An entry point you won't cover keeps its row, with the reason in place of the emit point. Under the table, give the count per surface: handlers that write audited objects, and how many of them the plan covers. If covering a surface is large (a parallel API with hundreds of handlers), say so here and let the user choose; never leave it out of the plan.
 
@@ -88,6 +100,8 @@ An entry point you won't cover keeps its row, with the reason in place of the em
 - **Set the request context on the server span** as references/telemetry.md describes, reusing it if add-deception or add-detection already added it. The audit entry still carries its own copy of who and from where.
 - **Success is recorded only once the operation has committed** (an after-commit hook, or right after the transaction returns); a sensitive read, once the response is built. Denials and failures are recorded where they happen. Capture the request's span when the entry is built; an after-commit callback can run outside it. Model hooks fire for saves that changed nothing and from seeds and consoles, and miss nested records: record real changes with an origin (a request, a job, a script) only. A change a person makes in a production console is audited like a script where the app can hook it; otherwise it goes under Gaps. ORM callbacks that run before commit are not emit points. A test wrapped in a transaction often never runs after-commit hooks: make the tests run them the way the test framework allows, and never move the emit point to make a test pass.
 - **Old values.** Where the handler or ORM no longer holds a field's old value when the change commits, read the row once before the operation, in the same request, and carry it to the emit point; if that read fails, record the change without `old`. A bulk action reads no old values. Take names from objects the operation already loaded. The trail may add a read only for old values and to tell another tenant's object from a deleted one; list each in the plan.
+- **Data returned.** The request-context module writes `security.data.classes` and `security.data.records` on the server span once the response is built, from the data map and the handler's count, and only when the request returned the data. A GraphQL document or batch that reaches several mapped operations writes the union of their classes and the sum of their counts.
+- **The registry reports itself.** Add the inventory records in references/telemetry.md (Inventory records and the self-check) for the audit family, one per action, and a drift test: every registry action has an emit point and every emit point names a registry action. The self-check command emits the inventory and never an audit record.
 - **Every path into an audited operation emits**: every entry point in the inventory, including background jobs and admin tools, or it stays in the plan's table with its reason.
 - **Recording never fails, blocks or changes an operation.** If the trail must be guaranteed for an action (some compliance regimes require it), raise that with the user instead of deciding on your own.
 - **Nothing sensitive.** Secrets and content never enter an event.
@@ -100,7 +114,9 @@ An entry point you won't cover keeps its row, with the reason in place of the em
 4. **Every path, in tests.** One test per action per entry point in the plan (UI, each API, job, admin tool), asserting the same audit entry as check 2; bulk paths emit their own action. Then repeat the inventory search: every handler that writes an audited object either emits or is listed under Gaps. A handler added since the plan counts too.
 5. **Nothing leaks.** Search the emitted records, the app's other log records and the exported spans from your test runs for secrets, tokens, content and the personal data the user keeps out.
 6. **Robustness.** Make your own recording module fail in a test, through one fault point it exposes (not the OpenTelemetry API, which the instrumentation shares); the operation behaves exactly as before.
-7. **Names.** Every record and span attribute uses the names in references/telemetry.md, and nothing else in the app uses them with another meaning.
+7. **Data returned.** For each row of the data map, one request: the server span carries its classes and the right count; a refused or empty request carries none or zero; response time and memory are unchanged on the largest export.
+8. **Inventory.** Start the app and find one inventory record per registry action, with one hash and the right size; the drift test fails when an emit point is removed in a scratch copy.
+9. **Names.** Every record and span attribute uses the names in references/telemetry.md, and nothing else in the app uses them with another meaning.
 
 ### 6. Report
 
@@ -108,10 +124,11 @@ An entry point you won't cover keeps its row, with the reason in place of the em
 - Coverage per surface: handlers that write audited objects, and how many emit.
 - What each event records, and what it deliberately leaves out.
 - Gaps: operations you couldn't audit and why.
+- The data map, the operations that return sensitive data and aren't in it, and what the backend can now do with it: records read per account, credential and tenant against that actor's own history. This skill sets no thresholds.
 - Recommendations for the pipeline the user runs, which this skill doesn't change: audit records routed by their logger to their own pipeline without sampling, a durable queue, write-once storage as the system of record, a copy to the SIEM, and alerting on producers that go silent. A record lives only in memory until its batch is exported, so a crash right after commit loses it; a local collector narrows that window.
 - Existing logs that already carry what the trail must not (a typed login on a failed sign-in, a token in a URL): report them; don't change them.
 - Assumptions and residual risks.
 
 ## Reference files
 
-- **references/telemetry.md**: the OpenTelemetry prerequisite, the request context and records shared with add-deception and add-detection, and the self-contained audit entry.
+- **references/telemetry.md**: the OpenTelemetry prerequisite, the request context, request outcome and records shared with add-deception, add-detection and add-response, the inventory records, and the self-contained audit entry.

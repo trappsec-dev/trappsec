@@ -171,7 +171,7 @@ The rules for each piece are in references/implementation.md, and the event ever
 - **Inferred decoys.** A new method on a route the attacker has already used, listed by the framework like any real method.
 - **Honey fields.** Checked after authentication and before the input is used. The endpoint behaves exactly as before, and the field can never reach the logic.
 - **Bait fields.** Added to the real serializer with the smallest idiomatic change; the real write handler never reads them.
-- **Inventory.** Every tripwire has a stable ID, a marker in server code and an entry in one inventory in server code.
+- **Inventory.** Every tripwire has a stable ID, a marker in server code and an entry in one inventory in server code. The inventory reports itself: add the inventory records, the self-check command and the drift test in references/telemetry.md (Inventory records and the self-check), reusing them if another skill added them. They go to the telemetry backend only, never into anything a browser receives.
 
 **Frontend** (references/frontend-lures.md):
 
@@ -196,7 +196,8 @@ A tripwire you haven't fired is a tripwire you don't have. Commands and details:
 6. **Frontend survival.** Build for production, then run `node ${CLAUDE_SKILL_DIR}/scripts/scan_bundle.mjs --dir <build-output> --lure <string> ...`. Every lure must survive the bundler, with nothing near it that reveals intent. Also search the HTML shell and anything served outside the build directory for the words the scan looks for.
 7. **False positives.** For each lure, show that no real code path calls it and no real user can pass its gate. For each honey field, show exactly what the real UI sends. Run the e2e suite if there is one.
 8. **Attribution and schema.** For one hit per tripwire, the finding matches references/telemetry.md and shares its trace and span IDs with the request's server span, which names the right user, tenant and credential. The recorded IP passes the `client.address` check in references/telemetry.md.
-9. **Tripwire robustness.** Make your own recording module fail in a test (not the OpenTelemetry API, which the instrumentation shares), and send an oversized or deeply nested body to every honey-field endpoint; responses and response times must not change.
+9. **Inventory and self-check.** Start the app and find one inventory record per tripwire, with one hash and the right size. Run the self-check command and find one `test` finding per tripwire. Remove one tripwire's recording call in a scratch copy and show the drift test fails.
+10. **Tripwire robustness.** Make your own recording module fail in a test (not the OpenTelemetry API, which the instrumentation shares), and send an oversized or deeply nested body to every honey-field endpoint; responses and response times must not change.
 
 ### 6. Report
 

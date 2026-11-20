@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 // The skills share text, copied into each skill so every skill stands alone: in
-// references/telemetry.md a common core in add-auditing, add-deception and add-detection and a
-// findings core in add-deception and add-detection; the OpenTelemetry prerequisite inside the
-// common core, also in add-telemetry's references/setup.md; in references/attack-paths.md the
+// references/telemetry.md a common core in add-auditing, add-deception, add-detection and
+// add-response and a findings core in add-deception and add-detection; the OpenTelemetry
+// prerequisite inside the common core, also in add-telemetry's references/setup.md; in references/attack-paths.md the
 // attack-paths core in add-deception and add-detection. Fail if the copies drift apart.
 import fs from 'node:fs';
 import path from 'node:path';
@@ -10,8 +10,8 @@ import { fileURLToPath } from 'node:url';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../plugins/trappsec/skills');
 const BLOCKS = [
-  { name: 'prerequisite core', file: { 'add-telemetry': 'setup.md' }, begin: '<!-- BEGIN PREREQUISITE CORE', end: '<!-- END PREREQUISITE CORE -->', skills: ['add-auditing', 'add-deception', 'add-detection', 'add-telemetry'] },
-  { name: 'common core', file: 'telemetry.md', begin: '<!-- BEGIN COMMON CORE', end: '<!-- END COMMON CORE -->', skills: ['add-auditing', 'add-deception', 'add-detection'] },
+  { name: 'prerequisite core', file: { 'add-telemetry': 'setup.md' }, begin: '<!-- BEGIN PREREQUISITE CORE', end: '<!-- END PREREQUISITE CORE -->', skills: ['add-auditing', 'add-deception', 'add-detection', 'add-response', 'add-telemetry'] },
+  { name: 'common core', file: 'telemetry.md', begin: '<!-- BEGIN COMMON CORE', end: '<!-- END COMMON CORE -->', skills: ['add-auditing', 'add-deception', 'add-detection', 'add-response'] },
   { name: 'findings core', file: 'telemetry.md', begin: '<!-- BEGIN FINDINGS CORE', end: '<!-- END FINDINGS CORE -->', skills: ['add-deception', 'add-detection'] },
   { name: 'attack paths core', file: 'attack-paths.md', begin: '<!-- BEGIN ATTACK PATHS CORE', end: '<!-- END ATTACK PATHS CORE -->', skills: ['add-deception', 'add-detection'] },
 ];

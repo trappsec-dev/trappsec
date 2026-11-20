@@ -1,6 +1,6 @@
 ---
 name: add-telemetry
-description: Set up OpenTelemetry traces, logs and metrics in an application the user owns, so every request has a server span, the app's own log records carry its trace, and everything is exported over OTLP. Use this whenever the user wants to add OpenTelemetry, tracing, distributed traces, OTLP export or log correlation to their app, or when add-auditing, add-deception or add-detection stopped because traces and logs were missing. Not for custom business metrics, dashboards, alerting, deploying a Collector, or instrumenting LLM calls.
+description: Set up OpenTelemetry traces, logs and metrics in an application the user owns, so every request has a server span, the app's own log records carry its trace, and everything is exported over OTLP. Use this whenever the user wants to add OpenTelemetry, tracing, distributed traces, OTLP export or log correlation to their app, or when add-auditing, add-deception, add-detection or add-response stopped because traces and logs were missing. Not for custom business metrics, dashboards, alerting, deploying a Collector, or instrumenting LLM calls.
 license: MIT
 ---
 
@@ -106,7 +106,7 @@ These checks are the authority on whether the setup works, on any stack. When on
 - What each signal contains and what it deliberately leaves out.
 - Gaps: processes or libraries left uninstrumented, and why.
 - Recommendations for the pipeline the user runs, which this skill doesn't change: a Collector near the app for batching, retries and routing; tail sampling there rather than in the app, keeping every trace marked `security.flagged`; metric exemplars off if traces may carry client addresses (`OTEL_METRICS_EXEMPLAR_FILTER=always_off`).
-- Next steps: add-auditing, add-detection and add-deception can now run on this app.
+- Next steps: add-auditing, add-detection, add-deception and add-response can now run on this app.
 
 ## Reference files
 

@@ -4,6 +4,17 @@ All notable changes to trappsec are documented here. The format follows [Keep a 
 
 ## Unreleased
 
+### Added (prototype, not yet field-tested): what a detection-and-response backend needs beyond findings
+
+Findings say when a rule is certain. A backend that scores behavior and responds to it also needs a baseline, signals from dangerous operations, proof that the rules still exist, and a way to act. These changes add each one. None has been run on a real app yet.
+
+- **Every refusal is counted (`add-detection`).** Each refusal the app makes, including the ones real users reach, is written on the request's server span as `security.refusal.*` (kind, the app's reason code, permission, field, object, count), from the one place the app turns errors into responses. It is never a finding or a log record. In the attack-path map, a refusal a real client can reach is now "counted" instead of uncovered.
+- **Sensitive data returned is measured (`add-auditing`).** A data map in server code names each operation that returns sensitive data and its classes; the server span of each such response carries `security.data.classes` and `security.data.records`, beside `http.response.body.size`.
+- **Sink findings (`add-detection`).** A new detector, `sink_probe`, for input that reaches a query built as text, a command, a template, a deserializer, an XML parser, a file path or an outbound address (references/sinks.md). Three sources: an error only injected input can cause (a database syntax error, never an unknown column), a guard the app already has, and an invariant the code implies and doesn't check, which is reported as a vulnerability and observed with `outcome` = `allowed`. New intents: `injection`, `path_traversal`, `request_forgery`. No input is parsed or matched, and no statement, command or content is recorded.
+- **Inventories report themselves (all skills).** Each long-lived process emits one `security.inventory.entry` record per rule, tripwire and audit action (`log.type` = `inventory`), with one hash and size per family. A self-check command emits the inventory and one `test` finding per rule through the recording module, and a drift test fails the build when a rule's recording site disappears.
+- **`add-response` skill.** Directives (target, action, reason, expiry) issued by an operator or by a signed request from the backend, and carried out with the app's own mechanisms: `watch`, `revoke_session`, `revoke_credential`, `step_up`, `suspend`, `block`. One seam after authentication reads an in-memory snapshot; it fails open, ships in `dry_run`, refuses protected targets, and keeps tenant and address targets off unless the user turns them on. A directive's life is four audit records, and each touched request carries `security.response.*` on its span.
+- **Shared text.** The common core gains Request outcome and Inventory records and the self-check, is now carried by `add-response` too, and the CI check covers the new copy.
+
 ### Changed: findings are detection records a backend can act on (schema 2)
 
 - **A finding now stands on its own as a detection.** A backend that turns detection records into alerts (kat does, with no rule written) can now take a finding as one. Before, every finding shared the one event name `security.finding` and named its actor only on the server span, so such a backend would have counted every tripwire in an app as one and couldn't tell attackers apart.

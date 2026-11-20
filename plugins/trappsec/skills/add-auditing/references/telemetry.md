@@ -1,12 +1,12 @@
 # Telemetry
 
-What add-auditing emits, and what it needs in place first. The common core is shared word for word with add-deception and add-detection, so records from all three line up.
+What add-auditing emits, and what it needs in place first. The common core is shared word for word with add-deception, add-detection and add-response, so records from all of them line up.
 
-<!-- BEGIN COMMON CORE: identical in add-auditing, add-deception and add-detection -->
+<!-- BEGIN COMMON CORE: identical in add-auditing, add-deception, add-detection and add-response -->
 ## Prerequisite: OpenTelemetry traces and logs
 
 These skills write to OpenTelemetry traces and logs together. Before designing anything, confirm the app already has:
-<!-- BEGIN PREREQUISITE CORE: identical in add-auditing, add-deception, add-detection and add-telemetry -->
+<!-- BEGIN PREREQUISITE CORE: identical in add-auditing, add-deception, add-detection, add-response and add-telemetry -->
 - an OpenTelemetry SDK with a tracer provider and a logger provider, both exported (usually OTLP to a Collector), initialized in every entry point that will emit: the web server, workers, each CLI, script or management command;
 - a server span for every request, from HTTP server instrumentation or, on a function platform, the invocation span;
 - log records emitted in a request carrying its trace and span IDs (test with a record your own code emits; framework access lines are often written after the span ends);
@@ -30,25 +30,29 @@ If any of these is missing, stop. Tell the user what you found and that this ski
 The names these skills define are the same in every app, so one query works across services:
 - audit records: event names `audit.<area>.<action>`, marked `log.type` = `audit`, with the entry in one attribute, `audit`;
 - findings: every finding marked `log.type` = `detection`, with the rule's stable ID as its event name, `detector`, `intent` and `severity` saying what fired, and the details under `security.finding.*`;
-- the request context on the server span: `tenant.id`, `credential.type`, `credential.id`, `actor.type`, `actor.id` and `security.flagged`, beside OpenTelemetry's `user.*`, `session.id` and `client.address`.
+- the request context on the server span: `tenant.id`, `credential.type`, `credential.id`, `actor.type`, `actor.id` and `security.flagged`, beside OpenTelemetry's `user.*`, `session.id` and `client.address`;
+- the request outcome on the server span: `security.refusal.*` for what the app refused, `security.data.*` for the sensitive data it returned, and `security.response.*` where add-response acted on the request;
+- inventory records: event name `security.inventory.entry`, marked `log.type` = `inventory`, with the details under `security.inventory.*`.
 
 Use OpenTelemetry's own attributes as they are, and never invent new ones in its namespaces. Before writing a name, search the app and its telemetry for it: if the app already emits `audit.*` events or sets one of these attributes with another meaning, stop and ask the user rather than mix two meanings under one name. Name the recording code like the app's other observability code.
 
-### Three kinds of record
+### Five kinds of record
 
 Each fact is said once, where it is known.
 
 | Record | Says | When |
 |---|---|---|
 | Request context, on the server span | Who called and from where | Once per request |
+| Request outcome, on the server span | What the app refused, and what sensitive data it returned | On a request that has either |
 | Audit record, a log record | The complete audit entry: who did what, for whom, to what, from where, with what result | When an audited action succeeds, is denied or fails |
 | Finding, a log record | Which deception or detection rule fired, on what, and the actor's keys a backend groups it by | When a rule fires |
+| Inventory record, a log record | Which rules, tripwires and audited actions this build carries | When a process starts, and from the self-check command |
 
-The backend joins each finding to its request's context by trace and span ID, and groups findings by the actor keys each one carries. Audit records stand on their own, without the join, the span or sampling. A request carrying several actions or findings (a GraphQL document, a batch) emits one record for each, all on the request's span.
+The backend joins each finding to its request's context by trace and span ID, and groups findings by the actor keys each one carries. Audit records stand on their own, without the join, the span or sampling. The request outcome is the only one of the five that is evidence of nothing by itself: it is what a backend counts, per actor and against all of that actor's requests, to see the probing that no single rule can be sure of. A request carrying several actions or findings (a GraphQL document, a batch) emits one record for each, all on the request's span.
 
 ### Request context
 
-One small module, shared by all three skills (reuse it and its tests if another skill added it; each skill keeps its own inventory or registry), writes the request context on the server span from the app's own state, never from anything the caller sent:
+One small module, shared by all of these skills (reuse it and its tests if another skill added it; each skill keeps its own inventory or registry), writes the request context on the server span from the app's own state, never from anything the caller sent:
 - `client.address` and any missing request attribute as the request starts, so requests that fail authentication carry them too;
 - identity once authentication has succeeded: right after it, or in a response hook while the span is open, which leaves authentication code alone. The endpoint that signs someone in writes it on success; a refusal raised before authentication writes what it knows;
 - the tenant the server resolved (from the session, a token, a row it loaded, or an argument after its membership check), never one the caller merely named. A request acting in several keeps the first; each record carries its own.
@@ -78,6 +82,33 @@ Omit an attribute whose value is unknown; never write an empty string. A skill t
 
 If the app's own setting is wrong, report it and its fix rather than changing proxy or infrastructure configuration. To verify, call the app's resolver in a test with an untrusted peer address and a forged `X-Forwarded-For`; where it can't be called directly, send the forged header through a stand-in proxy that appends the connecting address, from a client address the app's trust setting doesn't trust (another machine, or this one's LAN address; when loopback is trusted, so is every `127.x` address): the recorded IP is the client's. A direct request alone proves nothing.
 
+### Request outcome
+
+Two facts about how a request ended go on the server span as attributes, written by the request-context module. Neither is a finding, and neither should alert on its own: real users are refused and read sensitive data all day. They cost no extra record, and they sit on the span that already names the caller, so a backend can turn them into rates (this account's refusals against its requests, this credential's records read against its usual day). Omit every one of them on a request that has neither.
+
+**Refusals**, written by add-detection for every refusal the app makes, including the ones a real client can reach:
+
+| Span attribute | Type | Value |
+|---|---|---|
+| `security.refusal.kind` | string | `authentication` (no or bad credential), `authorization` (who the caller is), `validation` (what was sent), `not_found` (an object the request named), `state` (the target's own state, a conflict), `forgery` (a CSRF token or signature) or `limit` (a rate limit or quota) |
+| `security.refusal.reason` | string | The app's own error code or kind, from server code; never message text, and never anything the caller sent |
+| `security.refusal.permission` | string | The permission or role evaluated, for an `authorization` refusal that names one |
+| `security.refusal.field` | string | The field that failed, by the name the server's schema gives it, and the first when several failed; never a key the caller invented |
+| `security.refusal.resource.type`, `security.refusal.resource.id` | string | The object the refusal was about, when the check had one in hand or was asked for one; the ID as sent |
+| `security.refusal.count` | int | How many refusals the request carried, when more than one (a GraphQL document, a batch); the other attributes describe the first |
+
+A refusal that also fired a finding still writes these: the finding says a rule is certain, the refusal keeps the count whole.
+
+**Sensitive data returned**, written by add-auditing for responses that carry data the product treats as sensitive:
+
+| Span attribute | Type | Value |
+|---|---|---|
+| `security.data.classes` | string[] | The classes of sensitive data the response carried, from the operation's entry in a data map kept in server code, never from inspecting the response. Starting vocabulary: `personal`, `financial`, `health`, `credentials`, `internal` |
+| `security.data.records` | int | How many records the response returned or the export wrote, from a count the handler already holds (a page's length, an export's row count) |
+| `http.response.body.size` | int | OpenTelemetry's own attribute: turn on the instrumentation's opt-in where the repo owns it, or copy a `Content-Length` the response already has. Never buffer or re-serialize a response to measure it |
+
+A request refused before it returned data writes no `security.data.*`.
+
 ### Log records
 
 - **One record per occurrence, emitted as an event**, with the event name in the record's event-name field (never an `event.name` attribute) and no dynamic values in it: an audit record's is its action, a finding's is its rule's stable ID from server code.
@@ -105,6 +136,28 @@ If the app's own setting is wrong, report it and its fix rather than changing pr
 - A function platform that freezes the process after the response needs a logger flush as the last step of every invocation, error paths included: the one network wait these skills allow, bounded by the exporter's timeout. Tell the user, and suggest a local Collector or extension.
 - Each skill keeps one inventory or registry in server code of everything that emits, with stable IDs that records refer to.
 
+### Inventory records and the self-check
+
+A rule that has never fired looks the same from the backend as a rule someone deleted in a refactor, and a broken pipeline looks the same as a quiet day. Three things close that, and each skill adds them for its own inventory (reuse them if another skill added them):
+
+**Inventory records.** The recording module emits one record per inventory entry, built from the inventory in memory, so the backend holds the list of what this build is supposed to detect and audit:
+
+| Attribute | Type | Value |
+|---|---|---|
+| `log.type` | string | `inventory`, on every inventory record and nothing else |
+| `security.schema.version` | string | The family's schema version |
+| `security.inventory.family` | string | `detection`, `deception`, `audit` or `response` |
+| `security.inventory.id` | string | The rule's or tripwire's stable ID, the audit action, or the response action |
+| `security.inventory.hash` | string | One hash over the family's whole inventory (its IDs and the attributes below, sorted), the same on every entry, so a changed inventory shows as a changed hash |
+| `security.inventory.size` | int | How many entries the family has, so a backend knows when it holds them all |
+| `detector`, `intent`, `severity` | string | For a rule or tripwire, as on its findings |
+
+The event name is `security.inventory.entry`, the body is the entry's label, the severity `INFO`, and the logger is the findings logger (the audit logger for the audit family). The app's resource already says which service, version and environment the inventory belongs to. Emit it once from each long-lived process after telemetry starts and after any fork, outside any request's trace, and from the self-check command below. A process that starts per invocation or per command (a function platform, a CLI) doesn't emit it at start.
+
+**A self-check command**, in the app's own command runner, never a route, so nothing a caller can reach starts it. It emits the inventory records, then one finding per detection rule and tripwire through the recording module itself, with `test` = `true` and no caller: the resource already says which service and host it ran on. It proves that each rule's ID, the recording module, the exporter and the pipeline still work in this deployment; it doesn't prove a rule's condition, which the rule's own test does. It emits no audit record: an audit trail holds only what happened. Running it is the user's to schedule (after each deploy, and daily); say so in the report, with the alert it makes possible: an inventory entry with no test finding in the last day, or a service whose inventory hash changed without a release.
+
+**A drift test**, in the app's test suite: every inventory entry has at least one site in server code that records it (found by its marker, or by the recording call that names its ID), and every such site names an inventory entry. A refactor that drops a rule fails the build instead of going quiet.
+
 ### Learning the stack
 
 These skills name no stack's APIs, because they change between releases and an app on a stack nobody listed deserves the same result. Learn them for this app from the OpenTelemetry project's current documentation, then confirm each version-specific answer (hook timing, constructor shapes, option names) in the installed SDK and instrumentation code. The installed code, the type checker and the probe overrule the documentation and any example here. In the plan, give the answers that shaped a design choice, with their source:
@@ -124,7 +177,7 @@ Every answer is then proven by the end-to-end probe above, which is the authorit
 
 ### Changing the schema
 
-Findings are at schema version `"2"` (`security.schema.version`), audit entries at `"1"` (`version` inside the entry). Add attributes freely under `audit` and `security.finding`; renaming or removing one, or changing its meaning, raises that record's version. `user.*` and `session.id` are still in Development in OpenTelemetry's semantic conventions: if one is renamed, follow it and raise the version.
+Findings are at schema version `"2"` (`security.schema.version`), audit entries at `"1"` (`version` inside the entry). Add attributes freely under `audit`, `security.finding`, `security.refusal`, `security.data` and `security.inventory`; renaming or removing one, or changing its meaning, raises that record's version. `user.*` and `session.id` are still in Development in OpenTelemetry's semantic conventions: if one is renamed, follow it and raise the version.
 <!-- END COMMON CORE -->
 
 ## Audit records
