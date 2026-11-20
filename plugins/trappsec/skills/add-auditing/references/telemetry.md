@@ -31,7 +31,7 @@ The names these skills define are the same in every app, so one query works acro
 - audit records: event names `audit.<area>.<action>`, marked `log.type` = `audit`, with the entry in one attribute, `audit`;
 - findings: every finding marked `log.type` = `detection`, with the rule's stable ID as its event name, `detector`, `intent` and `severity` saying what fired, and the details under `security.finding.*`;
 - the request context on the server span: `tenant.id`, `credential.type`, `credential.id`, `actor.type`, `actor.id` and `security.flagged`, beside OpenTelemetry's `user.*`, `session.id` and `client.address`;
-- the request outcome on the server span: `security.refusal.*` for what the app refused, `security.data.*` for the sensitive data it returned, and `security.response.*` where add-response acted on the request;
+- the request outcome on the server span: `refusal.*` for what the app refused, `security.data.*` for the sensitive data it returned, and `security.response.*` where add-response acted on the request;
 - inventory records: event name `security.inventory.entry`, marked `log.type` = `inventory`, with the details under `security.inventory.*`.
 
 Use OpenTelemetry's own attributes as they are, and never invent new ones in its namespaces. Before writing a name, search the app and its telemetry for it: if the app already emits `audit.*` events or sets one of these attributes with another meaning, stop and ask the user rather than mix two meanings under one name. Name the recording code like the app's other observability code.
@@ -90,12 +90,12 @@ Two facts about how a request ended go on the server span as attributes, written
 
 | Span attribute | Type | Value |
 |---|---|---|
-| `security.refusal.kind` | string | `authentication` (no or bad credential), `authorization` (who the caller is), `validation` (what was sent), `not_found` (an object the request named), `state` (the target's own state, a conflict), `forgery` (a CSRF token or signature) or `limit` (a rate limit or quota) |
-| `security.refusal.reason` | string | The app's own error code or kind, from server code; never message text, and never anything the caller sent |
-| `security.refusal.permission` | string | The permission or role evaluated, for an `authorization` refusal that names one |
-| `security.refusal.field` | string | The field that failed, by the name the server's schema gives it, and the first when several failed; never a key the caller invented |
-| `security.refusal.resource.type`, `security.refusal.resource.id` | string | The object the refusal was about, when the check had one in hand or was asked for one; the ID as sent |
-| `security.refusal.count` | int | How many refusals the request carried, when more than one (a GraphQL document, a batch); the other attributes describe the first |
+| `refusal.kind` | string | `authentication` (no or bad credential), `authorization` (who the caller is), `validation` (what was sent), `not_found` (an object the request named), `state` (the target's own state, a conflict), `forgery` (a CSRF token or signature) or `limit` (a rate limit or quota) |
+| `refusal.reason` | string | The app's own error code or kind, from server code; never message text, and never anything the caller sent |
+| `refusal.permission` | string | The permission or role evaluated, for an `authorization` refusal that names one |
+| `refusal.field` | string | The field that failed, by the name the server's schema gives it, and the first when several failed; never a key the caller invented |
+| `refusal.resource.type`, `refusal.resource.id` | string | The object the refusal was about, when the check had one in hand or was asked for one; the ID as sent |
+| `refusal.count` | int | How many refusals the request carried, when more than one (a GraphQL document, a batch); the other attributes describe the first |
 
 A refusal that also fired a finding still writes these: the finding says a rule is certain, the refusal keeps the count whole.
 
@@ -177,7 +177,7 @@ Every answer is then proven by the end-to-end probe above, which is the authorit
 
 ### Changing the schema
 
-Findings are at schema version `"2"` (`security.schema.version`), audit entries at `"1"` (`version` inside the entry). Add attributes freely under `audit`, `security.finding`, `security.refusal`, `security.data` and `security.inventory`; renaming or removing one, or changing its meaning, raises that record's version. `user.*` and `session.id` are still in Development in OpenTelemetry's semantic conventions: if one is renamed, follow it and raise the version.
+Findings are at schema version `"2"` (`security.schema.version`), audit entries at `"1"` (`version` inside the entry). Add attributes freely under `audit`, `security.finding`, `refusal`, `security.data` and `security.inventory`; renaming or removing one, or changing its meaning, raises that record's version. `user.*` and `session.id` are still in Development in OpenTelemetry's semantic conventions: if one is renamed, follow it and raise the version.
 <!-- END COMMON CORE -->
 
 ## Audit records

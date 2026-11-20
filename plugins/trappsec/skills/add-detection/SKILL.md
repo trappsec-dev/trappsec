@@ -84,7 +84,7 @@ For each candidate rejection, write down:
 
 Keep every candidate whose evidence holds for every client, and only those: a plausible rule is a false positive waiting, and a certain one is worth keeping however many there are. List the rejected candidates and why in the plan, so the next agent doesn't add them back; each is still counted as a refusal.
 
-For the refusals, write one table from each error class or code to its `security.refusal.kind` and reason, and for each sink rule its source (references/sinks.md). Inputs at a chokepoint that the app ignores rather than refuses are handed off to add-deception, and inputs it accepts are vulnerabilities (references/attack-paths.md).
+For the refusals, write one table from each error class or code to its `refusal.kind` and reason, and for each sink rule its source (references/sinks.md). Inputs at a chokepoint that the app ignores rather than refuses are handed off to add-deception, and inputs it accepts are vulnerabilities (references/attack-paths.md).
 
 ### 3. Present the plan
 
@@ -115,7 +115,7 @@ Then list, from the attack-path map, the inputs handed off to add-deception and 
 2. **Each rule fires.** Send the impossible input as a normal user. The finding matches references/telemetry.md and shares its trace and span IDs with the request's server span, which names the right user, tenant and credential, has `security.flagged` set, and passes the `client.address` check.
 3. **Behavior unchanged.** The response to the impossible input is identical to the response before your change: status, headers and body. Capture them before the first of these skills edits the code (a worktree of the commit before it works), and normalize what changes per response: `Date`, request IDs, CSRF and other random tokens, JSON key order. No data changed that didn't change before.
 4. **Real flows stay silent.** Replay every real client flow through the endpoints you touched, including the edge cases (retries, stale tabs, concurrent edits). Not one finding.
-5. **Refusals.** For each row of the refusal table, one request that causes it: the server span carries the right kind, reason and object, the response is identical to before, and no log record was added. A request that succeeds carries no `security.refusal.*`. The real flows of check 4 produce refusals where real users are refused, and still no finding.
+5. **Refusals.** For each row of the refusal table, one request that causes it: the server span carries the right kind, reason and object, the response is identical to before, and no log record was added. A request that succeeds carries no `refusal.*`. The real flows of check 4 produce refusals where real users are refused, and still no finding.
 6. **Sink rules.** As references/sinks.md describes: each fires on input that breaks the structure, and the app's whole test suite, run with recording on, fires none.
 7. **Inventory and self-check.** Start the app and find one inventory record per rule, with one hash and the right size. Run the self-check command and find one `test` finding per rule. Remove one rule's recording call in a scratch copy and show the drift test fails.
 8. **Robustness.** Make your own recording module fail in a test, through one fault point it exposes (not the OpenTelemetry API, which the instrumentation shares); responses don't change.
