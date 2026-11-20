@@ -31,7 +31,7 @@ The names these skills define are the same in every app, so one query works acro
 - audit records: event names `audit.<area>.<action>`, marked `log.type` = `audit`, with the entry in one attribute, `audit`;
 - findings: every finding marked `log.type` = `detection`, with the rule's stable ID as its event name, `detector`, `intent` and `severity` saying what fired, and the details under `security.finding.*`;
 - the request context on the server span: `tenant.id`, `credential.type`, `credential.id`, `actor.type`, `actor.id` and `security.flagged`, beside OpenTelemetry's `user.*`, `session.id` and `client.address`;
-- the request outcome on the server span: `refusal.*` for what the app refused, `security.data.*` for the sensitive data it returned, and `security.response.*` where add-response acted on the request;
+- the request outcome on the server span: `refusal.*` for what the app refused, `sensitive_data.*` for the sensitive data it returned, and `security.response.*` where add-response acted on the request;
 - inventory records: event name `security.inventory.entry`, marked `log.type` = `inventory`, with the details under `security.inventory.*`.
 
 Use OpenTelemetry's own attributes as they are, and never invent new ones in its namespaces. Before writing a name, search the app and its telemetry for it: if the app already emits `audit.*` events or sets one of these attributes with another meaning, stop and ask the user rather than mix two meanings under one name. Name the recording code like the app's other observability code.
@@ -103,11 +103,11 @@ A refusal that also fired a finding still writes these: the finding says a rule 
 
 | Span attribute | Type | Value |
 |---|---|---|
-| `security.data.classes` | string[] | The classes of sensitive data the response carried, from the operation's entry in a data map kept in server code, never from inspecting the response. Starting vocabulary: `personal`, `financial`, `health`, `credentials`, `internal` |
-| `security.data.records` | int | How many records the response returned or the export wrote, from a count the handler already holds (a page's length, an export's row count) |
+| `sensitive_data.classes` | string[] | The classes of sensitive data the response carried, from the operation's entry in a data map kept in server code, never from inspecting the response. Starting vocabulary: `personal`, `financial`, `health`, `credentials`, `internal` |
+| `sensitive_data.records` | int | How many records the response returned or the export wrote, from a count the handler already holds (a page's length, an export's row count) |
 | `http.response.body.size` | int | OpenTelemetry's own attribute: turn on the instrumentation's opt-in where the repo owns it, or copy a `Content-Length` the response already has. Never buffer or re-serialize a response to measure it |
 
-A request refused before it returned data writes no `security.data.*`.
+A request refused before it returned data writes no `sensitive_data.*`.
 
 ### Log records
 
@@ -177,7 +177,7 @@ Every answer is then proven by the end-to-end probe above, which is the authorit
 
 ### Changing the schema
 
-Findings are at schema version `"2"` (`security.schema.version`), audit entries at `"1"` (`version` inside the entry). Add attributes freely under `audit`, `security.finding`, `refusal`, `security.data` and `security.inventory`; renaming or removing one, or changing its meaning, raises that record's version. `user.*` and `session.id` are still in Development in OpenTelemetry's semantic conventions: if one is renamed, follow it and raise the version.
+Findings are at schema version `"2"` (`security.schema.version`), audit entries at `"1"` (`version` inside the entry). Add attributes freely under `audit`, `security.finding`, `refusal`, `sensitive_data` and `security.inventory`; renaming or removing one, or changing its meaning, raises that record's version. `user.*` and `session.id` are still in Development in OpenTelemetry's semantic conventions: if one is renamed, follow it and raise the version.
 <!-- END COMMON CORE -->
 
 ## Audit records
